@@ -1,8 +1,11 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
 [project]
 name = "inis"
 version = "0.1.0"
 description = "INIS — Intelligent Networked Information System"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
     "pydantic>=2.9",
@@ -52,3 +55,5 @@ target-version = "py312"
 python_version = "3.12"
 ignore_missing_imports = true
 # PAS de "strict = true" pour l'instant
+[tool.setuptools.packages.find]
+include = ["app*"]
