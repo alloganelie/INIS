@@ -1,0 +1,169 @@
+# =============================================================================
+# INIS — .gitignore
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Environnements virtuels
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# -----------------------------------------------------------------------------
+# Gestionnaires de dépendances
+# -----------------------------------------------------------------------------
+# Poetry
+poetry.lock.bak
+.poetry/
+
+# Pipenv
+Pipfile.lock.bak
+
+# uv
+.uv/
+uv.lock.bak
+
+# -----------------------------------------------------------------------------
+# Tests & qualité
+# -----------------------------------------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+coverage.xml
+*.cover
+
+# -----------------------------------------------------------------------------
+# Node.js / TypeScript / Frontend
+# -----------------------------------------------------------------------------
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.vite/
+frontend/.turbo/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.eslintcache
+.npm/
+.yarn/
+
+# -----------------------------------------------------------------------------
+# Docker
+# -----------------------------------------------------------------------------
+docker-compose.override.yml
+.docker/
+docker/data/
+
+# -----------------------------------------------------------------------------
+# Bases de données locales
+# -----------------------------------------------------------------------------
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+
+# -----------------------------------------------------------------------------
+# Secrets & config locale
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+configs/local.toml
+configs/*.local.toml
+*.pem
+*.key
+*.crt
+!docker/otel/certs/.gitkeep
+vault-token.txt
+vault-data/
+docker/vault/data/
+
+# -----------------------------------------------------------------------------
+# IDE & éditeurs
+# -----------------------------------------------------------------------------
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json.example
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# -----------------------------------------------------------------------------
+# OS
+# -----------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# -----------------------------------------------------------------------------
+# Logs & runtime
+# -----------------------------------------------------------------------------
+*.log
+logs/
+*.pid
+*.seed
+*.pid.lock
+
+# -----------------------------------------------------------------------------
+# Artefacts agents (à ajuster selon ta réponse Q5)
+# -----------------------------------------------------------------------------
+agent_workspace/tasks/*
+agent_workspace/reports/*
+agent_workspace/handoffs/*
+!agent_workspace/tasks/.gitkeep
+!agent_workspace/reports/.gitkeep
+!agent_workspace/handoffs/.gitkeep
+
+# -----------------------------------------------------------------------------
+# Divers
+# -----------------------------------------------------------------------------
+tree.txt
+*.bak
+*.tmp
+*.orig
