@@ -3,9 +3,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 errors = []
 
-for rel in ["app", "migrations", "tests", "inis_governance_docs"]:
+# Dossiers de code obligatoires
+for rel in ["app", "migrations", "tests"]:
     if not (ROOT / rel).exists():
         errors.append("missing: " + rel)
+
+# Documents de gouvernance à la racine (déplacés depuis inis_governance_docs/)
+for doc in ["AGENT_RULES.md", "ARCHITECTURE.md", "INIS_SPEC.md", "CONTRACTS.md"]:
+    if not (ROOT / doc).exists():
+        errors.append("missing doc: " + doc)
 
 paths = list((ROOT / "app").rglob("*.py"))
 all_text = "\n".join(p.read_text(encoding="utf-8", errors="ignore") for p in paths)
