@@ -1,0 +1,30 @@
+name: Agent Task
+description: Tâche destinée à un agent logiciel local
+title: "[AGENT] "
+labels: ["agent-task"]
+body:
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent
+      options: [Codex, Devin, OpenCode, Antigravity, Cursor]
+    validations:
+      required: true
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objectif
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Périmètre
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Critères d'acceptation
+    validations:
+      required: true

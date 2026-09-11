@@ -1,0 +1,23 @@
+name: Change Request
+description: Modification architecturale ou contractuelle
+title: "[CR] "
+labels: ["change-request"]
+body:
+  - type: textarea
+    id: reason
+    attributes:
+      label: Pourquoi ?
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+    validations:
+      required: true
+  - type: textarea
+    id: migration
+    attributes:
+      label: Migration / compatibilité
+    validations:
+      required: true

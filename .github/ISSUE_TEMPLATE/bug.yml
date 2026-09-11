@@ -1,0 +1,23 @@
+name: Bug
+description: Signaler un problème reproductible
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Attendu
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Observé
+    validations:
+      required: true

@@ -1,0 +1,13 @@
+{
+  "package": "INIS_MULTI_AGENT_PACKAGE",
+  "repository": "https://github.com/alloganelie/INIS",
+  "agents": [
+    "Codex",
+    "Devin",
+    "OpenCode",
+    "Antigravity",
+    "Cursor"
+  ],
+  "principle": "local desktop agents + isolated Git worktrees + GitHub PR/CI",
+  "file_count": 24
+}
