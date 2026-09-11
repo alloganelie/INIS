@@ -1,0 +1,54 @@
+[project]
+name = "inis"
+version = "0.1.0"
+description = "INIS — Intelligent Networked Information System"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "pydantic>=2.9",
+    "sqlalchemy>=2.0",
+    "asyncpg",
+    "alembic",
+    "aio-pika",
+    "httpx",
+    "structlog",
+    "python-ulid",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio",
+    "testcontainers",
+    "ruff",
+    "mypy",
+]
+
+# ─────────────────────────────────────────────────────────────
+# pytest : active la découverte des tests
+# ─────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+addopts = "-ra"
+
+# ─────────────────────────────────────────────────────────────
+# ruff : configuré mais NE BLOQUE PAS la CI pour l'instant
+# (sera durci quand le code sera écrit)
+# ─────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Pas de "select" strict pour l'instant — on active les règles
+# au fur et à mesure que les zones sont implémentées
+
+# ─────────────────────────────────────────────────────────────
+# mypy : configuré mais NE BLOQUE PAS la CI pour l'instant
+# ─────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+# PAS de "strict = true" pour l'instant
