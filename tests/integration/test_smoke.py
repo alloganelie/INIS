@@ -7,7 +7,6 @@ from app.domain.value_objects.ulid import ULID
 from app.messaging.protocol.envelope_builder import EnvelopeBuilder
 
 
-@pytest.mark.skip(reason="api lot en cours")
 def test_import_app_main() -> None:
     """Import app.main once Antigravity delivers the API entrypoint."""
     import app.main  # noqa: F401
