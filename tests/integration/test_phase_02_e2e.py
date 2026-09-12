@@ -19,14 +19,6 @@ def _has_symbol(module_name: str, symbol: str) -> bool:
     return hasattr(module, symbol)
 
 
-@pytest.mark.skipif(
-    not (
-        _has_symbol("app.agents.runtime.state_machine", "StateMachine")
-        and _has_symbol("app.agents.runtime.budget_tracker", "BudgetTracker")
-        and _has_symbol("app.planning.plan_builder", "PlanBuilder")
-    ),
-    reason="runtime lot en cours",
-)
 def test_runtime_smoke() -> None:
     from app.agents.runtime.budget_tracker import BudgetTracker
     from app.agents.runtime.state_machine import StateMachine
@@ -37,13 +29,6 @@ def test_runtime_smoke() -> None:
     assert PlanBuilder is not None
 
 
-@pytest.mark.skipif(
-    not (
-        _has_symbol("app.llm.router.model_router", "ModelRouter")
-        and _has_symbol("app.tools.registry", "ToolRegistry")
-    ),
-    reason="router/tools lot en cours",
-)
 def test_router_smoke() -> None:
     from app.llm.router.model_router import ModelRouter
     from app.tools.registry import ToolRegistry
@@ -52,20 +37,12 @@ def test_router_smoke() -> None:
     assert ToolRegistry is not None
 
 
-@pytest.mark.skipif(
-    not _has_symbol("app.registry.agent_registry", "AgentRegistry"),
-    reason="registry lot en cours",
-)
 def test_registry_smoke() -> None:
     from app.registry.agent_registry import AgentRegistry
 
     assert AgentRegistry is not None
 
 
-@pytest.mark.skipif(
-    not _has_symbol("app.workers.heartbeat_worker", "HeartbeatWorker"),
-    reason="workers lot en cours",
-)
 def test_workers_smoke() -> None:
     from app.workers.heartbeat_worker import HeartbeatWorker
 
