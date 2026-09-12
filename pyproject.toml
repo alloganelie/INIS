@@ -21,7 +21,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
-    "pytest-asyncio",
+    "pytest-asyncio>=0.24",
     "testcontainers",
     "ruff",
     "mypy",
