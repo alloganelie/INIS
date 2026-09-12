@@ -2,7 +2,10 @@
 
 from ulid import ULID as PythonUlid
 
-from app.core.constants import ULID_PREFIXES
+from app.core.constants import ULID_PREFIXES as CORE_ULID_PREFIXES
+
+
+ULID_PREFIXES = CORE_ULID_PREFIXES | frozenset({"PLAN_", "STEP_", "ITER_"})
 
 
 class ULID:
