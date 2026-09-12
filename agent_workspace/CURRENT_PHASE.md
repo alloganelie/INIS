@@ -1,76 +1,44 @@
-# \# Current Phase
+# Current Phase
 
-# 
+## PHASE-01 — Stabilisation du socle multi-agent — ✅ TERMINÉE
 
-# \## PHASE-01 — Stabilisation du socle multi-agent — ✅ TERMINÉE
+Date de clôture : 2026-09-12
+Commit final : 34e6a7e
+Tests : 67 passed
 
-# 
+## PHASE-02 — Agent Runtime — ✅ TERMINÉE
 
-# Date de clôture : 2026-09-12
+Date de clôture : 2026-09-12
+Commit final : 2ca0460
+Tests : 111 passed (+44)
 
-# Commit final : 34e6a7e
+### Zones couvertes
 
-# Tests : 67 passed
+| Zone | Agent | Fichiers clés | Tests |
+|---|---|---|---|
+| app/agents/runtime/ | Codex | state_machine, budget_tracker | ✓ |
+| app/planning/ | Codex | plan_builder | ✓ |
+| app/registry/ | Codex (exception) | agent_registry, capability_index | ✓ |
+| app/workers/ | Codex (exception) | heartbeat_worker | ✓ |
+| app/llm/router/ | Devin | model_router, cost_tracker, fallback_chain | ✓ |
+| app/tools/ | Devin | registry | ✓ |
+| app/api/v1/requests/ | Antigravity | schemas, router | ✓ |
+| app/api/v1/agents/ | Antigravity | schemas, router | ✓ |
+| tests/integration/ | Cursor | phase_02_e2e, phase_02_pipeline | ✓ |
+| docs/ | Cursor | phase_02_plan.md | — |
 
-# 
+### Exceptions documentées
+- OpenCode n'a pas contribué à PHASE-02. Codex a couvert `app/registry/` et `app/workers/` à sa place.
+- ULID_PREFIXES complété avec `PLAN_`, `STEP_`, `ITER_` (manquants §0.3).
 
-# \### Zones couvertes
+---
 
-# 
+## PHASE-03 — Transport AMQP/MQTT — 🚀 EN COURS
 
-# | Zone | Agent | Fichiers | Tests |
+Objectif : implémenter la couche de transport AMQP (aio-pika) et MQTT (interface).
 
-# |---|---|---|---|
+### Lot en cours — OpenCode
+- `app/messaging/amqp/` : broker, publisher, consumer, topology, health, DLQ
+- `app/messaging/mqtt/` : broker, health
 
-# | app/core/ | Codex | constants, errors | — |
-
-# | app/domain/ | Codex | ULID, InformationPackage | 7 |
-
-# | app/storage/ | Devin | SQLAlchemy base, engine, session | 2 |
-
-# | migrations/ | Devin | 0001\_create\_extensions | — |
-
-# | app/messaging/ | OpenCode | EnvelopeBuilder, Validator, IdempotencyGuard | 47 |
-
-# | app/api/ | Antigravity | FastAPI /health, /version, /v1/status | 3 |
-
-# | tests/integration/ | Cursor | smoke tests + pipeline | 8 |
-
-# 
-
-# \### Gate PHASE-01 — 8/8 ✅
-
-# 
-
-# \- \[x] Worktrees créés (5 agents)
-
-# \- \[x] Gouvernance lisible (AGENTS.md)
-
-# \- \[x] Contrats essentiels gelés (ULID, InformationPackage, OutputStatus, Envelope)
-
-# \- \[x] Checks d'architecture exécutables
-
-# \- \[x] CI GitHub active et verte
-
-# \- \[x] Tests non dégradés (67 passed)
-
-# \- \[x] Aucun secret commité
-
-# \- \[x] Intégration par PR (5 PR mergées)
-
-# 
-
-# \---
-
-# 
-
-# \## PHASE-02 — Agent Runtime — 🚀 EN COURS
-
-# 
-
-# Objectif : implémenter le runtime agentique (compréhension, planification, tool calling, model router, états, itérations, budgets).
-
-# 
-
-# Référence spec : `INIS\_SPEC.md` §8 (Planification), §22 (LLM), §35 (Roadmap Phase 2).
-
+Référence spec : `INIS_SPEC.md` §4.4 (broker), §5.2 (types), §41.8 (retry).
