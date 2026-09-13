@@ -10,7 +10,7 @@ def make_dataset(**overrides: object) -> Dataset:
     values: dict[str, object] = {
         "dataset_id": "DATA_01H00000000000000000000000",
         "source_id": "SRC_01H00000000000000000000000",
-        "schema": {"columns": [{"name": "country", "type": "string"}]},
+        "dataset_schema": {"columns": [{"name": "country", "type": "string"}]},
         "row_count": 42,
         "storage_ref": "s3://inis/datasets/countries.csv",
     }
@@ -29,7 +29,7 @@ def test_dataset_requires_source_provenance() -> None:
     with pytest.raises(ValidationError):
         Dataset(
             dataset_id="DATA_01H00000000000000000000000",
-            schema={},
+            dataset_schema={},
             row_count=0,
             storage_ref="s3://inis/datasets/empty.csv",
         )

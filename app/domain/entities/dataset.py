@@ -8,6 +8,6 @@ class Dataset(BaseModel):
 
     dataset_id: str
     source_id: str
-    schema: dict
+    dataset_schema: dict
     row_count: int = Field(ge=0)
     storage_ref: str
