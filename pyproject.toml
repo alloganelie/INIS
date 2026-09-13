@@ -19,6 +19,8 @@ dependencies = [
     "python-ulid",
     "trafilatura>=1.12",
     "readability-lxml>=0.8.1",
+    "pgvector>=0.3",
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
