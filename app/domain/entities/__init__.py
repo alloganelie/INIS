@@ -1,6 +1,7 @@
 """INIS domain entities."""
 
 from app.domain.entities.claim import Claim
+from app.domain.entities.conflict import Conflict
 from app.domain.entities.dataset import Dataset
 from app.domain.entities.document import Document
 from app.domain.entities.evidence import Evidence
@@ -12,6 +13,7 @@ from app.domain.entities.source_candidate import SourceCandidate
 
 __all__ = [
     "Claim",
+    "Conflict",
     "Dataset",
     "Document",
     "Evidence",
