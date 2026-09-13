@@ -41,10 +41,7 @@ def upgrade() -> None:
     op.execute('CREATE INDEX embeddings_vector_idx ON embeddings USING hnsw (vector vector_cosine_ops)')
 
     # Add search_vector column to information_units for full-text search
-    op.add_column(
-        "information_units",
-        sa.Column("search_vector", sa.TSVECTOR(), nullable=True),
-    )
+    op.execute('ALTER TABLE information_units ADD COLUMN search_vector TSVECTOR')
 
     # Create GIN index on search_vector
     op.execute('CREATE INDEX information_units_search_vector_idx ON information_units USING GIN (search_vector)')
@@ -52,7 +49,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Drop embeddings table and full-text search."""
-    op.drop_index("information_units_search_vector_idx", table_name="information_units")
-    op.drop_column("information_units", "search_vector")
-    op.drop_index("embeddings_vector_idx", table_name="embeddings")
-    op.drop_table("embeddings")
+    op.execute('DROP INDEX IF EXISTS information_units_search_vector_idx')
+    op.execute('ALTER TABLE information_units DROP COLUMN IF EXISTS search_vector')
+    op.execute('DROP INDEX IF EXISTS embeddings_vector_idx')
+    op.execute('DROP TABLE IF EXISTS embeddings')

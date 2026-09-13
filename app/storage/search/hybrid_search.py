@@ -2,6 +2,7 @@
 
 from typing import List, Optional
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.storage.database.engine import create_engine
@@ -54,20 +55,19 @@ class HybridSearch:
         vector_str = "[" + ",".join(map(str, query_vector)) + "]"
 
         async with engine.connect() as conn:
-            result = await conn.execute(
-                """WITH semantic AS (
-                    SELECT owner_id, 1 - (vector <=> $1::vector) AS score
+            stmt = text("""WITH semantic AS (
+                    SELECT owner_id, 1 - (vector <=> :vector::vector) AS score
                     FROM embeddings
                     WHERE owner_type = 'information_unit'
-                    ORDER BY vector <=> $1::vector
-                    LIMIT $2
+                    ORDER BY vector <=> :vector::vector
+                    LIMIT :limit_semantic
                 ),
                 lexical AS (
                     SELECT id AS owner_id,
-                           ts_rank(search_vector, plainto_tsquery($3)) AS score
+                           ts_rank(search_vector, plainto_tsquery(:query)) AS score
                     FROM information_units
-                    WHERE search_vector @@ plainto_tsquery($3)
-                    LIMIT $2
+                    WHERE search_vector @@ plainto_tsquery(:query)
+                    LIMIT :limit_lexical
                 )
                 SELECT owner_id,
                        COALESCE(semantic.score, 0) * 0.6 +
@@ -75,11 +75,7 @@ class HybridSearch:
                 FROM semantic
                 FULL OUTER JOIN lexical USING (owner_id)
                 ORDER BY final_score DESC
-                LIMIT $2""",
-                vector_str,
-                limit,
-                query,
-                limit,
-            )
+                LIMIT :limit_final""")
+            result = await conn.execute(stmt, {"vector": vector_str, "limit_semantic": limit, "query": query, "limit_lexical": limit, "limit_final": limit})
             rows = result.fetchall()
             return [{"owner_id": row[0], "final_score": float(row[1])} for row in rows]

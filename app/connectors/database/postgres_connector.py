@@ -4,6 +4,7 @@ import re
 import time
 from typing import Optional
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.connectors.base import (
@@ -79,10 +80,8 @@ class PostgresConnector:
         
         async with engine.connect() as conn:
             pattern = f"%{query.query_string}%"
-            result = await conn.execute(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE $1",
-                pattern,
-            )
+            stmt = text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE :pattern")
+            result = await conn.execute(stmt, {"pattern": pattern})
             rows = result.fetchall()
             for row in rows:
                 candidates.append(
@@ -125,7 +124,8 @@ class PostgresConnector:
             )
 
         async with engine.connect() as conn:
-            result = await conn.execute(f"SELECT * FROM {table_name} LIMIT 100")
+            stmt = text(f"SELECT * FROM {table_name} LIMIT 100")
+            result = await conn.execute(stmt)
             rows = result.fetchall()
             columns = result.keys()
             
