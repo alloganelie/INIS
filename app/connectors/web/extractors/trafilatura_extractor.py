@@ -32,13 +32,24 @@ class TrafilaturaExtractor:
     async def extract(self, html: str, url: str) -> dict[str, Any]:
         """Extract ``{title, text, author, date, language}`` (+ url, error).
 
-        Never raises on extraction failure: returns empty fields with
-        ``error`` set. Raises ``ValueError`` only on invalid input.
+        Never raises on extraction failure or empty HTML: returns the
+        contract dict with ``error`` set. Raises ``ValueError`` only
+        when ``html``/``url`` are not strings.
         """
-        if not html or not isinstance(html, str):
-            raise ValueError("html must be a non-empty string")
-        if not url or not isinstance(url, str):
+        if not isinstance(html, str):
+            raise ValueError("html must be a string")
+        if not isinstance(url, str) or not url:
             raise ValueError("url must be a non-empty string")
+        if not html:
+            return {
+                "title": None,
+                "text": "",
+                "author": None,
+                "date": None,
+                "language": None,
+                "url": url,
+                "error": "empty html",
+            }
         try:
             import trafilatura
 
