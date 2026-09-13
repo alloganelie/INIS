@@ -53,7 +53,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Drop embeddings table and full-text search."""
-    op.drop_index("information_units_search_vector_idx", table_name="information_units")
-    op.drop_column("information_units", "search_vector")
-    op.drop_index("embeddings_vector_idx", table_name="embeddings")
-    op.drop_table("embeddings")
+    op.execute('DROP INDEX IF EXISTS information_units_search_vector_idx')
+    op.execute('ALTER TABLE information_units DROP COLUMN IF EXISTS search_vector')
+    op.execute('DROP INDEX IF EXISTS embeddings_vector_idx')
+    op.execute('DROP TABLE IF EXISTS embeddings')
