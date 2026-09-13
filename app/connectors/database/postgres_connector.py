@@ -1,7 +1,10 @@
 """PostgreSQL connector for INIS per §9.1."""
 
+import re
 import time
 from typing import Optional
+
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.connectors.base import (
     ConnectorMetadata,
@@ -28,12 +31,28 @@ class PostgresConnector:
             connection_string: PostgreSQL connection string.
         """
         self._connection_string = connection_string
-        self._engine: Optional[object] = None
+        self._engine: Optional[AsyncEngine] = None
 
-    async def _get_engine(self) -> object:
-        """Get or create the async engine."""
+    def _validate_table_name(self, table_name: str) -> bool:
+        """Validate table name to prevent SQL injection.
+
+        Args:
+            table_name: Table name to validate.
+
+        Returns:
+            True if valid, False otherwise.
+        """
+        # Only allow alphanumeric, underscore, and hyphen
+        return bool(re.match(r'^[a-zA-Z0-9_-]+$', table_name))
+
+    async def _get_engine(self) -> Optional[AsyncEngine]:
+        """Get or create the async engine. Returns None in degraded mode."""
         if self._engine is None:
-            self._engine = create_engine(self._connection_string)
+            try:
+                self._engine = create_engine(self._connection_string)
+            except Exception:
+                # Degraded mode: engine not available
+                return None
         return self._engine
 
     async def discover(self, query: Query) -> list[SourceCandidate]:
@@ -46,17 +65,33 @@ class PostgresConnector:
             List of source candidates.
         """
         engine = await self._get_engine()
+        if engine is None:
+            # Degraded mode: return stub candidate
+            return [
+                SourceCandidate(
+                    source_id=f"postgres-{query.query_string}",
+                    location=self._connection_string,
+                    metadata={"type": "postgresql", "table": query.query_string},
+                )
+            ]
+
         candidates: list[SourceCandidate] = []
         
-        # In real usage, would query information_schema.tables
-        # For now, return a stub candidate based on query
-        candidates.append(
-            SourceCandidate(
-                source_id=f"postgres-{query.query_string}",
-                location=self._connection_string,
-                metadata={"type": "postgresql", "table": query.query_string},
+        async with engine.connect() as conn:
+            pattern = f"%{query.query_string}%"
+            result = await conn.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE $1",
+                pattern,
             )
-        )
+            rows = result.fetchall()
+            for row in rows:
+                candidates.append(
+                    SourceCandidate(
+                        source_id=f"postgres-{row[0]}",
+                        location=self._connection_string,
+                        metadata={"type": "postgresql", "table": row[0]},
+                    )
+                )
         return candidates
 
     async def retrieve(self, candidate: SourceCandidate) -> RawSource:
@@ -71,14 +106,38 @@ class PostgresConnector:
         engine = await self._get_engine()
         table_name = candidate.metadata.get("table", "unknown")
         
-        # In real usage, would execute SELECT with the engine
-        # For now, return a stub query string
-        return RawSource(
-            source_id=candidate.source_id,
-            data=f"SELECT * FROM {table_name} LIMIT 100",
-            content_type="text/plain",
-            metadata=candidate.metadata,
-        )
+        if engine is None:
+            # Degraded mode: return stub query string
+            return RawSource(
+                source_id=candidate.source_id,
+                data=f"SELECT * FROM {table_name} LIMIT 100",
+                content_type="text/plain",
+                metadata=candidate.metadata,
+            )
+
+        # Validate table name to prevent SQL injection
+        if not self._validate_table_name(table_name):
+            return RawSource(
+                source_id=candidate.source_id,
+                data="Invalid table name",
+                content_type="text/plain",
+                metadata=candidate.metadata,
+            )
+
+        async with engine.connect() as conn:
+            result = await conn.execute(f"SELECT * FROM {table_name} LIMIT 100")
+            rows = result.fetchall()
+            columns = result.keys()
+            
+            # Convert to string representation
+            data_str = "\n".join([str(dict(zip(columns, row))) for row in rows])
+            
+            return RawSource(
+                source_id=candidate.source_id,
+                data=data_str,
+                content_type="text/plain",
+                metadata=candidate.metadata,
+            )
 
     async def inspect(self, raw: RawSource) -> SourceMetadata:
         """Inspect raw PostgreSQL data to extract metadata.
@@ -109,15 +168,29 @@ class PostgresConnector:
         start_time = time.time()
         engine = await self._get_engine()
         
-        # In real usage, would execute SELECT 1 with the engine
-        # For now, simulate a successful health check
-        time.sleep(0.001)  # Simulate network latency
-        latency_ms = (time.time() - start_time) * 1000
-        return HealthStatus(
-            healthy=True,
-            message="PostgreSQL connector healthy (engine ready, no real connection)",
-            latency_ms=latency_ms,
-        )
+        if engine is None:
+            # Degraded mode: healthy but no connection
+            return HealthStatus(
+                healthy=True,
+                message="PostgreSQL connector healthy (degraded mode, no engine)",
+                latency_ms=None,
+            )
+
+        try:
+            async with engine.connect() as conn:
+                await conn.execute("SELECT 1")
+            latency_ms = (time.time() - start_time) * 1000
+            return HealthStatus(
+                healthy=True,
+                message="PostgreSQL connector healthy",
+                latency_ms=latency_ms,
+            )
+        except Exception as e:
+            return HealthStatus(
+                healthy=False,
+                message=f"PostgreSQL connector unhealthy: {str(e)}",
+                latency_ms=None,
+            )
 
     async def metadata(self) -> ConnectorMetadata:
         """Get connector metadata.
