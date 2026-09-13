@@ -1,10 +1,10 @@
 # Agent Status
 
 ## Dernière mise à jour
-2026-09-13 — PHASE-04.3 clôturée, PHASE-05 à lancer
+2026-09-13 — PHASE-05 clôturée, PHASE-06 à lancer
 
 ## Commit de référence
-<sha final PHASE-04.3> — main
+<sha final PHASE-05> — main
 
 ## État des phases
 
@@ -15,21 +15,22 @@
 | PHASE-03 — Transport AMQP/MQTT | ✅ | `5fb159d` | 119 | 1 (OpenCode) |
 | PHASE-04 — Information Acquisition | ✅ | `1a6ac5d` | 154 | 4 + intégrateur |
 | PHASE-04.2 — Corrections & Convergence | ✅ | `276e8f8` | 158 | 3 + intégrateur |
-| PHASE-04.3 — Intégration réelle | ✅ | `<sha final>` | 169 | 4 + intégrateur |
-| PHASE-05 — Knowledge Layer | 🚀 à lancer | — | — | — |
+| PHASE-04.3 — Intégration réelle | ✅ | `c25e2bc` | 169 | 4 + intégrateur |
+| PHASE-05 — Knowledge Layer | ✅ | `<sha final>` | 209 | 4 + intégrateur |
+| PHASE-06 — Quality & Confidence | 🚀 à lancer | — | — | — |
 
 ## État des agents (par phase)
 
-| Agent | Branche | P1 | P2 | P3 | P4 | P4.2 | P4.3 | P5 |
-|---|---|---|---|---|---|---|---|---|
-| Codex | agent/codex/domain | ✅ | ✅ | ⏸️ | ✅ | ✅ | ✅ | 🚀 |
-| Devin | agent/devin/storage | ✅ | ✅ | ⏸️ | ✅ | ✅ | ✅ | 🚀 |
-| OpenCode | agent/opencode/messaging | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | 🚀 |
-| Antigravity | agent/antigravity/api | ✅ | ✅ | ⏸️ | ✅ | ⏸️ | ✅ | 🚀 |
-| Intégrateur (OpenCode) | agent/cursor/integration | ✅ | ✅ | ⏸️ | ✅ | ⏸️ | ✅ | 🚀 |
+| Agent | Branche | P1 | P2 | P3 | P4 | P4.2 | P4.3 | P5 | P6 |
+|---|---|---|---|---|---|---|---|---|---|
+| Codex | agent/codex/domain | ✅ | ✅ | ⏸️ | ✅ | ✅ | ✅ | ✅ | 🚀 |
+| Devin | agent/devin/storage | ✅ | ✅ | ⏸️ | ✅ | ✅ | ✅ | ✅ | 🚀 |
+| OpenCode | agent/opencode/messaging | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | 🚀 |
+| Antigravity | agent/antigravity/api | ✅ | ✅ | ⏸️ | ✅ | ⏸️ | ✅ | ✅ | 🚀 |
+| Intégrateur (OpenCode) | agent/cursor/integration | ✅ | ✅ | ⏸️ | ✅ | ⏸️ | ✅ | ✅ | 🚀 |
 
 ## Tests
-main @ <sha final> : **169 passed, 0 warning, 0 skipped**
+main @ <sha final> : **209 passed, 0 warning, 0 skipped**
 
 ## Emplacements des worktrees
 
@@ -42,24 +43,33 @@ main @ <sha final> : **169 passed, 0 warning, 0 skipped**
 | Antigravity | C:\Users\LATITUDE 5420\Downloads\INIS-worktrees\antigravity |
 | Intégrateur | C:\Users\LATITUDE 5420\Downloads\INIS-worktrees\cursor |
 
-## Dettes techniques ouvertes (reportées PHASE-05)
+## Dettes techniques ouvertes (reportées PHASE-06)
 
 1. **PostgresConnector stub partiel** — structure prête (utilise engine.py) mais pas de connexion réelle.
    Correcteur : Devin. Effort : 45 min.
-   Solution : brancher asyncpg réel + tests testcontainers.
 
-2. **AuditWriter en mémoire** — les événements ne survivent pas au redémarrage.
+2. **Classes de recherche (VectorSearch, HybridSearch, FullTextSearch) en stub** — retournent listes vides.
+   Correcteur : Devin. Effort : 1 h 30.
+
+3. **AuditWriter en mémoire** — événements non persistants.
    Correcteur : Codex. Effort : 30 min.
-   Solution : brancher sur la table `audit_events` (créée par migration 0002).
 
-3. **`readability_extractor.py` vide** — extractor alternatif non implémenté.
+4. **HealthAggregator sans checks enregistrés** — câblage postgres/redis/broker à faire.
+   Correcteur : OpenCode. Effort : 30 min.
+
+5. **ChunkSplitter approximatif** — utilise des mots comme approximation de tokens.
+   Correcteur : Codex. Effort : 30 min.
+
+6. **LineageTracker non persistant** — graphe en mémoire uniquement.
+   Correcteur : Codex. Effort : 30 min.
+
+7. **`readability_extractor.py` vide** — extractor alternatif non implémenté.
    Correcteur : OpenCode. Effort : 20 min.
 
-4. **Tests d'intégration sans vraie DB PostgreSQL** — 169 tests unitaires/E2E mais aucun test contre une DB réelle.
-   Correcteur : Devin. Effort : 1 h.
-   Solution : testcontainers + migration 0002 testée.
+8. **Tests d'intégration sans vraie DB PostgreSQL** — 209 tests unitaires/E2E mais aucun contre une DB réelle.
+   Correcteur : Devin. Effort : 1 h (testcontainers + migrations 0002/0003).
 
-5. **Trafilatura non testée avec vraie lib** — fallback regex testé mais pas l'extraction réelle.
+9. **Trafilatura non testée avec vraie lib** — fallback regex testé, pas l'extraction réelle.
    Correcteur : OpenCode. Effort : 15 min.
 
 ## Exceptions documentées
@@ -70,12 +80,13 @@ main @ <sha final> : **169 passed, 0 warning, 0 skipped**
 ## Notes de configuration
 
 - **OpenCode** travaille dans `C:\Users\LATITUDE 5420\Documents\INIS-opencode\opencode` (déplacé hors `Downloads` pour éviter les conflits de "dernier dossier ouvert").
-- **Intégrateur** : le rôle anciennement tenu par Cursor est repris par une session OpenCode dédiée, utilisant le worktree `INIS-worktrees\cursor` et la branche `agent/cursor/integration`.
+- **Intégrateur** : rôle tenu par une session OpenCode dédiée, utilisant le worktree `INIS-worktrees\cursor` et la branche `agent/cursor/integration`.
 - **paho-mqtt** ajouté au `pyproject.toml` par l'humain (PHASE-03).
 - **trafilatura** + **readability-lxml** ajoutés au `pyproject.toml` par l'humain (PHASE-04.3).
+- **pgvector** + **numpy** ajoutés au `pyproject.toml` par l'humain (PHASE-05).
 
 ## Prochaines actions
 
-1. **PHASE-05 — Knowledge Layer** : information_units, evidence, pgvector, recherche hybride, mémoire, provenance.
-   Référence : `INIS_SPEC.md` §11, §12, §16, §17.
-2. Les 5 dettes techniques ci-dessus peuvent être traitées en parallèle ou en PHASE-05 selon les besoins.
+1. **PHASE-06 — Quality & Confidence** : contrôles qualité, contradictions, scoring, matrice de confiance, fraîcheur.
+   Référence : `INIS_SPEC.md` §13, §14, §15.
+2. Les 9 dettes techniques ci-dessus peuvent être traitées en parallèle ou en PHASE-06 selon les besoins.

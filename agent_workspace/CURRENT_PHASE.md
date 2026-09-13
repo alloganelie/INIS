@@ -82,3 +82,44 @@ Date : 2026-09-13 — Commit : <sha final> — Tests : 169
 Objectif : information units, evidence, pgvector, recherche hybride, mémoire, provenance.
 
 Référence : INIS_SPEC.md §11, §12, §16, §17.
+## PHASE-05 — Knowledge Layer — ✅ TERMINÉE
+Date : 2026-09-13 — Commit : <sha final> — Tests : 209
+
+### Zones couvertes
+| Zone | Agent | Fichiers clés |
+|---|---|---|
+| app/domain/entities/ | Codex | information_unit, evidence, claim |
+| app/knowledge/chunking/ | Codex | chunk_splitter.py |
+| app/provenance/ | Codex | lineage_tracker.py |
+| migrations/versions/ | Devin | 0003_create_embeddings_and_search.py |
+| app/storage/search/ | Devin | vector_search, hybrid_search, fulltext_search |
+| app/observability/ | OpenCode | metrics, health_aggregator, metrics_endpoint |
+| app/api/v1/evidence/ | Antigravity | schemas, router |
+| app/api/v1/conflicts/ | Antigravity | schemas, router |
+| app/api/v1/system/ | Antigravity | metrics_router |
+| tests/integration/ | Intégrateur | test_phase_05_e2e.py |
+
+### Gate PHASE-05 — 6/6 ✅
+- [x] InformationUnit + Evidence + Claim (§11, §14)
+- [x] ChunkSplitter + LineageTracker
+- [x] Migration 0003 + pgvector (HNSW) + tsvector
+- [x] Vector/Hybrid/FullText search
+- [x] Observability (14 métriques §34)
+- [x] Endpoints /v1/evidence, /v1/conflicts, /v1/metrics
+
+### Dettes reportées (PHASE-06)
+1. PostgresConnector reste stub (connexion réelle à faire)
+2. Search classes restent stub (retournent listes vides)
+3. AuditWriter in-memory (persistance à faire)
+4. HealthAggregator sans checks enregistrés
+5. ChunkSplitter approximatif (mots ~ tokens)
+6. LineageTracker non persistant
+7. Pas de tests avec vraie DB PostgreSQL
+
+---
+
+## PHASE-06 — Quality & Confidence — 🚀 À LANCER
+
+Objectif : contrôles qualité, contradictions, scoring, matrice de confiance, fraîcheur.
+
+Référence : INIS_SPEC.md §13, §14 (conflicts), §15.
