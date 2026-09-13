@@ -6,8 +6,10 @@ from fastapi import APIRouter
 
 from app.api.v1.agents.router import router as agents_router
 from app.api.v1.information.router import router as information_router
+from app.api.v1.requests.progress_handler import router as progress_router
 from app.api.v1.requests.router import router as requests_router
 from app.api.v1.sources.router import router as sources_router
+from app.api.v1.system.changelog_router import router as changelog_router
 
 router = APIRouter(prefix="/v1", tags=["v1"])
 
@@ -19,7 +21,9 @@ def get_status() -> dict[str, str]:
 
 
 router.include_router(requests_router)
+router.include_router(progress_router)
 router.include_router(agents_router)
 router.include_router(sources_router)
 router.include_router(information_router)
+router.include_router(changelog_router)
 
