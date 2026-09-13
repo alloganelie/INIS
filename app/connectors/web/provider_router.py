@@ -1,28 +1,19 @@
 """Web-search provider router (§10.1).
 
-NOTE — temporary local types: ``app/domain/entities/search_result.py``
-(Codex) and ``app/domain/interfaces/search_provider.py`` are still
-empty placeholders, so ``SearchResult`` and the ``SearchProvider``
-protocol live here. They must converge to the domain contracts as
-soon as Codex implements them. Providers import these types from this
-module; the router never imports providers (injection only, no cycle).
+``SearchResult`` is imported from the consolidated
+``app.domain.entities.search_result`` module (Codex). The
+``SearchProvider`` protocol stays local: ``app/domain/interfaces/
+search_provider.py`` is still an empty placeholder. Providers import
+these types from this module; the router never imports providers
+(injection only, no cycle).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Protocol
 from typing import runtime_checkable
 
-
-@dataclass(frozen=True)
-class SearchResult:
-    """One web-search hit (raw collection level, §10)."""
-
-    title: str
-    url: str
-    snippet: str = ""
-    reliability_score: float = 0.0
+from app.domain.entities.search_result import SearchResult
 
 
 @runtime_checkable

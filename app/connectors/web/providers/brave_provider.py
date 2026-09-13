@@ -63,6 +63,10 @@ class BraveProvider:
                         title=str(item.get("title", "")),
                         url=str(item.get("url", "")),
                         snippet=str(item.get("description", "")),
+                        # Brave returns no normalized score; scoring
+                        # happens downstream (quality/confidence layers).
+                        score=0.0,
+                        provider="brave",
                     )
                 )
         return results

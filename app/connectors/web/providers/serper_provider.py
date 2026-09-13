@@ -60,6 +60,10 @@ class SerperProvider:
                         title=str(item.get("title", "")),
                         url=str(item.get("link", "")),
                         snippet=str(item.get("snippet", "")),
+                        # Serper returns no normalized score; scoring
+                        # happens downstream (quality/confidence layers).
+                        score=0.0,
+                        provider="serper",
                     )
                 )
         return results
