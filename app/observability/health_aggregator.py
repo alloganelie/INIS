@@ -195,8 +195,12 @@ class HealthAggregator:
 
 
 async def aggregate(
-    checks: dict[str, HealthCheck] | None = None,
+    checks: dict[str, HealthCheck] | list[tuple[str, HealthCheck]] | None = None,
     timeout_seconds: float = 2.0,
 ) -> dict[str, Any]:
-    """One-shot aggregation without instantiating the class."""
+    """One-shot aggregation without instantiating the class.
+
+    Accepts the same input formats as :class:`HealthAggregator`: a
+    ``{name: check}`` dict or a list of ``(name, check)`` tuples.
+    """
     return await HealthAggregator(checks, timeout_seconds).aggregate()
