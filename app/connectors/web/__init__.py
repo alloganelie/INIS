@@ -2,7 +2,7 @@
 
 from app.connectors.web.provider_router import ProviderRouter
 from app.connectors.web.provider_router import SearchProvider
-from app.connectors.web.provider_router import SearchResult
+from app.domain.entities.search_result import SearchResult
 from app.connectors.web.providers.brave_provider import BraveProvider
 from app.connectors.web.providers.mock_provider import MockProvider
 from app.connectors.web.providers.serper_provider import SerperProvider

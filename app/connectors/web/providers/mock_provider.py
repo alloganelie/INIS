@@ -19,19 +19,22 @@ class MockProvider:
                     title="Official source on climate data",
                     url="https://example.gov/climate",
                     snippet="Official statistics about climate indicators.",
-                    reliability_score=0.95,
+                    score=0.95,
+                    provider="mock",
                 ),
                 SearchResult(
                     title="Research article on climate models",
                     url="https://example.edu/papers/climate-models",
                     snippet="Peer-reviewed analysis of climate models.",
-                    reliability_score=0.85,
+                    score=0.85,
+                    provider="mock",
                 ),
                 SearchResult(
                     title="Forum discussion about weather",
                     url="https://forum.example.com/weather-thread",
                     snippet="Community opinions about local weather.",
-                    reliability_score=0.2,
+                    score=0.2,
+                    provider="mock",
                 ),
             ]
         )
@@ -46,6 +49,6 @@ class MockProvider:
         matched = [
             doc
             for doc in self._documents
-            if lowered in f"{doc.title} {doc.snippet}".lower()
+            if lowered in f"{doc.title} {doc.snippet or ''}".lower()
         ]
         return matched[:limit]

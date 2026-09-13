@@ -19,7 +19,9 @@ class TestProviderRouter:
         results = await router.search("climate", 10)
 
         assert len(results) == 2
-        assert all("climate" in f"{r.title} {r.snippet}".lower() for r in results)
+        assert all("climate" in f"{r.title} {r.snippet or ''}".lower() for r in results)
+        assert all(r.provider == "mock" for r in results)
+        assert all(0.0 <= r.score <= 1.0 for r in results)
 
     async def test_unknown_provider_raises(self) -> None:
         """An explicit ValueError names the unknown provider."""

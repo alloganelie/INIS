@@ -1,45 +1,25 @@
 """Generic REST connector over httpx implementing SourceConnector (§9).
 
-NOTE — temporary local definition: ``app/connectors/base.py`` (owned
-by Devin) is still an empty placeholder, so the ``SourceConnector``
-protocol is redeclared locally per the §9 contract. The canonical
-source of truth remains ``base.py``; this module must converge to it
-as soon as Devin implements it. Entity types (Query, SourceCandidate,
-RawSource, …) are likewise represented as plain dicts until
-``app/domain/entities/`` provides them (Codex).
+The ``SourceConnector`` contract and its entity types (Query,
+SourceCandidate, RawSource, …) are imported from the consolidated
+``app.connectors.base`` module (Devin). This module holds no local
+copy of the contract.
 """
 
 from __future__ import annotations
 
 import time
-from typing import Any
 from typing import Protocol
-from typing import runtime_checkable
 
 import httpx
 
+from app.connectors.base import ConnectorMetadata
+from app.connectors.base import HealthStatus
+from app.connectors.base import Query
+from app.connectors.base import RawSource
+from app.connectors.base import SourceCandidate
+from app.connectors.base import SourceMetadata
 from app.core.errors import InfrastructureError
-
-Query = str | dict[str, Any]
-SourceCandidate = dict[str, Any]
-RawSource = dict[str, Any]
-SourceMetadata = dict[str, Any]
-HealthStatus = dict[str, Any]
-ConnectorMetadata = dict[str, Any]
-
-
-@runtime_checkable
-class SourceConnector(Protocol):
-    """Local copy of the §9 SourceConnector contract (see module note)."""
-
-    connector_id: str
-    supported_source_types: list[str]
-
-    async def discover(self, query: Query) -> list[SourceCandidate]: ...
-    async def retrieve(self, candidate: SourceCandidate) -> RawSource: ...
-    async def inspect(self, raw: RawSource) -> SourceMetadata: ...
-    async def health_check(self) -> HealthStatus: ...
-    async def metadata(self) -> ConnectorMetadata: ...
 
 
 class _AuthHandler(Protocol):
@@ -90,14 +70,12 @@ class RESTConnector:
         return self._client
 
     async def discover(self, query: Query) -> list[SourceCandidate]:
-        """Search the REST source; return raw candidate dicts."""
-        params: dict[str, str] = {}
-        if isinstance(query, str):
-            params["q"] = query
-        elif isinstance(query, dict):
-            params = {str(k): str(v) for k, v in query.items()}
-        else:
-            raise ValueError("query must be a string or a dict")
+        """Search the REST source; return consolidated candidates."""
+        if not isinstance(query, Query):
+            raise ValueError("query must be a base.Query dataclass")
+        params: dict[str, str] = {"q": query.query_string}
+        if query.filters:
+            params.update({str(k): str(v) for k, v in query.filters.items()})
         headers, params = self._prepare(params=params)
         try:
             client = await self._get_client()
@@ -110,15 +88,19 @@ class RESTConnector:
         candidates: list[SourceCandidate] = []
         for item in items:
             if isinstance(item, dict):
-                candidates.append(dict(item))
+                location = str(item.get("url") or item.get("href") or "")
+                source_id = str(item.get("source_id") or item.get("id") or location)
+                metadata = {str(k): str(v) for k, v in item.items()}
+                candidates.append(
+                    SourceCandidate(source_id=source_id, location=location, metadata=metadata)
+                )
         return candidates
 
     async def retrieve(self, candidate: SourceCandidate) -> RawSource:
         """Fetch the raw payload behind a candidate (stays ``raw``)."""
-        if not isinstance(candidate, dict):
-            raise ValueError("candidate must be a dict")
-        url = str(candidate.get("url") or candidate.get("href") or "")
-        target = url or f"{self._base_url}/items/{candidate.get('id', '')}"
+        if not isinstance(candidate, SourceCandidate):
+            raise ValueError("candidate must be a base.SourceCandidate dataclass")
+        target = candidate.location or f"{self._base_url}/items/{candidate.source_id}"
         headers, _ = self._prepare()
         try:
             client = await self._get_client()
@@ -126,46 +108,46 @@ class RESTConnector:
             response.raise_for_status()
         except Exception as exc:
             raise InfrastructureError(f"REST retrieve failed: {exc}") from exc
-        return {
-            "data_stage": "raw",
-            "source_url": target,
-            "status_code": response.status_code,
-            "media_type": response.headers.get("content-type", "application/json"),
-            "content": response.text,
-        }
+        return RawSource(
+            source_id=candidate.source_id,
+            data=response.text,
+            content_type=response.headers.get("content-type", "application/json"),
+            metadata={
+                "source_url": target,
+                "status_code": str(response.status_code),
+                "data_stage": "raw",
+            },
+        )
 
     async def inspect(self, raw: RawSource) -> SourceMetadata:
         """Describe a raw payload without interpreting it."""
-        if not isinstance(raw, dict):
-            raise ValueError("raw must be a dict")
-        content = str(raw.get("content", ""))
-        return {
-            "media_type": raw.get("media_type", "application/json"),
-            "size_bytes": len(content.encode("utf-8")),
-            "source_url": raw.get("source_url"),
-            "data_stage": "raw",
-        }
+        if not isinstance(raw, RawSource):
+            raise ValueError("raw must be a base.RawSource dataclass")
+        data = raw.data
+        size_bytes = len(data) if isinstance(data, bytes) else len(str(data).encode("utf-8"))
+        return SourceMetadata(source_id=raw.source_id, size_bytes=size_bytes)
 
     async def health_check(self) -> HealthStatus:
-        """Probe ``GET /health``; never raises, reports down on failure."""
+        """Probe ``GET /health``; never raises, reports unhealthy on failure."""
         started = time.perf_counter()
         try:
             client = await self._get_client()
             response = await client.get(f"{self._base_url}/health")
-            up = response.status_code < 500
+            healthy = response.status_code < 500
         except Exception:
-            up = False
+            healthy = False
         latency_ms = round((time.perf_counter() - started) * 1000.0, 3)
-        return {
-            "status": "up" if up else "down",
-            "latency_ms": latency_ms,
-            "connector_id": self.connector_id,
-        }
+        return HealthStatus(
+            healthy=healthy,
+            message="up" if healthy else "down: /health probe failed",
+            latency_ms=latency_ms,
+        )
 
     async def metadata(self) -> ConnectorMetadata:
         """Return static connector metadata (no I/O)."""
-        return {
-            "connector_id": self.connector_id,
-            "supported_source_types": list(self.supported_source_types),
-            "base_url": self._base_url,
-        }
+        return ConnectorMetadata(
+            connector_id=self.connector_id,
+            name="REST connector",
+            version="1.0",
+            supported_source_types=list(self.supported_source_types),
+        )
