@@ -60,3 +60,37 @@ async def test_csv_inspect(tmp_path: Path) -> None:
     assert metadata.source_id == "csv-test_data"
     assert metadata.record_count == 2
     assert metadata.schema == {"name": "string", "age": "string"}
+
+
+@pytest.mark.asyncio
+async def test_inspect_ignores_trailing_newline(tmp_path: Path) -> None:
+    """Test that inspect ignores trailing newline in CSV."""
+    connector = CSVConnector(base_path=str(tmp_path))
+    
+    # Create test CSV file with trailing newline
+    test_file = tmp_path / "test_data.csv"
+    test_file.write_text("name,age\nAlice,30\nBob,25\n")
+    
+    query = Query(query_string="test")
+    candidates = await connector.discover(query)
+    raw = await connector.retrieve(candidates[0])
+    metadata = await connector.inspect(raw)
+    
+    assert metadata.record_count == 2
+
+
+@pytest.mark.asyncio
+async def test_inspect_ignores_blank_lines(tmp_path: Path) -> None:
+    """Test that inspect ignores blank lines in CSV."""
+    connector = CSVConnector(base_path=str(tmp_path))
+    
+    # Create test CSV file with blank lines
+    test_file = tmp_path / "test_data.csv"
+    test_file.write_text("name,age\nAlice,30\n\nBob,25\n")
+    
+    query = Query(query_string="test")
+    candidates = await connector.discover(query)
+    raw = await connector.retrieve(candidates[0])
+    metadata = await connector.inspect(raw)
+    
+    assert metadata.record_count == 2
