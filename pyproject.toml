@@ -8,6 +8,7 @@ description = "INIS — Intelligent Networked Information System"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
+    "paho-mqtt>=2.0",
     "pydantic>=2.9",
     "sqlalchemy>=2.0",
     "asyncpg",
