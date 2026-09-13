@@ -2,10 +2,11 @@
 
 ``trafilatura`` is imported lazily inside :meth:`TrafilaturaExtractor.extract`
 so this module stays importable where the optional dependency is missing
-(it is currently absent from ``pyproject.toml`` — see final report). When
-trafilatura is unavailable or extraction fails, a graceful fallback returns
-the contract dict with empty fields and an ``error`` message instead of
-raising: extraction must never crash a collection pipeline.
+(``trafilatura`` is declared in ``pyproject.toml``; the lazy import only
+protects minimal environments). When trafilatura is unavailable or
+extraction fails, a graceful fallback returns the contract dict with
+empty fields and an ``error`` message instead of raising: extraction
+must never crash a collection pipeline.
 """
 
 from __future__ import annotations
@@ -32,13 +33,24 @@ class TrafilaturaExtractor:
     async def extract(self, html: str, url: str) -> dict[str, Any]:
         """Extract ``{title, text, author, date, language}`` (+ url, error).
 
-        Never raises on extraction failure: returns empty fields with
-        ``error`` set. Raises ``ValueError`` only on invalid input.
+        Never raises on extraction failure or empty HTML: returns the
+        contract dict with ``error`` set. Raises ``ValueError`` only
+        when ``html``/``url`` are not strings.
         """
-        if not html or not isinstance(html, str):
-            raise ValueError("html must be a non-empty string")
-        if not url or not isinstance(url, str):
+        if not isinstance(html, str):
+            raise ValueError("html must be a string")
+        if not isinstance(url, str) or not url:
             raise ValueError("url must be a non-empty string")
+        if not html:
+            return {
+                "title": None,
+                "text": "",
+                "author": None,
+                "date": None,
+                "language": None,
+                "url": url,
+                "error": "empty html",
+            }
         try:
             import trafilatura
 
