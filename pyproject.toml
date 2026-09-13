@@ -17,6 +17,8 @@ dependencies = [
     "httpx",
     "structlog",
     "python-ulid",
+    "trafilatura>=1.12",
+    "readability-lxml>=0.8.1",
 ]
 
 [project.optional-dependencies]
