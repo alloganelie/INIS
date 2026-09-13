@@ -123,3 +123,35 @@ Date : 2026-09-13 — Commit : <sha final> — Tests : 209
 Objectif : contrôles qualité, contradictions, scoring, matrice de confiance, fraîcheur.
 
 Référence : INIS_SPEC.md §13, §14 (conflicts), §15.
+## PHASE-05.2 → 05.4 — Consolidation & Fixes — ✅ TERMINÉE
+Date : 2026-09-13 — Commit : <sha final> — Tests : 238 passed, 1 skipped
+
+### Zones couvertes
+| Zone | Agent | Fichiers clés |
+|---|---|---|
+| migrations/ + alembic.ini | Codex (exception) | env.py, 0002-0004 |
+| app/connectors/database/ | Codex (exception) | postgres_connector (latency) |
+| app/storage/search/ | Devin | vector, hybrid, fulltext |
+| app/observability/ | OpenCode | health_aggregator, readability |
+| app/api/v1/sources/ + system/ | Antigravity | repository, health/ready |
+| tests/integration/ | Cursor + Codex | test_postgres_real, test_phase_05_2_e2e |
+
+### Gate PHASE-05.2→05.4
+- [x] Alembic fonctionne (upgrade head + downgrade base)
+- [x] DATABASE_URL lue correctement
+- [x] PostgresConnector opérationnel
+- [x] Search classes réelles (vector/hybrid/fulltext)
+- [x] Tests testcontainers PostgreSQL réels
+- [x] 238 tests, 0 failed, 1 skipped (justifié)
+
+### Exception documentée
+Codex a couvert `migrations/`, `app/connectors/database/`, `tests/integration/` 
+(zones Devin + Cursor) car Devin a échoué 2 fois sur Alembic.
+
+### Dettes reportées (PHASE-06)
+1. **SourceRepository** — décision architecturale : `app/storage/repositories/` (vide) 
+   ou `app/api/v1/sources/repository.py` (existant) ? → aligner le test.
+2. Schéma §27 partiel (claims, conflicts, artifacts manquants)
+3. AuditWriter en mémoire (persistance DB)
+4. HealthAggregator câblage lifecycle prod
+5. DeprecationWarning `testcontainers.postgres` → `testcontainers.community.postgres`
