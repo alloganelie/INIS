@@ -40,6 +40,8 @@ class AuditWriter:
         stored_event = dict(event)
         stored_event.setdefault("audit_event_id", ULID.new("AUD_"))
         stored_event.setdefault("timestamp", self._utc_timestamp())
+        stored_event.setdefault("before_hash", None)
+        stored_event.setdefault("after_hash", None)
         if self._engine is None:
             self._events[stored_event["audit_event_id"]] = stored_event
             return

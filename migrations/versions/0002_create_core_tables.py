@@ -66,7 +66,6 @@ def upgrade() -> None:
         sa.Column("created_at", sa.TIMESTAMP(timezone=True), nullable=False, server_default=sa.text("now()")),
         sa.ForeignKeyConstraint(["source_id"], ["sources.id"]),
     )
-    op.create_foreign_key("fk_documents_source_id", "documents", "sources", ["source_id"], ["id"])
 
     # Create information_units table
     op.create_table(
@@ -81,8 +80,6 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["source_id"], ["sources.id"]),
         sa.ForeignKeyConstraint(["document_id"], ["documents.id"]),
     )
-    op.create_foreign_key("fk_information_units_source_id", "information_units", "sources", ["source_id"], ["id"])
-    op.create_foreign_key("fk_information_units_document_id", "information_units", "documents", ["document_id"], ["id"])
 
     # Create audit_events table per §20.1
     op.create_table(
@@ -104,9 +101,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Drop core tables."""
-    op.drop_constraint("fk_information_units_document_id", "information_units")
-    op.drop_constraint("fk_information_units_source_id", "information_units")
-    op.drop_constraint("fk_documents_source_id", "documents")
     op.drop_table("audit_events")
     op.drop_table("information_units")
     op.drop_table("documents")

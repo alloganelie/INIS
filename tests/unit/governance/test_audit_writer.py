@@ -84,6 +84,8 @@ def test_audit_writer_persists_with_mock_engine() -> None:
 
     assert len(connection.executions) == 1
     assert connection.executions[0][1]["id"].startswith("AUD_")
+    assert connection.executions[0][1]["before_hash"] is None
+    assert connection.executions[0][1]["after_hash"] is None
 
 
 def test_audit_writer_lists_persisted_events_with_mock_engine() -> None:
