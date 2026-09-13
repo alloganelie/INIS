@@ -13,6 +13,7 @@ from typing import Sequence
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 revision: str = "0003"
@@ -43,7 +44,7 @@ def upgrade() -> None:
     # Add search_vector column to information_units for full-text search
     op.add_column(
         "information_units",
-        sa.Column("search_vector", sa.TSVECTOR(), nullable=True),
+        sa.Column("search_vector", postgresql.TSVECTOR(), nullable=True),
     )
 
     # Create GIN index on search_vector
