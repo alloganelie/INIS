@@ -133,8 +133,11 @@ def test_list_conflicts_by_status() -> None:
 
 
 def test_metrics_endpoint() -> None:
-    """Ensure GET /v1/metrics returns 200 with status."""
+    """Ensure GET /v1/metrics returns metrics payload per §34."""
     res = client.get("/v1/metrics")
     assert res.status_code == 200
     data = res.json()
-    assert "status" in data
+    assert "service" in data
+    assert "metrics" in data
+    assert isinstance(data["metrics"], dict)
+
