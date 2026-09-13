@@ -12,6 +12,7 @@ from app.api.v1.requests.progress_handler import router as progress_router
 from app.api.v1.requests.router import router as requests_router
 from app.api.v1.sources.router import router as sources_router
 from app.api.v1.system.changelog_router import router as changelog_router
+from app.api.v1.system.health_router import router as health_router
 from app.api.v1.system.metrics_router import router as metrics_router
 
 router = APIRouter(prefix="/v1", tags=["v1"])
@@ -32,4 +33,6 @@ router.include_router(evidence_router)
 router.include_router(conflicts_router)
 router.include_router(changelog_router)
 router.include_router(metrics_router)
+router.include_router(health_router)
+
 
