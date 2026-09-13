@@ -1,6 +1,10 @@
 """Full-text search using PostgreSQL tsvector."""
 
-from typing import List
+from typing import List, Optional
+
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from app.storage.database.engine import create_engine
 
 
 class FullTextSearch:
@@ -13,6 +17,17 @@ class FullTextSearch:
             connection_string: PostgreSQL connection string.
         """
         self._connection_string = connection_string
+        self._engine: Optional[AsyncEngine] = None
+
+    async def _get_engine(self) -> Optional[AsyncEngine]:
+        """Get or create the async engine. Returns None in degraded mode."""
+        if self._engine is None:
+            try:
+                self._engine = create_engine(self._connection_string)
+            except Exception:
+                # Degraded mode: engine not available
+                return None
+        return self._engine
 
     async def search(
         self,
@@ -28,11 +43,20 @@ class FullTextSearch:
         Returns:
             List of results with owner_id and score.
         """
-        # Stub implementation - would use asyncpg to execute:
-        # SELECT information_id AS owner_id,
-        #        ts_rank(search_vector, plainto_tsquery($1)) AS score
-        # FROM information_units
-        # WHERE search_vector @@ plainto_tsquery($1)
-        # ORDER BY score DESC
-        # LIMIT $2
-        return []
+        engine = await self._get_engine()
+        if engine is None:
+            # Degraded mode: return empty list
+            return []
+
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                "SELECT id AS owner_id, ts_rank(search_vector, plainto_tsquery($1)) AS score "
+                "FROM information_units "
+                "WHERE search_vector @@ plainto_tsquery($1) "
+                "ORDER BY score DESC "
+                "LIMIT $2",
+                query,
+                limit,
+            )
+            rows = result.fetchall()
+            return [{"owner_id": row[0], "score": float(row[1])} for row in rows]
