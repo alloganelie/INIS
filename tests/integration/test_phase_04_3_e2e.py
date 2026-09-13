@@ -81,6 +81,6 @@ def test_trafilatura_extractor_imports() -> None:
 
 
 def test_progress_endpoint_imports() -> None:
-    """Progress endpoint imports (skip si absent)."""
-    module = _import_or_skip("app.api.v1.progress")
+    """Progress endpoint imports (Antigravity: requests progress handler)."""
+    module = _import_or_skip("app.api.v1.requests.progress_handler")
     assert hasattr(module, "router"), "missing symbol: router"
