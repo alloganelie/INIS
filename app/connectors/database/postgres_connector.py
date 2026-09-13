@@ -4,6 +4,7 @@ import re
 import time
 from typing import Optional
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.connectors.base import (
@@ -42,8 +43,9 @@ class PostgresConnector:
         Returns:
             True if valid, False otherwise.
         """
-        # Only allow alphanumeric, underscore, and hyphen
-        return bool(re.match(r'^[a-zA-Z0-9_-]+$', table_name))
+        # PostgreSQL identifiers used without quoting must start with a letter
+        # or underscore and cannot contain a hyphen.
+        return bool(re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", table_name))
 
     async def _get_engine(self) -> Optional[AsyncEngine]:
         """Get or create the async engine. Returns None in degraded mode."""
@@ -80,8 +82,11 @@ class PostgresConnector:
         async with engine.connect() as conn:
             pattern = f"%{query.query_string}%"
             result = await conn.execute(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE $1",
-                pattern,
+                text(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_name LIKE :pattern"
+                ),
+                {"pattern": pattern},
             )
             rows = result.fetchall()
             for row in rows:
@@ -125,7 +130,7 @@ class PostgresConnector:
             )
 
         async with engine.connect() as conn:
-            result = await conn.execute(f"SELECT * FROM {table_name} LIMIT 100")
+            result = await conn.execute(text(f"SELECT * FROM {table_name} LIMIT 100"))
             rows = result.fetchall()
             columns = result.keys()
             
@@ -178,7 +183,7 @@ class PostgresConnector:
 
         try:
             async with engine.connect() as conn:
-                await conn.execute("SELECT 1")
+                await conn.execute(text("SELECT 1"))
             latency_ms = (time.time() - start_time) * 1000
             return HealthStatus(
                 healthy=True,

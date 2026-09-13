@@ -16,6 +16,7 @@ from typing import Sequence
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 revision: str = "0002"
@@ -34,9 +35,9 @@ def upgrade() -> None:
         sa.Column("description", sa.Text(), nullable=False),
         sa.Column("version", sa.Text(), nullable=False),
         sa.Column("status", sa.Text(), nullable=False),
-        sa.Column("protocols", sa.JSON(), nullable=False, server_default="[]"),
-        sa.Column("capabilities", sa.JSON(), nullable=False, server_default="[]"),
-        sa.Column("health", sa.JSON(), nullable=False, server_default="{}"),
+        sa.Column("protocols", postgresql.JSONB(), nullable=False, server_default="[]"),
+        sa.Column("capabilities", postgresql.JSONB(), nullable=False, server_default="[]"),
+        sa.Column("health", postgresql.JSONB(), nullable=False, server_default="{}"),
         sa.Column("registered_at", sa.TIMESTAMP(timezone=True), nullable=False, server_default=sa.text("now()")),
         sa.Column("last_seen_at", sa.TIMESTAMP(timezone=True), nullable=False, server_default=sa.text("now()")),
     )
@@ -48,7 +49,7 @@ def upgrade() -> None:
         sa.Column("url", sa.Text(), nullable=False),
         sa.Column("source_type", sa.Text(), nullable=False),
         sa.Column("reliability_score", sa.Float(), nullable=True),
-        sa.Column("freshness", sa.JSON(), nullable=True),
+        sa.Column("freshness", postgresql.JSONB(), nullable=True),
         sa.Column("data_stage", sa.Text(), nullable=False),
         sa.Column("created_at", sa.TIMESTAMP(timezone=True), nullable=False, server_default=sa.text("now()")),
         sa.Column("updated_at", sa.TIMESTAMP(timezone=True), nullable=False, server_default=sa.text("now()")),
@@ -63,7 +64,7 @@ def upgrade() -> None:
         sa.Column("content_hash", sa.Text(), nullable=False),
         sa.Column("storage_ref", sa.Text(), nullable=False),
         sa.Column("created_at", sa.TIMESTAMP(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.ForeignKeyConstraint(["source_id"], ["sources"], ["id"]),
+        sa.ForeignKeyConstraint(["source_id"], ["sources.id"]),
     )
 
     # Create information_units table
@@ -71,13 +72,13 @@ def upgrade() -> None:
         "information_units",
         sa.Column("id", sa.Text(), primary_key=True),
         sa.Column("type", sa.Text(), nullable=False),
-        sa.Column("content", sa.JSON(), nullable=False),
+        sa.Column("content", postgresql.JSONB(), nullable=False),
         sa.Column("source_id", sa.Text(), nullable=False),
         sa.Column("document_id", sa.Text(), nullable=True),
         sa.Column("data_stage", sa.Text(), nullable=False),
         sa.Column("created_at", sa.TIMESTAMP(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.ForeignKeyConstraint(["source_id"], ["sources"], ["id"]),
-        sa.ForeignKeyConstraint(["document_id"], ["documents"], ["id"]),
+        sa.ForeignKeyConstraint(["source_id"], ["sources.id"]),
+        sa.ForeignKeyConstraint(["document_id"], ["documents.id"]),
     )
 
     # Create audit_events table per §20.1

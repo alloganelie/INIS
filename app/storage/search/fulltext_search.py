@@ -2,6 +2,7 @@
 
 from typing import List, Optional
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.storage.database.engine import create_engine
@@ -50,13 +51,14 @@ class FullTextSearch:
 
         async with engine.connect() as conn:
             result = await conn.execute(
-                "SELECT id AS owner_id, ts_rank(search_vector, plainto_tsquery($1)) AS score "
+                text(
+                "SELECT id AS owner_id, ts_rank(search_vector, plainto_tsquery(:query)) AS score "
                 "FROM information_units "
-                "WHERE search_vector @@ plainto_tsquery($1) "
+                "WHERE search_vector @@ plainto_tsquery(:query) "
                 "ORDER BY score DESC "
-                "LIMIT $2",
-                query,
-                limit,
+                "LIMIT :limit"
+                ),
+                {"query": query, "limit": limit},
             )
             rows = result.fetchall()
             return [{"owner_id": row[0], "score": float(row[1])} for row in rows]
