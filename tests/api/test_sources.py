@@ -70,3 +70,90 @@ def test_list_sources() -> None:
     filtered_data = filtered_res.json()
     filtered_types = [s["source_type"] for s in filtered_data.get("sources", filtered_data.get("items", []))]
     assert all(st == "web_page" for st in filtered_types)
+
+
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_source_repository_direct_crud(tmp_path: any) -> None:
+    """Ensure SourceRepository can create, get, and list sources in a database."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from app.api.v1.sources.repository import SourceRepository
+
+    db_file = tmp_path / "test_sources.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}")
+
+    # 1. Create
+    data = {
+        "name": "DB Source Alpha",
+        "source_type": "rest_api",
+        "url": "https://alpha.example.com",
+        "metadata": {"tags": ["finance"]},
+    }
+    created = await SourceRepository.create(engine, data)
+    assert created["source_id"].startswith("SRC_")
+    assert created["name"] == "DB Source Alpha"
+    assert created["metadata"] == {"tags": ["finance"]}
+
+    # 2. Get
+    fetched = await SourceRepository.get(engine, created["source_id"])
+    assert fetched is not None
+    assert fetched["source_id"] == created["source_id"]
+    assert fetched["name"] == "DB Source Alpha"
+
+    # Get non-existent
+    assert await SourceRepository.get(engine, "SRC_NONEXISTENT") is None
+
+    # 3. List
+    all_sources = await SourceRepository.list(engine)
+    assert len(all_sources) >= 1
+    assert any(s["source_id"] == created["source_id"] for s in all_sources)
+
+    # List with filter
+    filtered = await SourceRepository.list(engine, source_type="rest_api")
+    assert len(filtered) >= 1
+    assert all(s["source_type"] == "rest_api" for s in filtered)
+
+    await engine.dispose()
+
+
+def test_sources_endpoints_with_database_engine(tmp_path: any, monkeypatch: any) -> None:
+    """Ensure /v1/sources routes interact with the database when INIS_DATABASE_URL is set."""
+    from app.api.v1.sources.repository import set_database_engine
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    db_file = tmp_path / "endpoint_sources.db"
+    db_url = f"sqlite+aiosqlite:///{db_file}"
+    monkeypatch.setenv("INIS_DATABASE_URL", db_url)
+
+    engine = create_async_engine(db_url)
+    set_database_engine(engine)
+
+    try:
+        # POST
+        payload = {
+            "name": "Persisted DB Source",
+            "source_type": "database",
+            "url": "postgresql://localhost:5432/mydb",
+            "metadata": {"env": "prod"},
+        }
+        create_res = client.post("/v1/sources", json=payload)
+        assert create_res.status_code == 201
+        created_data = create_res.json()
+        src_id = created_data["source_id"]
+        assert src_id.startswith("SRC_")
+
+        # GET by ID
+        get_res = client.get(f"/v1/sources/{src_id}")
+        assert get_res.status_code == 200
+        assert get_res.json()["name"] == "Persisted DB Source"
+
+        # GET list
+        list_res = client.get("/v1/sources")
+        assert list_res.status_code == 200
+        items = list_res.json().get("sources", list_res.json().get("items", []))
+        assert any(s["source_id"] == src_id for s in items)
+    finally:
+        set_database_engine(None)
+
