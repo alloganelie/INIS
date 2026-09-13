@@ -1,24 +1,25 @@
 # Agent Status
 
 ## Dernière mise à jour
-2026-09-12 — PHASE-02 clôturée, PHASE-03 lancée (OpenCode rattrapage)
+2026-09-13 — PHASE-03 clôturée, PHASE-04 lancée
 
 ## Commit de référence
-`2ca0460` — main
+`5fb159d` — main
 
 ## État des agents
 
-| Agent | Branche | PHASE-01 | PHASE-02 | PHASE-03 |
-|---|---|---|---|---|
-| Codex | agent/codex/domain | ✅ | ✅ | ⏸️ |
-| Devin | agent/devin/storage | ✅ | ✅ | ⏸️ |
-| OpenCode | agent/opencode/messaging | ✅ | ❌ | 🚀 en cours |
-| Antigravity | agent/antigravity/api | ✅ | ✅ | ⏸️ |
-| Cursor | agent/cursor/integration | ✅ | ✅ | ⏸️ |
+| Agent | Branche | P1 | P2 | P3 | P4 |
+|---|---|---|---|---|---|
+| Codex | agent/codex/domain | ✅ | ✅ | ⏸️ | 🚀 |
+| Devin | agent/devin/storage | ✅ | ✅ | ⏸️ | 🚀 |
+| OpenCode | agent/opencode/messaging | ✅ | ❌ | ✅ | 🚀 |
+| Antigravity | agent/antigravity/api | ✅ | ✅ | ⏸️ | 🚀 |
+| Cursor | agent/cursor/integration | ✅ | ✅ | ⏸️ | 🚀 |
 
 ## Tests
-- main @ 2ca0460 : **111 passed**
+main @ 5fb159d : **119 passed**
 
-## Points d'attention
-- OpenCode doit rattraper PHASE-02 manquée → PHASE-03 Lot AMQP/MQTT
-- Exception AGENT_ASSIGNMENTS : Codex a couvert app/registry/ et app/workers/
+## Notes
+- OpenCode travaille dans C:\Users\LATITUDE 5420\Documents\INIS-opencode\opencode
+- Exception AGENT_ASSIGNMENTS : Codex a couvert app/registry/ et app/workers/ en PHASE-02
+- paho-mqtt ajouté au pyproject par l'humain

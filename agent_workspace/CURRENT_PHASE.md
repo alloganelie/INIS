@@ -1,44 +1,41 @@
 # Current Phase
 
 ## PHASE-01 — Stabilisation du socle multi-agent — ✅ TERMINÉE
-
-Date de clôture : 2026-09-12
-Commit final : 34e6a7e
-Tests : 67 passed
+Date : 2026-09-12 — Commit : 34e6a7e — Tests : 67
 
 ## PHASE-02 — Agent Runtime — ✅ TERMINÉE
+Date : 2026-09-12 — Commit : 2ca0460 — Tests : 111
+Zones : agents/runtime, planning, registry, workers, llm/router, tools, api/v1/*, tests/integration
 
-Date de clôture : 2026-09-12
-Commit final : 2ca0460
-Tests : 111 passed (+44)
+## PHASE-03 — Transport AMQP/MQTT — ✅ TERMINÉE
+Date : 2026-09-13 — Commit : 5fb159d — Tests : 119
 
-### Zones couvertes
+### Zones couvertes (OpenCode seul)
+- app/messaging/amqp/ : topology, broker, publisher, consumer, health, DLQ (§41.8)
+- app/messaging/mqtt/ : broker (stub), health
+- pyproject.toml : + paho-mqtt
 
-| Zone | Agent | Fichiers clés | Tests |
-|---|---|---|---|
-| app/agents/runtime/ | Codex | state_machine, budget_tracker | ✓ |
-| app/planning/ | Codex | plan_builder | ✓ |
-| app/registry/ | Codex (exception) | agent_registry, capability_index | ✓ |
-| app/workers/ | Codex (exception) | heartbeat_worker | ✓ |
-| app/llm/router/ | Devin | model_router, cost_tracker, fallback_chain | ✓ |
-| app/tools/ | Devin | registry | ✓ |
-| app/api/v1/requests/ | Antigravity | schemas, router | ✓ |
-| app/api/v1/agents/ | Antigravity | schemas, router | ✓ |
-| tests/integration/ | Cursor | phase_02_e2e, phase_02_pipeline | ✓ |
-| docs/ | Cursor | phase_02_plan.md | — |
-
-### Exceptions documentées
-- OpenCode n'a pas contribué à PHASE-02. Codex a couvert `app/registry/` et `app/workers/` à sa place.
-- ULID_PREFIXES complété avec `PLAN_`, `STEP_`, `ITER_` (manquants §0.3).
+### Gate PHASE-03 — 6/6 ✅
+- [x] Transport AMQP (aio-pika) implémenté
+- [x] Retry + DLQ (§41.8)
+- [x] MQTT stub prêt
+- [x] Tests verts (119 passed)
+- [x] CI GitHub verte
+- [x] PR mergée
 
 ---
 
-## PHASE-03 — Transport AMQP/MQTT — 🚀 EN COURS
+## PHASE-04 — Information Acquisition — 🚀 EN COURS
 
-Objectif : implémenter la couche de transport AMQP (aio-pika) et MQTT (interface).
+Objectif : connecteurs de sources (web, REST API, fichiers, DB) + domain entities Source/Document/Dataset + endpoints API + tests E2E.
 
-### Lot en cours — OpenCode
-- `app/messaging/amqp/` : broker, publisher, consumer, topology, health, DLQ
-- `app/messaging/mqtt/` : broker, health
+### Zones assignées
+| Agent | Zone | Lot |
+|---|---|---|
+| Codex | app/domain/entities/ | Source, Document, Dataset, SourceCandidate |
+| Devin | app/connectors/files/, app/connectors/database/ | base.py + CSV/JSON/Excel + PostgreSQL |
+| OpenCode | app/connectors/api/, app/connectors/web/ | REST + auth + web search providers |
+| Antigravity | app/api/v1/sources/, app/api/v1/information/ | Endpoints GET/POST |
+| Cursor | tests/integration/ | Smoke tests E2E PHASE-04 + doc |
 
-Référence spec : `INIS_SPEC.md` §4.4 (broker), §5.2 (types), §41.8 (retry).
+Référence spec : INIS_SPEC.md §9 (Connecteurs), §10 (Web), §35 (Roadmap Phase 4).
