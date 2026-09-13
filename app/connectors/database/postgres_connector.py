@@ -170,31 +170,32 @@ class PostgresConnector:
         Returns:
             Health status with latency.
         """
-        start_time = time.time()
+        start_time = time.perf_counter()
         engine = await self._get_engine()
-        
+
         if engine is None:
-            # Degraded mode: healthy but no connection
+            latency_ms = (time.perf_counter() - start_time) * 1000
             return HealthStatus(
                 healthy=True,
                 message="PostgreSQL connector healthy (degraded mode, no engine)",
-                latency_ms=None,
+                latency_ms=latency_ms,
             )
 
         try:
             async with engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
-            latency_ms = (time.time() - start_time) * 1000
+            latency_ms = (time.perf_counter() - start_time) * 1000
             return HealthStatus(
                 healthy=True,
                 message="PostgreSQL connector healthy",
                 latency_ms=latency_ms,
             )
         except Exception as e:
+            latency_ms = (time.perf_counter() - start_time) * 1000
             return HealthStatus(
                 healthy=False,
                 message=f"PostgreSQL connector unhealthy: {str(e)}",
-                latency_ms=None,
+                latency_ms=latency_ms,
             )
 
     async def metadata(self) -> ConnectorMetadata:

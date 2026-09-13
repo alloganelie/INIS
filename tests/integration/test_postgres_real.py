@@ -1,5 +1,7 @@
 """Integration tests for PostgreSQL with testcontainers per §4.2, §16."""
 
+import os
+
 import pytest
 
 from app.connectors.database.postgres_connector import PostgresConnector
@@ -46,9 +48,16 @@ def postgres_container():
 
 
 @pytest.fixture(scope="session")
-def db_url(postgres_container):
-    """Get database URL from container."""
-    return postgres_container.get_connection_url()
+def db_url(request):
+    """Get an asyncpg SQLAlchemy URL from the environment or container."""
+    database_url = os.environ.get("DATABASE_URL")
+    if database_url:
+        return database_url
+
+    postgres_container = request.getfixturevalue("postgres_container")
+    return postgres_container.get_connection_url().replace(
+        "postgresql+psycopg2://", "postgresql+asyncpg://"
+    )
 
 
 @pytest.fixture(scope="session")
