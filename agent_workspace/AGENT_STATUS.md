@@ -1,10 +1,10 @@
 # Agent Status
 
 ## Dernière mise à jour
-2026-09-13 — PHASE-04 clôturée, PHASE-05 à lancer
+2026-09-13 — PHASE-04.3 clôturée, PHASE-05 à lancer
 
 ## Commit de référence
-`1a6ac5d` — main
+<sha final PHASE-04.3> — main
 
 ## État des phases
 
@@ -14,20 +14,22 @@
 | PHASE-02 — Agent Runtime | ✅ | `2ca0460` | 111 | 4 |
 | PHASE-03 — Transport AMQP/MQTT | ✅ | `5fb159d` | 119 | 1 (OpenCode) |
 | PHASE-04 — Information Acquisition | ✅ | `1a6ac5d` | 154 | 4 + intégrateur |
+| PHASE-04.2 — Corrections & Convergence | ✅ | `276e8f8` | 158 | 3 + intégrateur |
+| PHASE-04.3 — Intégration réelle | ✅ | `<sha final>` | 169 | 4 + intégrateur |
 | PHASE-05 — Knowledge Layer | 🚀 à lancer | — | — | — |
 
 ## État des agents (par phase)
 
-| Agent | Branche | P1 | P2 | P3 | P4 | P5 |
-|---|---|---|---|---|---|---|
-| Codex | agent/codex/domain | ✅ | ✅ | ⏸️ | ✅ | 🚀 |
-| Devin | agent/devin/storage | ✅ | ✅ | ⏸️ | ✅ | 🚀 |
-| OpenCode | agent/opencode/messaging | ✅ | ❌ | ✅ | ✅ | 🚀 |
-| Antigravity | agent/antigravity/api | ✅ | ✅ | ⏸️ | ✅ | 🚀 |
-| Intégrateur (OpenCode) | agent/cursor/integration | ✅ | ✅ | ⏸️ | ✅ | 🚀 |
+| Agent | Branche | P1 | P2 | P3 | P4 | P4.2 | P4.3 | P5 |
+|---|---|---|---|---|---|---|---|---|
+| Codex | agent/codex/domain | ✅ | ✅ | ⏸️ | ✅ | ✅ | ✅ | 🚀 |
+| Devin | agent/devin/storage | ✅ | ✅ | ⏸️ | ✅ | ✅ | ✅ | 🚀 |
+| OpenCode | agent/opencode/messaging | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | 🚀 |
+| Antigravity | agent/antigravity/api | ✅ | ✅ | ⏸️ | ✅ | ⏸️ | ✅ | 🚀 |
+| Intégrateur (OpenCode) | agent/cursor/integration | ✅ | ✅ | ⏸️ | ✅ | ⏸️ | ✅ | 🚀 |
 
 ## Tests
-main @ 1a6ac5d : **154 passed, 1 warning**
+main @ <sha final> : **169 passed, 0 warning, 0 skipped**
 
 ## Emplacements des worktrees
 
@@ -40,23 +42,25 @@ main @ 1a6ac5d : **154 passed, 1 warning**
 | Antigravity | C:\Users\LATITUDE 5420\Downloads\INIS-worktrees\antigravity |
 | Intégrateur | C:\Users\LATITUDE 5420\Downloads\INIS-worktrees\cursor |
 
-## Dettes techniques ouvertes (PHASE-04.2)
+## Dettes techniques ouvertes (reportées PHASE-05)
 
-1. **`Dataset.schema` warning Pydantic** — champ masque un attribut de `BaseModel`.
-   Correcteur : Codex. Effort : 5 min.
-   Solution : renommer en `dataset_schema` ou utiliser `model_config = ConfigDict(protected_namespaces=())`.
+1. **PostgresConnector stub partiel** — structure prête (utilise engine.py) mais pas de connexion réelle.
+   Correcteur : Devin. Effort : 45 min.
+   Solution : brancher asyncpg réel + tests testcontainers.
 
-2. **`CSVConnector.inspect()` compte les lignes vides finales** — 3 records au lieu de 2 avec un `\n` terminal.
-   Correcteur : Devin. Effort : 15 min.
-   Solution : filtrer les lignes vides dans `inspect()`.
+2. **AuditWriter en mémoire** — les événements ne survivent pas au redémarrage.
+   Correcteur : Codex. Effort : 30 min.
+   Solution : brancher sur la table `audit_events` (créée par migration 0002).
 
-3. **`SourceConnector` redéclaré localement** par OpenCode dans `rest_connector.py` (car `base.py` était vide au moment du travail).
-   Correcteurs : Devin + OpenCode. Effort : 30 min.
-   Solution : migrer les imports d'OpenCode vers `app/connectors/base.py`.
+3. **`readability_extractor.py` vide** — extractor alternatif non implémenté.
+   Correcteur : OpenCode. Effort : 20 min.
 
-4. **`SearchResult` / `SearchProvider` redéclarés** dans `provider_router.py` (car domain vide au moment du travail).
-   Correcteurs : Codex + OpenCode. Effort : 30 min.
-   Solution : créer `app/domain/entities/search_result.py` (Codex), migrer OpenCode.
+4. **Tests d'intégration sans vraie DB PostgreSQL** — 169 tests unitaires/E2E mais aucun test contre une DB réelle.
+   Correcteur : Devin. Effort : 1 h.
+   Solution : testcontainers + migration 0002 testée.
+
+5. **Trafilatura non testée avec vraie lib** — fallback regex testé mais pas l'extraction réelle.
+   Correcteur : OpenCode. Effort : 15 min.
 
 ## Exceptions documentées
 
@@ -68,8 +72,10 @@ main @ 1a6ac5d : **154 passed, 1 warning**
 - **OpenCode** travaille dans `C:\Users\LATITUDE 5420\Documents\INIS-opencode\opencode` (déplacé hors `Downloads` pour éviter les conflits de "dernier dossier ouvert").
 - **Intégrateur** : le rôle anciennement tenu par Cursor est repris par une session OpenCode dédiée, utilisant le worktree `INIS-worktrees\cursor` et la branche `agent/cursor/integration`.
 - **paho-mqtt** ajouté au `pyproject.toml` par l'humain (PHASE-03).
+- **trafilatura** + **readability-lxml** ajoutés au `pyproject.toml` par l'humain (PHASE-04.3).
 
 ## Prochaines actions
 
-1. **PHASE-04.2** (recommandée) : corriger les 4 dettes techniques en parallèle.
-2. **PHASE-05** : Knowledge Layer (information_units, evidence, pgvector, recherche hybride, mémoire, provenance) — référence `INIS_SPEC.md` §11, §12, §16, §17.
+1. **PHASE-05 — Knowledge Layer** : information_units, evidence, pgvector, recherche hybride, mémoire, provenance.
+   Référence : `INIS_SPEC.md` §11, §12, §16, §17.
+2. Les 5 dettes techniques ci-dessus peuvent être traitées en parallèle ou en PHASE-05 selon les besoins.

@@ -43,3 +43,42 @@ Date : 2026-09-13 — Commit : <sha final> — Tests : 158
 ### Dette restante (reportée PHASE-04.3)
 - `app/domain/interfaces/search_provider.py` vide → à créer
 - Stubs Serper/Brave à `score=0.0` → normalisation réelle à venir
+## PHASE-04.3 — Intégration réelle — ✅ TERMINÉE
+Date : 2026-09-13 — Commit : <sha final> — Tests : 169
+
+### Zones couvertes
+| Zone | Agent | Fichiers clés |
+|---|---|---|
+| app/domain/interfaces/ | Codex | search_provider.py |
+| app/governance/audit/ | Codex | audit_writer.py |
+| app/core/ | Codex | logging.py (structlog) |
+| app/connectors/database/ | Devin | postgres_connector.py |
+| migrations/versions/ | Devin | 0002_create_core_tables.py |
+| app/connectors/web/providers/ | OpenCode | serper/brave réels |
+| app/connectors/web/extractors/ | OpenCode | trafilatura_extractor.py |
+| app/api/v1/requests/ | Antigravity | progress_handler.py |
+| app/api/v1/system/ | Antigravity | changelog_router.py |
+| tests/integration/ | Intégrateur | test_phase_04_3_e2e.py |
+
+### Gate PHASE-04.3 — 6/6 ✅
+- [x] SearchProvider interface créée
+- [x] AuditWriter + structlog
+- [x] PostgresConnector réel (structure) + migration 0002
+- [x] Providers Serper/Brave + Trafilatura
+- [x] Progress endpoint + changelog
+- [x] Tests E2E 169 passed, 0 skipped
+
+### Dettes reportées (PHASE-05)
+1. PostgresConnector reste stub partiel (pas de connexion réelle)
+2. AuditWriter en mémoire (persistance à venir)
+3. `readability_extractor.py` vide
+4. Pas de tests d'intégration avec vraie DB PostgreSQL
+5. Trafilatura non testée avec vraie lib (fallback regex testé)
+
+---
+
+## PHASE-05 — Knowledge Layer — 🚀 À LANCER
+
+Objectif : information units, evidence, pgvector, recherche hybride, mémoire, provenance.
+
+Référence : INIS_SPEC.md §11, §12, §16, §17.
