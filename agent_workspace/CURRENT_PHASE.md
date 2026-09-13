@@ -31,3 +31,15 @@ Date : 2026-09-13 — Commit : <sha final> — Tests : 154
 Objectif : information units, evidence, pgvector, recherche hybride, mémoire, provenance.
 
 Référence : INIS_SPEC.md §11, §12, §16, §17.
+## PHASE-04.2 — Corrections & Convergence — ✅ TERMINÉE
+Date : 2026-09-13 — Commit : <sha final> — Tests : 158
+
+### Corrections
+1. `Dataset.schema` → `dataset_schema` (fix warning Pydantic) — Codex
+2. `CSVConnector.inspect()` ignore lignes vides — Devin
+3. `app/domain/entities/search_result.py` créé — Codex
+4. Migration imports OpenCode → `base.SourceConnector` + `domain.SearchResult`
+
+### Dette restante (reportée PHASE-04.3)
+- `app/domain/interfaces/search_provider.py` vide → à créer
+- Stubs Serper/Brave à `score=0.0` → normalisation réelle à venir
