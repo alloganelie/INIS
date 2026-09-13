@@ -155,3 +155,42 @@ Codex a couvert `migrations/`, `app/connectors/database/`, `tests/integration/`
 3. AuditWriter en mémoire (persistance DB)
 4. HealthAggregator câblage lifecycle prod
 5. DeprecationWarning `testcontainers.postgres` → `testcontainers.community.postgres`
+## PHASE-05.5 — Nettoyage dettes techniques — ✅ TERMINÉE
+Date : 2026-09-13 — Commit : `<sha final>` — Tests : 243 passed, 0 skipped, 0 failed
+
+### Décision architecturale
+`SourceRepository` conservé dans `app/api/v1/sources/repository.py`.
+Placeholder `app/storage/repositories/source_repository.py` supprimé (règle 9).
+
+### 7 dettes résolues
+1. SourceRepository : placeholder supprimé, test E2E aligné
+2. Schéma §27 : migration `0005_create_remaining_core_tables.py` (11 tables : claims, conflicts, artifacts, artifact_versions, artifact_lineage, agent_messages, execution_checkpoints, budget_usage, progress, access_policies, security_classifications)
+3. AuditWriter : persistance DB (mode engine optionnel, rétrocompatibilité in-memory)
+4. HealthAggregator : factory `make_default_checks(engine, redis_client, broker)`
+5. `testcontainers.community.postgres` (au lieu de `testcontainers.postgres`)
+6. PostgresConnector : test mode connecté réel
+7. ReadabilityExtractor : test HTML riche
+
+### Gate PHASE-05.5
+- [x] Alembic upgrade + downgrade fonctionnels
+- [x] 0 skip, 0 warning, 0 failed
+- [x] 243 tests verts
+- [x] Exception multi-zone documentée
+
+### Exception documentée
+Codex a touché 6 zones (Devin × 3, Antigravity × 1, OpenCode × 2, Cursor × 1).
+
+---
+
+## PHASE-06 — Quality & Confidence — 🚀 À LANCER
+
+Objectif : contrôles qualité (§13), détection de contradictions (§14.4), modèle de confiance (§15).
+
+Zones cibles :
+- Codex : `app/domain/entities/conflict.py` + `app/quality/checks/`
+- Devin : `app/quality/conflict/` + `app/quality/score/`
+- OpenCode : `app/confidence/`
+- Antigravity : `app/api/v1/quality/` + `app/api/v1/confidence/`
+- Intégrateur : `tests/integration/test_phase_06_e2e.py`
+
+Référence spec : `INIS_SPEC.md` §13, §14.4, §15.
