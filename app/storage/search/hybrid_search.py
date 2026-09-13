@@ -55,19 +55,20 @@ class HybridSearch:
         vector_str = "[" + ",".join(map(str, query_vector)) + "]"
 
         async with engine.connect() as conn:
-            stmt = text("""WITH semantic AS (
-                    SELECT owner_id, 1 - (vector <=> :vector::vector) AS score
+            result = await conn.execute(
+                text("""WITH semantic AS (
+                    SELECT owner_id, 1 - (vector <=> CAST(:query_vector AS vector)) AS score
                     FROM embeddings
                     WHERE owner_type = 'information_unit'
-                    ORDER BY vector <=> :vector::vector
-                    LIMIT :limit_semantic
+                    ORDER BY vector <=> CAST(:query_vector AS vector)
+                    LIMIT :limit
                 ),
                 lexical AS (
                     SELECT id AS owner_id,
                            ts_rank(search_vector, plainto_tsquery(:query)) AS score
                     FROM information_units
                     WHERE search_vector @@ plainto_tsquery(:query)
-                    LIMIT :limit_lexical
+                    LIMIT :limit
                 )
                 SELECT owner_id,
                        COALESCE(semantic.score, 0) * 0.6 +
@@ -75,7 +76,8 @@ class HybridSearch:
                 FROM semantic
                 FULL OUTER JOIN lexical USING (owner_id)
                 ORDER BY final_score DESC
-                LIMIT :limit_final""")
-            result = await conn.execute(stmt, {"vector": vector_str, "limit_semantic": limit, "query": query, "limit_lexical": limit, "limit_final": limit})
+                LIMIT :limit"""),
+                {"query_vector": vector_str, "query": query, "limit": limit},
+            )
             rows = result.fetchall()
             return [{"owner_id": row[0], "final_score": float(row[1])} for row in rows]

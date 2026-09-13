@@ -50,7 +50,15 @@ class FullTextSearch:
             return []
 
         async with engine.connect() as conn:
-            stmt = text("SELECT id AS owner_id, ts_rank(search_vector, plainto_tsquery(:query)) AS score FROM information_units WHERE search_vector @@ plainto_tsquery(:query) ORDER BY score DESC LIMIT :limit")
-            result = await conn.execute(stmt, {"query": query, "limit": limit})
+            result = await conn.execute(
+                text(
+                "SELECT id AS owner_id, ts_rank(search_vector, plainto_tsquery(:query)) AS score "
+                "FROM information_units "
+                "WHERE search_vector @@ plainto_tsquery(:query) "
+                "ORDER BY score DESC "
+                "LIMIT :limit"
+                ),
+                {"query": query, "limit": limit},
+            )
             rows = result.fetchall()
             return [{"owner_id": row[0], "score": float(row[1])} for row in rows]

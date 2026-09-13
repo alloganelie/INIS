@@ -55,7 +55,19 @@ class VectorSearch:
         vector_str = "[" + ",".join(map(str, query_vector)) + "]"
 
         async with engine.connect() as conn:
-            stmt = text("SELECT owner_id, 1 - (vector <=> :vector::vector) AS score FROM embeddings WHERE owner_type = :owner_type ORDER BY vector <=> :vector::vector LIMIT :limit")
-            result = await conn.execute(stmt, {"vector": vector_str, "owner_type": owner_type, "limit": limit})
+            result = await conn.execute(
+                text(
+                "SELECT owner_id, 1 - (vector <=> CAST(:query_vector AS vector)) AS score "
+                "FROM embeddings "
+                "WHERE owner_type = :owner_type "
+                "ORDER BY vector <=> CAST(:query_vector AS vector) "
+                "LIMIT :limit"
+                ),
+                {
+                    "query_vector": vector_str,
+                    "owner_type": owner_type,
+                    "limit": limit,
+                },
+            )
             rows = result.fetchall()
             return [(row[0], float(row[1])) for row in rows]
