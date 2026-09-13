@@ -109,6 +109,22 @@ def make_broker_check(broker: BrokerLike) -> HealthCheck:
     return check_broker
 
 
+def make_default_checks(
+    engine: SqlEngine | None = None,
+    redis_client: RedisClient | None = None,
+    broker: BrokerLike | None = None,
+) -> list[tuple[str, HealthCheck]]:
+    """Build checks for the dependencies currently available at startup."""
+    checks: list[tuple[str, HealthCheck]] = []
+    if engine is not None:
+        checks.append((POSTGRES_CHECK, make_postgres_check(engine)))
+    if redis_client is not None:
+        checks.append((REDIS_CHECK, make_redis_check(redis_client)))
+    if broker is not None:
+        checks.append((BROKER_CHECK, make_broker_check(broker)))
+    return checks
+
+
 class HealthAggregator:
     """Aggregate injected subsystem checks into a global status.
 
@@ -142,14 +158,7 @@ class HealthAggregator:
         redis_client: RedisClient | None,
         broker: BrokerLike | None,
     ) -> dict[str, HealthCheck]:
-        defaults: dict[str, HealthCheck] = {}
-        if engine is not None:
-            defaults[POSTGRES_CHECK] = make_postgres_check(engine)
-        if redis_client is not None:
-            defaults[REDIS_CHECK] = make_redis_check(redis_client)
-        if broker is not None:
-            defaults[BROKER_CHECK] = make_broker_check(broker)
-        return defaults
+        return dict(make_default_checks(engine, redis_client, broker))
 
     def register(self, name: str, check: HealthCheck) -> None:
         """Register (or replace) a subsystem check."""

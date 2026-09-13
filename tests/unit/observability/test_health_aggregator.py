@@ -2,6 +2,7 @@
 
 from app.observability.health_aggregator import HealthAggregator
 from app.observability.health_aggregator import make_broker_check
+from app.observability.health_aggregator import make_default_checks
 from app.observability.health_aggregator import make_postgres_check
 from app.observability.health_aggregator import make_redis_check
 
@@ -63,6 +64,17 @@ class TestHealthAggregatorChecks:
         assert {s["subsystem"] for s in report["subsystems"]} == {"postgres", "redis", "broker"}
         assert all(s["status"] == "up" for s in report["subsystems"])
         assert all("latency_ms" in s for s in report["subsystems"])
+
+    def test_make_default_checks_registers_available_dependencies(self) -> None:
+        """The lifecycle factory exposes a postgres check when an engine exists."""
+        checks = make_default_checks(engine=_FakeEngine())  # type: ignore[arg-type]
+
+        assert checks
+        assert checks[0][0] == "postgres"
+
+    def test_make_default_checks_is_empty_without_dependencies(self) -> None:
+        """Degraded startup registers no unavailable infrastructure checks."""
+        assert make_default_checks() == []
 
     async def test_down_check_propagates(self) -> None:
         """One down subsystem drives the global status to down."""

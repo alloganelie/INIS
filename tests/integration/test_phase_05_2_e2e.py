@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import os
 
 import pytest
 
@@ -42,7 +43,7 @@ def _docker_available() -> bool:
     return True
 
 
-DOCKER_AVAILABLE = _docker_available()
+DOCKER_AVAILABLE = _docker_available() or bool(os.environ.get("DATABASE_URL"))
 
 needs_docker = pytest.mark.skipif(
     not DOCKER_AVAILABLE, reason="Docker/testcontainers unavailable"
@@ -61,6 +62,11 @@ def _async_url(sync_url: str) -> str:
 @pytest.fixture(scope="module")
 def pg_urls():
     """Start one postgres container; skip proprement si démarrage impossible."""
+    database_url = os.environ.get("DATABASE_URL")
+    if database_url:
+        yield database_url, database_url
+        return
+
     try:
         from testcontainers.community.postgres import PostgresContainer
     except ImportError:
@@ -222,15 +228,14 @@ async def test_health_ready_endpoint(pg_urls) -> None:
     assert router is not None
 
 
-@needs_docker
 async def test_source_repository_with_db(pg_urls) -> None:
     """SourceRepository avec vraie DB (skip si pas d'engine/repository)."""
     if not _has_symbol(
-        "app.storage.repositories.source_repository", "SourceRepository"
+        "app.api.v1.sources.repository", "SourceRepository"
     ):
         pytest.skip("symbol absent: SourceRepository")
     _, async_url = pg_urls
     await _require_engine(async_url)
-    from app.storage.repositories.source_repository import SourceRepository
+    from app.api.v1.sources.repository import SourceRepository
 
     assert SourceRepository is not None

@@ -4,11 +4,13 @@ from app.connectors.web.extractors.readability_extractor import ReadabilityExtra
 from app.connectors.web.extractors.trafilatura_extractor import TrafilaturaExtractor
 
 HTML = "<html><head><title>Test</title></head><body><p>Contenu</p></body></html>"
+RICH_HTML = """<html><head><title>Mon Titre</title></head>
+<body><article><h1>Mon Titre</h1><p>Contenu long...</p></article></body></html>"""
 URL = "https://example.com/article"
 
 
 class TestExtractors:
-    """4 tests covering real-HTML extraction and invalid input."""
+    """5 tests covering real-HTML extraction and invalid input."""
 
     async def test_trafilatura_extractor_with_real_html(self) -> None:
         """Trafilatura extracts title and text from a simple page."""
@@ -32,6 +34,14 @@ class TestExtractors:
         assert result["title"] == "Test"
         assert "Contenu" in result["text"]
         assert result["url"] == URL
+
+    async def test_readability_extractor_with_rich_html(self) -> None:
+        """Readability extracts article content without falling back to an error."""
+        result = await ReadabilityExtractor().extract(RICH_HTML, URL)
+
+        assert result["title"] == "Mon Titre"
+        assert "Contenu" in result["text"]
+        assert not result.get("error")
 
     async def test_readability_extractor_handles_invalid(self) -> None:
         """Empty HTML returns a dict with error instead of raising."""
