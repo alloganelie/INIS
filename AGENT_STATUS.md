@@ -14,3 +14,6 @@ to use the asyncpg driver under the same exception.
 Codex is authorized to resolve the assigned technical debt in Devin
 (`migrations/`, `app/storage/`, `app/governance/`), Antigravity (`app/api/`),
 Cursor (`tests/`), and OpenCode (`app/observability/`) zones for Lot A only.
+
+Lot B extends this authorization to the PostgreSQL and web connector tests and
+implementations, while retaining the same temporary cross-zone exception.

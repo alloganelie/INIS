@@ -31,7 +31,7 @@ def postgres_container():
         pytest.skip("Docker not available")
     
     try:
-        from testcontainers.postgres import PostgresContainer
+        from testcontainers.community.postgres import PostgresContainer
         
         container = PostgresContainer(
             "pgvector/pgvector:pg16",
@@ -98,6 +98,25 @@ async def test_postgres_real_core_tables(db_url, alembic_upgrade):
     candidates = await connector.discover(query)
     assert len(candidates) > 0
     assert any("agents" in c.metadata.get("table", "") for c in candidates)
+
+
+@pytest.mark.asyncio
+async def test_postgres_connector_connected_mode(db_url, alembic_upgrade):
+    """The connector discovers real tables and measures connected latency."""
+    from app.connectors.base import Query
+
+    connector = PostgresConnector(connection_string=db_url)
+    try:
+        candidates = await connector.discover(Query(query_string="agents"))
+        health = await connector.health_check()
+
+        assert any(candidate.metadata.get("table") == "agents" for candidate in candidates)
+        assert health.healthy is True
+        assert isinstance(health.latency_ms, float)
+        assert health.latency_ms > 0
+    finally:
+        if connector._engine is not None:
+            await connector._engine.dispose()
 
 
 @pytest.mark.asyncio

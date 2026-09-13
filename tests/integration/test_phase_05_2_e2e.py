@@ -43,7 +43,7 @@ def _docker_available() -> bool:
     return True
 
 
-DOCKER_AVAILABLE = _docker_available()
+DOCKER_AVAILABLE = _docker_available() or bool(os.environ.get("DATABASE_URL"))
 
 needs_docker = pytest.mark.skipif(
     not DOCKER_AVAILABLE, reason="Docker/testcontainers unavailable"
