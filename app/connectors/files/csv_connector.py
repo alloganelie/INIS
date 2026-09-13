@@ -81,7 +81,8 @@ class CSVConnector:
             lines = raw.data.split("\n")
             reader = csv.reader(lines)
             headers = next(reader, [])
-            record_count = sum(1 for _ in reader)
+            # Filter out blank lines (rows with no non-empty fields)
+            record_count = sum(1 for row in reader if any(field.strip() for field in row))
             return SourceMetadata(
                 source_id=raw.source_id,
                 size_bytes=len(raw.data.encode("utf-8")),
