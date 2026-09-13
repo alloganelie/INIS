@@ -1,0 +1,16 @@
+{
+  "current_version": "0.1.0",
+  "history": [
+    {
+      "version": "0.1.0",
+      "date": "2026-09-13",
+      "highlights": [
+        "PHASE-01: project bootstrap, FastAPI entrypoint, /health, /version",
+        "PHASE-02: domain model, entities, value objects, enums, InformationPackage",
+        "PHASE-03: messaging layer AMQP/MQTT transport per §4.4 and §5.2",
+        "PHASE-04 LOT-1: /v1/requests, /v1/agents, /v1/sources, /v1/information endpoints per §32",
+        "PHASE-04.3 LOT-1: /v1/requests/{id}/progress per §41.1, /v1/changelog per §41.15"
+      ]
+    }
+  ]
+}
