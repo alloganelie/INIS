@@ -72,16 +72,16 @@ def test_lineage_tracker_smoke() -> None:
 
 
 def test_vector_search_imports() -> None:
-    """Vector search imports per §16 (skip si absent)."""
-    module_name = "app.knowledge.search.vector_search"
+    """Vector search imports per §16 (Devin: storage search)."""
+    module_name = "app.storage.search.vector_search"
     module = _import_or_skip(module_name)
     search = _symbol_or_skip(module, module_name, "VectorSearch")
     assert search is not None
 
 
 def test_hybrid_search_imports() -> None:
-    """Hybrid search imports per §16.2 (skip si absent)."""
-    module_name = "app.knowledge.search.hybrid_search"
+    """Hybrid search imports per §16.2 (Devin: storage search)."""
+    module_name = "app.storage.search.hybrid_search"
     module = _import_or_skip(module_name)
     search = _symbol_or_skip(module, module_name, "HybridSearch")
     assert search is not None
@@ -143,6 +143,7 @@ def test_information_unit_provenance_invariant() -> None:
             confidence={},
             provenance={"source_id": "SRC_test"},
             versions=[],
+            data_stage="raw",
         )
     except Exception as exc:
         pytest.skip(f"InformationUnit schema not stabilized: {exc}")
