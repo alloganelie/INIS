@@ -2,6 +2,7 @@
 
 from typing import List, Tuple, Optional
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.storage.database.engine import create_engine
@@ -54,16 +55,19 @@ class VectorSearch:
         vector_str = "[" + ",".join(map(str, query_vector)) + "]"
 
         async with engine.connect() as conn:
-            # Use text() for the vector parameter to handle array literal
             result = await conn.execute(
-                "SELECT owner_id, 1 - (vector <=> $1::vector) AS score "
+                text(
+                "SELECT owner_id, 1 - (vector <=> CAST(:query_vector AS vector)) AS score "
                 "FROM embeddings "
-                "WHERE owner_type = $2 "
-                "ORDER BY vector <=> $1::vector "
-                "LIMIT $3",
-                vector_str,
-                owner_type,
-                limit,
+                "WHERE owner_type = :owner_type "
+                "ORDER BY vector <=> CAST(:query_vector AS vector) "
+                "LIMIT :limit"
+                ),
+                {
+                    "query_vector": vector_str,
+                    "owner_type": owner_type,
+                    "limit": limit,
+                },
             )
             rows = result.fetchall()
             return [(row[0], float(row[1])) for row in rows]
