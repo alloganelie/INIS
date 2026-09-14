@@ -8,11 +8,13 @@ from app.domain.entities.evidence import Evidence
 from app.domain.entities.information_package import InformationPackage
 from app.domain.entities.information_unit import InformationUnit
 from app.domain.entities.search_result import SearchResult
+from app.domain.entities.security_classification import SecurityClassification
 from app.domain.entities.source import Source
 from app.domain.entities.source_candidate import SourceCandidate
 
 __all__ = [
     "Claim",
+    "AccessPolicy",
     "Conflict",
     "Dataset",
     "Document",
@@ -20,6 +22,8 @@ __all__ = [
     "InformationPackage",
     "InformationUnit",
     "SearchResult",
+    "SecurityClassification",
     "Source",
     "SourceCandidate",
 ]
+from app.domain.entities.access_policy import AccessPolicy
