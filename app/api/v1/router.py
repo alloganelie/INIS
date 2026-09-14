@@ -5,9 +5,11 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1.agents.router import router as agents_router
+from app.api.v1.confidence.router import router as confidence_router
 from app.api.v1.conflicts.router import router as conflicts_router
 from app.api.v1.evidence.router import router as evidence_router
 from app.api.v1.information.router import router as information_router
+from app.api.v1.quality.router import router as quality_router
 from app.api.v1.requests.progress_handler import router as progress_router
 from app.api.v1.requests.router import router as requests_router
 from app.api.v1.sources.router import router as sources_router
@@ -31,8 +33,11 @@ router.include_router(sources_router)
 router.include_router(information_router)
 router.include_router(evidence_router)
 router.include_router(conflicts_router)
+router.include_router(quality_router)
+router.include_router(confidence_router)
 router.include_router(changelog_router)
 router.include_router(metrics_router)
 router.include_router(health_router)
+
 
 
