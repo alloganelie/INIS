@@ -40,6 +40,17 @@ class PermissionChecker:
 
     def _get_deny_reason(self, subject: dict[str, Any], resource: dict[str, Any],
                         action: str, role: str | None = None) -> str:
+        """Generate reason for denial.
+
+        Args:
+            subject: Subject attributes
+            resource: Resource attributes
+            action: Action being performed
+            role: Optional role for RBAC check
+
+        Returns:
+            Reason string for denial
+        """
         """Generate reason for denial."""
         classification = resource.get("classification", "public")
 
