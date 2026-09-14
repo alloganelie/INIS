@@ -35,6 +35,7 @@ from app.quality.checks.anomaly_check import AnomalyCheck
 from app.quality.checks.completeness_check import CompletenessCheck
 from app.quality.checks.consistency_check import ConsistencyCheck
 from app.quality.checks.cross_source_consistency_check import CrossSourceConsistencyCheck
+from app.quality.checks.duplicates_check import DuplicatesCheck
 from app.quality.checks.freshness_check import FreshnessCheck
 from app.quality.checks.provenance_check import ProvenanceCheck
 from app.quality.checks.temporal_consistency_check import TemporalConsistencyCheck
@@ -47,6 +48,7 @@ __all__ = [
     "CompletenessCheck",
     "ConsistencyCheck",
     "CrossSourceConsistencyCheck",
+    "DuplicatesCheck",
     "FreshnessCheck",
     "ProvenanceCheck",
     "QualityCheck",
