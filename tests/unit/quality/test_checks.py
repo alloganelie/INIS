@@ -3,6 +3,7 @@
 from app.quality.checks import CompletenessCheck
 from app.quality.checks import ConsistencyCheck
 from app.quality.checks import CrossSourceConsistencyCheck
+from app.quality.checks import DuplicatesCheck
 from app.quality.checks import ProvenanceCheck
 from app.quality.checks import TypeConformityCheck
 
@@ -45,3 +46,14 @@ async def test_cross_source_consistency_detects_conflicts() -> None:
 
     assert result["score"] == 0.0
     assert result["issues"] == ["sources report conflicting values"]
+
+
+async def test_duplicates_check_basic() -> None:
+    """Exact repeated dataset records lower the duplicates score."""
+    result = await DuplicatesCheck().run(
+        {"records": [{"id": "INF_1", "value": 1}, {"id": "INF_1", "value": 1}, {"id": "INF_2", "value": 2}]}
+    )
+
+    assert result["score"] == 2 / 3
+    assert result["details"]["duplicate_count"] == 1
+    assert result["issues"] == ["duplicate record at index 1"]
