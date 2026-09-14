@@ -41,9 +41,13 @@ def test_refresh() -> None:
 
 
 def test_me_without_token() -> None:
-    """GET /v1/auth/me without token returns 401."""
-    res = client.get("/v1/auth/me")
-    assert res.status_code == 401
+    """GET /v1/auth/me without token returns 401 in strict auth mode."""
+    try:
+        set_strict_auth_mode(True)
+        res = client.get("/v1/auth/me")
+        assert res.status_code == 401
+    finally:
+        set_strict_auth_mode(None)
 
 
 def test_me_with_token() -> None:
@@ -52,18 +56,26 @@ def test_me_with_token() -> None:
     assert login_res.status_code == 200
     access_token = login_res.json()["access_token"]
 
-    res = client.get("/v1/auth/me", headers={"Authorization": f"Bearer {access_token}"})
-    assert res.status_code == 200
-    data = res.json()
-    assert data["actor_id"] == "ACT_01ARZ3NDEKTSV4RRFFQ69G5F01"
-    assert "admin" in data["scopes"]
-    assert "read" in data["scopes"]
+    try:
+        set_strict_auth_mode(True)
+        res = client.get("/v1/auth/me", headers={"Authorization": f"Bearer {access_token}"})
+        assert res.status_code == 200
+        data = res.json()
+        assert data["actor_id"] == "ACT_01ARZ3NDEKTSV4RRFFQ69G5F01"
+        assert "admin" in data["scopes"]
+        assert "read" in data["scopes"]
+    finally:
+        set_strict_auth_mode(None)
 
 
 def test_me_with_invalid_token() -> None:
     """GET /v1/auth/me with an invalid token returns 401."""
-    res = client.get("/v1/auth/me", headers={"Authorization": "Bearer invalid.token.payload"})
-    assert res.status_code == 401
+    try:
+        set_strict_auth_mode(True)
+        res = client.get("/v1/auth/me", headers={"Authorization": "Bearer invalid.token.payload"})
+        assert res.status_code == 401
+    finally:
+        set_strict_auth_mode(None)
 
 
 def test_scope_insufficient_returns_403() -> None:
@@ -72,30 +84,42 @@ def test_scope_insufficient_returns_403() -> None:
     assert login_res.status_code == 200
     token = login_res.json()["access_token"]
 
-    res = client.get(
-        "/v1/auth/me",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "X-Required-Scope": "admin",
-        },
-    )
-    assert res.status_code == 403
-    assert "detail" in res.json()
+    try:
+        set_strict_auth_mode(True)
+        res = client.get(
+            "/v1/auth/me",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-Required-Scope": "admin",
+            },
+        )
+        assert res.status_code == 403
+        assert "detail" in res.json()
+    finally:
+        set_strict_auth_mode(None)
 
 
 def test_exempt_endpoints_accessible_without_token() -> None:
-    """Public endpoints /health, /version, /v1/docs are accessible without credentials."""
-    assert client.get("/health").status_code == 200
-    assert client.get("/version").status_code == 200
-    assert client.get("/v1/openapi.json").status_code == 200
+    """Public endpoints /health, /version, /v1/docs are accessible without credentials even in strict mode."""
+    try:
+        set_strict_auth_mode(True)
+        assert client.get("/health").status_code == 200
+        assert client.get("/version").status_code == 200
+        assert client.get("/v1/openapi.json").status_code == 200
+    finally:
+        set_strict_auth_mode(None)
 
 
 def test_api_key_authentication() -> None:
     """X-API-Key header authenticates and grants access to /v1/auth/me."""
-    res = client.get("/v1/auth/me", headers={"X-API-Key": "inis-admin-key"})
-    assert res.status_code == 200
-    data = res.json()
-    assert data["actor_id"] == "api_key_actor"
+    try:
+        set_strict_auth_mode(True)
+        res = client.get("/v1/auth/me", headers={"X-API-Key": "inis-admin-key"})
+        assert res.status_code == 200
+        data = res.json()
+        assert data["actor_id"] == "api_key_actor"
+    finally:
+        set_strict_auth_mode(None)
 
 
 def test_app_security_authn_validator_integration() -> None:
@@ -107,6 +131,7 @@ def test_app_security_authn_validator_integration() -> None:
             return None
 
     try:
+        set_strict_auth_mode(True)
         set_security_validator(MockValidator())
         res = client.get("/v1/auth/me", headers={"Authorization": "Bearer mock_valid"})
         assert res.status_code == 200
@@ -117,3 +142,5 @@ def test_app_security_authn_validator_integration() -> None:
         assert res_ko.status_code == 401
     finally:
         set_security_validator(None)
+        set_strict_auth_mode(None)
+

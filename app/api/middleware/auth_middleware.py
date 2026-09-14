@@ -37,6 +37,8 @@ EXEMPT_PREFIXES = (
     "/v1/auth/refresh",
 )
 
+AUTH_ENABLED = os.getenv("INIS_AUTH_ENABLED", "false").lower() in ("1", "true", "yes")
+
 _SECURITY_VALIDATOR_OVERRIDE: Any | None = None
 _STRICT_MODE_OVERRIDE: bool | None = None
 
@@ -48,9 +50,16 @@ def set_security_validator(validator: Any | None) -> None:
 
 
 def set_strict_auth_mode(enabled: bool | None) -> None:
-    """Override whether unauthenticated requests to general routes are blocked."""
+    """Override whether auth middleware is active (useful for testing)."""
     global _STRICT_MODE_OVERRIDE
     _STRICT_MODE_OVERRIDE = enabled
+
+
+def is_auth_enabled() -> bool:
+    """Return True if auth middleware is active via env var or test override."""
+    if _STRICT_MODE_OVERRIDE is not None:
+        return _STRICT_MODE_OVERRIDE
+    return os.getenv("INIS_AUTH_ENABLED", "false").lower() in ("1", "true", "yes")
 
 
 def base64url_encode(data: bytes) -> str:
@@ -126,6 +135,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
     """FastAPI / Starlette middleware handling JWT and API key authentication."""
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        if not is_auth_enabled():
+            request.state.actor_id = None
+            request.state.scopes = []
+            return await call_next(request)
+
         # Initialize default state
         request.state.actor_id = None
         request.state.scopes = []
@@ -152,11 +166,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         # 3. Handle credentials if provided
         if token is not None:
-            # Validate via app.security.authn if present
-            validator = _get_security_validator()
             payload: dict[str, Any] | None = None
-
-            if validator is not None:
+            if _SECURITY_VALIDATOR_OVERRIDE is not None:
+                validator = _SECURITY_VALIDATOR_OVERRIDE
                 try:
                     if hasattr(validator, "validate_jwt"):
                         payload = validator.validate_jwt(token)
@@ -167,8 +179,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 except Exception:
                     payload = None
             else:
-                # Built-in fallback validation
-                payload = decode_jwt_token(token)
+                try:
+                    from app.security.authn.jwt_validator import JWTValidator
+                    payload = JWTValidator(secret=JWT_SECRET).validate(token)
+                except Exception:
+                    payload = decode_jwt_token(token)
 
             if payload is None:
                 return JSONResponse(
@@ -183,12 +198,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
             request.state.scopes = scopes
 
         elif api_key_header is not None:
-            validator = _get_security_validator()
             valid = False
             actor_id = "api_key_actor"
-            scopes = ["read", "write"]
+            scopes = ["admin", "read", "write"]
 
-            if validator is not None:
+            if _SECURITY_VALIDATOR_OVERRIDE is not None:
+                validator = _SECURITY_VALIDATOR_OVERRIDE
                 try:
                     if hasattr(validator, "validate_api_key"):
                         valid = bool(validator.validate_api_key(api_key_header))
@@ -197,13 +212,28 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 except Exception:
                     valid = False
             else:
-                # Built-in API key validation
-                valid = bool(
-                    api_key_header == DEFAULT_API_KEY
-                    or api_key_header.startswith("inis_")
-                )
+                try:
+                    from app.security.authn.api_key_validator import APIKeyValidator
+                    keys = {"admin": DEFAULT_API_KEY}
+                    if api_key_header.startswith("inis_"):
+                        keys[api_key_header] = api_key_header
+                    key_id = APIKeyValidator(valid_keys=keys).validate(api_key_header)
+                    valid = True
+                    actor_id = "api_key_actor"
+                except Exception:
+                    valid = bool(
+                        api_key_header == DEFAULT_API_KEY
+                        or api_key_header.startswith("inis_")
+                    )
 
             if not valid:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Invalid API key"},
+                )
+
+            request.state.actor_id = actor_id
+            request.state.scopes = scopes
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "Invalid API key"},
