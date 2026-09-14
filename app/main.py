@@ -39,6 +39,13 @@ app = FastAPI(
     openapi_url="/v1/openapi.json",
 )
 
+try:
+    from app.api.middleware.auth_middleware import AuthMiddleware
+
+    app.add_middleware(AuthMiddleware)
+except ImportError:
+    pass
+
 
 @app.get("/health")
 def get_health() -> dict[str, str]:
