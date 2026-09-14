@@ -83,47 +83,68 @@ def test_quality_checks_imports() -> None:
 
 
 def test_conflict_detector_smoke() -> None:
-    """ConflictDetector imports per §14.4 (skip si absent)."""
-    module_name = "app.quality.conflict.conflict_detector"
-    module = _import_or_skip(module_name)
-    detector = _symbol_or_skip(module, module_name, "ConflictDetector")
-    assert isinstance(detector, type), "ConflictDetector is not a class"
+    """detect_conflicts imports per §14.4 (skip si absent)."""
+    try:
+        from app.quality.conflict.conflict_detector import detect_conflicts
+    except ImportError:
+        pytest.skip("symbol absent: detect_conflicts")
+    assert callable(detect_conflicts)
 
 
 def test_quality_scorer_smoke() -> None:
-    """QualityScorer imports per §13.3 (skip si absent)."""
-    module_name = "app.quality.score.quality_scorer"
-    module = _import_or_skip(module_name)
-    scorer = _symbol_or_skip(module, module_name, "QualityScorer")
-    assert isinstance(scorer, type), "QualityScorer is not a class"
+    """score imports per §13.3 (skip si absent)."""
+    try:
+        from app.quality.score.quality_scorer import score
+    except ImportError:
+        pytest.skip("symbol absent: score in quality_scorer")
+    assert callable(score)
 
 
 def test_confidence_scorer_smoke() -> None:
-    """ConfidenceScorer imports per §15.2 (skip si absent)."""
-    module_name = "app.confidence.confidence_scorer"
-    module = _import_or_skip(module_name)
-    scorer = _symbol_or_skip(module, module_name, "ConfidenceScorer")
-    assert isinstance(scorer, type), "ConfidenceScorer is not a class"
-
-
-EXPECTED_DIMENSIONS: list[tuple[str, str]] = [
-    ("app.confidence.dimensions.source_reliability", "SourceReliability"),
-    ("app.confidence.dimensions.source_freshness", "SourceFreshness"),
-    ("app.confidence.dimensions.extraction_confidence", "ExtractionConfidence"),
-    ("app.confidence.dimensions.data_quality_signal", "DataQualitySignal"),
-    ("app.confidence.dimensions.evidence_strength", "EvidenceStrength"),
-    ("app.confidence.dimensions.cross_source_agreement", "CrossSourceAgreement"),
-    (
-        "app.confidence.dimensions.methodological_consistency",
-        "MethodologicalConsistency",
-    ),
-]
+    """score imports per §15.2 (skip si absent)."""
+    try:
+        from app.confidence.confidence_scorer import score
+    except ImportError:
+        pytest.skip("symbol absent: score in confidence_scorer")
+    assert callable(score)
 
 
 def test_confidence_dimensions_imports() -> None:
-    """7 dimensions de confiance per §15.1 (skip si absentes)."""
-    assert len(EXPECTED_DIMENSIONS) == 7
-    _require_symbols(EXPECTED_DIMENSIONS)
+    """7 fonctions compute per §15.1 (skip si absentes)."""
+    try:
+        from app.confidence.dimensions.source_reliability import (
+            compute as source_reliability_compute,
+        )
+        from app.confidence.dimensions.source_freshness import (
+            compute as source_freshness_compute,
+        )
+        from app.confidence.dimensions.extraction_confidence import (
+            compute as extraction_compute,
+        )
+        from app.confidence.dimensions.data_quality_signal import (
+            compute as data_quality_compute,
+        )
+        from app.confidence.dimensions.evidence_strength import (
+            compute as evidence_compute,
+        )
+        from app.confidence.dimensions.cross_source_agreement import (
+            compute as cross_source_compute,
+        )
+        from app.confidence.dimensions.methodological_consistency import (
+            compute as methodology_compute,
+        )
+    except ImportError as exc:
+        pytest.skip(f"compute absent: {exc}")
+    for compute_fn in (
+        source_reliability_compute,
+        source_freshness_compute,
+        extraction_compute,
+        data_quality_compute,
+        evidence_compute,
+        cross_source_compute,
+        methodology_compute,
+    ):
+        assert callable(compute_fn)
 
 
 def test_quality_endpoints_imports() -> None:
