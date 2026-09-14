@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from app.quality.conflict.conflict_types import Conflict
+from app.domain.entities.conflict import Conflict
 
 
 async def resolve(conflict: Conflict, evidence: list[dict[str, Any]]) -> dict[str, Any]:

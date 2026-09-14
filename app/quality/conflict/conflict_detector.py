@@ -1,11 +1,11 @@
 """Conflict detection algorithm per INIS §14.4."""
 
-from datetime import UTC, datetime
 from itertools import combinations
 
+from app.domain.entities.conflict import Conflict
 from app.domain.entities.information_unit import InformationUnit
+from app.domain.value_objects.ulid import ULID
 from app.quality.conflict.conflict_classifier import classify_difference
-from app.quality.conflict.conflict_types import Conflict
 from app.quality.conflict.conflict_severity import assess_severity
 
 
@@ -67,7 +67,7 @@ async def detect_conflicts(units: list[InformationUnit]) -> list[Conflict]:
                 severity = assess_severity(a, b)
 
                 conflict = Conflict(
-                    conflict_id=f"CONFLICT_{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}",
+                    conflict_id=ULID.new("CONFLICT_"),
                     information_a=a.information_id,
                     information_b=b.information_id,
                     difference_type=difference_type,

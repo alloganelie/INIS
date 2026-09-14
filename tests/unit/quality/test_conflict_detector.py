@@ -2,9 +2,10 @@
 
 import pytest
 
+from app.domain.entities.conflict import Conflict
 from app.domain.entities.information_unit import InformationUnit
+from app.domain.value_objects.ulid import ULID
 from app.quality.conflict import (
-    Conflict,
     assess_severity,
     classify_difference,
     detect_conflicts,
@@ -16,12 +17,12 @@ def sample_units():
     """Create sample information units for testing."""
     return [
         InformationUnit(
-            information_id="INF_001",
+            information_id=ULID.new("INF_"),
             type="text",
             content={"subject": "temperature", "predicate": "value", "value": 25.0},
             raw_reference={},
-            source_id="SRC_001",
-            document_id="DOC_001",
+            source_id=ULID.new("SRC_"),
+            document_id=ULID.new("DOC_"),
             dataset_id=None,
             location={},
             context={},
@@ -36,12 +37,12 @@ def sample_units():
             data_stage="raw",
         ),
         InformationUnit(
-            information_id="INF_002",
+            information_id=ULID.new("INF_"),
             type="text",
             content={"subject": "temperature", "predicate": "value", "value": 27.0},
             raw_reference={},
-            source_id="SRC_002",
-            document_id="DOC_002",
+            source_id=ULID.new("SRC_"),
+            document_id=ULID.new("DOC_"),
             dataset_id=None,
             location={},
             context={},
@@ -56,12 +57,12 @@ def sample_units():
             data_stage="raw",
         ),
         InformationUnit(
-            information_id="INF_003",
+            information_id=ULID.new("INF_"),
             type="text",
             content={"subject": "pressure", "predicate": "value", "value": 1013.0},
             raw_reference={},
-            source_id="SRC_001",
-            document_id="DOC_001",
+            source_id=ULID.new("SRC_"),
+            document_id=ULID.new("DOC_"),
             dataset_id=None,
             location={},
             context={},
@@ -84,8 +85,8 @@ async def test_detect_conflicts_with_differing_values(sample_units):
     conflicts = await detect_conflicts(sample_units[:2])
 
     assert len(conflicts) == 1
-    assert conflicts[0].information_a == "INF_001"
-    assert conflicts[0].information_b == "INF_002"
+    assert conflicts[0].information_a == sample_units[0].information_id
+    assert conflicts[0].information_b == sample_units[1].information_id
     assert conflicts[0].difference_type == "value"
     assert conflicts[0].resolution_status == "open"
 
@@ -103,12 +104,12 @@ async def test_detect_conflicts_multiple_groups():
     """Test conflict detection across multiple subject-predicate groups."""
     units = [
         InformationUnit(
-            information_id="INF_001",
+            information_id=ULID.new("INF_"),
             type="text",
             content={"subject": "temp", "predicate": "value", "value": 25.0},
             raw_reference={},
-            source_id="SRC_001",
-            document_id="DOC_001",
+            source_id=ULID.new("SRC_"),
+            document_id=ULID.new("DOC_"),
             dataset_id=None,
             location={},
             context={},
@@ -123,12 +124,12 @@ async def test_detect_conflicts_multiple_groups():
             data_stage="raw",
         ),
         InformationUnit(
-            information_id="INF_002",
+            information_id=ULID.new("INF_"),
             type="text",
             content={"subject": "temp", "predicate": "value", "value": 27.0},
             raw_reference={},
-            source_id="SRC_002",
-            document_id="DOC_002",
+            source_id=ULID.new("SRC_"),
+            document_id=ULID.new("DOC_"),
             dataset_id=None,
             location={},
             context={},
@@ -143,12 +144,12 @@ async def test_detect_conflicts_multiple_groups():
             data_stage="raw",
         ),
         InformationUnit(
-            information_id="INF_003",
+            information_id=ULID.new("INF_"),
             type="text",
             content={"subject": "pressure", "predicate": "value", "value": 1013.0},
             raw_reference={},
-            source_id="SRC_001",
-            document_id="DOC_001",
+            source_id=ULID.new("SRC_"),
+            document_id=ULID.new("DOC_"),
             dataset_id=None,
             location={},
             context={},
@@ -163,12 +164,12 @@ async def test_detect_conflicts_multiple_groups():
             data_stage="raw",
         ),
         InformationUnit(
-            information_id="INF_004",
+            information_id=ULID.new("INF_"),
             type="text",
             content={"subject": "pressure", "predicate": "value", "value": 1015.0},
             raw_reference={},
-            source_id="SRC_002",
-            document_id="DOC_002",
+            source_id=ULID.new("SRC_"),
+            document_id=ULID.new("DOC_"),
             dataset_id=None,
             location={},
             context={},
@@ -192,12 +193,12 @@ async def test_detect_conflicts_multiple_groups():
 def test_classify_difference_date():
     """Test classification of date differences."""
     unit_a = InformationUnit(
-        information_id="INF_001",
+        information_id=ULID.new("INF_"),
         type="text",
         content={"subject": "temp", "predicate": "value", "value": 25.0},
         raw_reference={},
-        source_id="SRC_001",
-        document_id="DOC_001",
+        source_id=ULID.new("SRC_"),
+        document_id=ULID.new("DOC_"),
         dataset_id=None,
         location={},
         context={},
@@ -212,12 +213,12 @@ def test_classify_difference_date():
         data_stage="raw",
     )
     unit_b = InformationUnit(
-        information_id="INF_002",
+        information_id=ULID.new("INF_"),
         type="text",
         content={"subject": "temp", "predicate": "value", "value": 25.0},
         raw_reference={},
-        source_id="SRC_002",
-        document_id="DOC_002",
+        source_id=ULID.new("SRC_"),
+        document_id=ULID.new("DOC_"),
         dataset_id=None,
         location={},
         context={},
@@ -239,12 +240,12 @@ def test_classify_difference_date():
 def test_classify_difference_definition():
     """Test classification of definition differences."""
     unit_a = InformationUnit(
-        information_id="INF_001",
+        information_id=ULID.new("INF_"),
         type="text",
         content={"subject": "temp", "predicate": "value", "value": 25.0},
         raw_reference={},
-        source_id="SRC_001",
-        document_id="DOC_001",
+        source_id=ULID.new("SRC_"),
+        document_id=ULID.new("DOC_"),
         dataset_id=None,
         location={},
         context={"definition": "Celsius"},
@@ -259,12 +260,12 @@ def test_classify_difference_definition():
         data_stage="raw",
     )
     unit_b = InformationUnit(
-        information_id="INF_002",
+        information_id=ULID.new("INF_"),
         type="text",
         content={"subject": "temp", "predicate": "value", "value": 25.0},
         raw_reference={},
-        source_id="SRC_002",
-        document_id="DOC_002",
+        source_id=ULID.new("SRC_"),
+        document_id=ULID.new("DOC_"),
         dataset_id=None,
         location={},
         context={"definition": "Fahrenheit"},
@@ -286,12 +287,12 @@ def test_classify_difference_definition():
 def test_assess_severity_low():
     """Test severity assessment for low quality/confidence."""
     unit_a = InformationUnit(
-        information_id="INF_001",
+        information_id=ULID.new("INF_"),
         type="text",
         content={"subject": "temp", "predicate": "value", "value": 25.0},
         raw_reference={},
-        source_id="SRC_001",
-        document_id="DOC_001",
+        source_id=ULID.new("SRC_"),
+        document_id=ULID.new("DOC_"),
         dataset_id=None,
         location={},
         context={},
@@ -306,12 +307,12 @@ def test_assess_severity_low():
         data_stage="raw",
     )
     unit_b = InformationUnit(
-        information_id="INF_002",
+        information_id=ULID.new("INF_"),
         type="text",
         content={"subject": "temp", "predicate": "value", "value": 27.0},
         raw_reference={},
-        source_id="SRC_002",
-        document_id="DOC_002",
+        source_id=ULID.new("SRC_"),
+        document_id=ULID.new("DOC_"),
         dataset_id=None,
         location={},
         context={},
@@ -333,12 +334,12 @@ def test_assess_severity_low():
 def test_assess_severity_high():
     """Test severity assessment for high quality/confidence."""
     unit_a = InformationUnit(
-        information_id="INF_001",
+        information_id=ULID.new("INF_"),
         type="text",
         content={"subject": "temp", "predicate": "value", "value": 25.0},
         raw_reference={},
-        source_id="SRC_001",
-        document_id="DOC_001",
+        source_id=ULID.new("SRC_"),
+        document_id=ULID.new("DOC_"),
         dataset_id=None,
         location={},
         context={},
@@ -353,12 +354,12 @@ def test_assess_severity_high():
         data_stage="raw",
     )
     unit_b = InformationUnit(
-        information_id="INF_002",
+        information_id=ULID.new("INF_"),
         type="text",
         content={"subject": "temp", "predicate": "value", "value": 27.0},
         raw_reference={},
-        source_id="SRC_002",
-        document_id="DOC_002",
+        source_id=ULID.new("SRC_"),
+        document_id=ULID.new("DOC_"),
         dataset_id=None,
         location={},
         context={},
