@@ -194,3 +194,36 @@ Zones cibles :
 - Intégrateur : `tests/integration/test_phase_06_e2e.py`
 
 Référence spec : `INIS_SPEC.md` §13, §14.4, §15.
+## PHASE-06 — Quality & Confidence — ✅ TERMINÉE
+Date : 2026-09-14 — Commit : <sha final> — Tests : 299 passed, 0 skipped
+
+### Zones couvertes
+| Zone | Agent | Fichiers clés |
+|---|---|---|
+| app/domain/entities/ | Codex | conflict.py |
+| app/quality/checks/ | Codex | 11 checks (dont duplicates) |
+| app/quality/conflict/ | Devin | detector, classifier, severity, resolver |
+| app/quality/score/ | Devin | quality_scorer, quality_reporter |
+| app/confidence/ | OpenCode (exception) | 7 dimensions + scorer + explainer |
+| app/api/v1/quality/ + confidence/ | Antigravity | 7 endpoints |
+| tests/integration/ | Intégrateur | test_phase_06_e2e.py |
+
+### Gate PHASE-06
+- [x] Conflict entity (§14.3)
+- [x] 11 quality checks (§13.2)
+- [x] Détection de contradictions (§14.4)
+- [x] Score de qualité §13.3 (weighted_mean)
+- [x] Modèle de confiance §15 (7 dimensions)
+- [x] Endpoints /v1/quality + /v1/confidence
+- [x] 299 tests, 0 failed, 0 skipped
+
+### Exception documentée
+OpenCode a couvert `app/confidence/` (zone Codex) sous accord explicite.
+
+---
+
+## PHASE-07 — Security — 🚀 À LANCER
+
+Objectif : authentification (§19.2), autorisation RBAC+ABAC (§19.3), PII (§19.4), audit renforcé.
+
+Référence : `INIS_SPEC.md` §19, §20, §41.9.
