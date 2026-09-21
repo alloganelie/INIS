@@ -74,7 +74,7 @@ def test_access_policy_entity_imports() -> None:
 def test_security_classification_imports() -> None:
     """Classification imports per §19.3/§19.4 (skip si absent)."""
     _require_any_symbol(
-        "app.domain.entities.classification",
+        "app.domain.entities.security_classification",
         ["SecurityClassification", "Classification"],
     )
 
@@ -83,7 +83,7 @@ def test_jwt_validator_imports() -> None:
     """JWT validator imports per §19.2 (skip si absent)."""
     _require_any_symbol(
         "app.security.authn.jwt_validator",
-        ["JwtValidator", "validate_jwt", "decode_token"],
+        ["JWTValidator", "ValidationError"],
     )
 
 
@@ -135,12 +135,20 @@ def _auth_client():
     import httpx
     from fastapi import FastAPI
 
+    from app.api.middleware.auth_middleware import AuthMiddleware
+
     module = _import_or_skip("app.api.v1.auth")
     router = _symbol_or_skip(module, "app.api.v1.auth", "router")
     app = FastAPI()
-    app.include_router(router)
+    app.add_middleware(AuthMiddleware)
+    # Le router porte deja le prefixe interne "/auth" ; le monter sous
+    # "/v1" reproduit app.main (routes finales /v1/auth/*).
+    app.include_router(router, prefix="/v1")
     transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://test")
+
+
+_VALID_LOGIN = {"username": "admin", "password": "adminpassword"}
 
 
 async def test_auth_login_smoke() -> None:
@@ -148,10 +156,9 @@ async def test_auth_login_smoke() -> None:
     if not _has_symbol("app.api.v1.auth", "router"):
         pytest.skip("symbol absent: router in app.api.v1.auth")
     async with _auth_client() as client:
-        response = await client.post("/v1/auth/login", json={})
-    if response.status_code != 200:
-        pytest.skip(f"login injoignable en l'état (status={response.status_code})")
-    assert response.status_code == 200
+        response = await client.post("/v1/auth/login", json=_VALID_LOGIN)
+    assert response.status_code == 200, response.text
+    assert response.json().get("access_token")
 
 
 async def test_auth_me_requires_token() -> None:
@@ -160,37 +167,39 @@ async def test_auth_me_requires_token() -> None:
         pytest.skip("symbol absent: router in app.api.v1.auth")
     async with _auth_client() as client:
         response = await client.get("/v1/auth/me")
-    if response.status_code != 401:
-        pytest.skip(f"comportement /me inattendu sans token (status={response.status_code})")
-    assert response.status_code == 401
+    assert response.status_code == 401, response.text
 
 
 async def test_auth_me_with_token() -> None:
     """Login puis GET /v1/auth/me → 200 (skip si login/token absent)."""
+    from app.api.middleware.auth_middleware import set_strict_auth_mode
+
     if not _has_symbol("app.api.v1.auth", "router"):
         pytest.skip("symbol absent: router in app.api.v1.auth")
-    async with _auth_client() as client:
-        login = await client.post("/v1/auth/login", json={})
-        if login.status_code != 200:
-            pytest.skip(f"login injoignable en l'état (status={login.status_code})")
-        try:
-            payload = login.json()
-        except ValueError:
-            pytest.skip("réponse login non-JSON")
-        token = None
-        if isinstance(payload, dict):
-            for key in ("access_token", "token", "id_token"):
-                if payload.get(key):
-                    token = payload[key]
-                    break
-        if not token:
-            pytest.skip("aucun token dans la réponse login")
-        response = await client.get(
-            "/v1/auth/me", headers={"Authorization": f"Bearer {token}"}
-        )
-    if response.status_code != 200:
-        pytest.skip(f"comportement /me inattendu avec token (status={response.status_code})")
-    assert response.status_code == 200
+    # Le middleware est opt-in : l'activer pour que le token soit injecte
+    # dans request.state (sinon /me repond 401 meme avec un token valide).
+    set_strict_auth_mode(True)
+    try:
+        async with _auth_client() as client:
+            login = await client.post("/v1/auth/login", json=_VALID_LOGIN)
+            assert login.status_code == 200, login.text
+            try:
+                payload = login.json()
+            except ValueError:
+                pytest.fail("réponse login non-JSON")
+            token = None
+            if isinstance(payload, dict):
+                for key in ("access_token", "token", "id_token"):
+                    if payload.get(key):
+                        token = payload[key]
+                        break
+            assert token, "aucun token dans la réponse login"
+            response = await client.get(
+                "/v1/auth/me", headers={"Authorization": f"Bearer {token}"}
+            )
+    finally:
+        set_strict_auth_mode(None)
+    assert response.status_code == 200, response.text
 
 
 def _iter_route_paths(router, prefix=""):
@@ -201,9 +210,10 @@ def _iter_route_paths(router, prefix=""):
             yield prefix + path, set(getattr(route, "methods", set()) or set())
         sub = getattr(route, "original_router", None)
         if sub is not None:
-            yield from _iter_route_paths(
-                sub, prefix + (getattr(sub, "prefix", "") or "")
-            )
+            # Les routes du sous-router incluent deja son prefixe interne
+            # (ex. "/sources") : ne pas le re-ajouter pour eviter
+            # "/v1/sources/sources". On propage uniquement le prefixe externe.
+            yield from _iter_route_paths(sub, prefix)
 
 
 async def test_middleware_protects_endpoint() -> None:
@@ -211,9 +221,11 @@ async def test_middleware_protects_endpoint() -> None:
     import httpx
     from fastapi import FastAPI
 
+    from app.api.middleware.auth_middleware import AuthMiddleware, set_strict_auth_mode
     from app.api.v1.router import router as v1_router
 
     app = FastAPI()
+    app.add_middleware(AuthMiddleware)
     app.include_router(v1_router)
     paths = [
         path
@@ -222,13 +234,14 @@ async def test_middleware_protects_endpoint() -> None:
     ]
     if not paths:
         pytest.skip("aucune route GET sources")
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(
-        transport=transport, base_url="http://test"
-    ) as client:
-        response = await client.get(paths[0])
-    if response.status_code != 401:
-        pytest.skip(
-            f"middleware inactif ou comportement différent (status={response.status_code})"
-        )
-    assert response.status_code == 401
+    # Le middleware est opt-in : l'activer pour verifier la protection.
+    set_strict_auth_mode(True)
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            response = await client.get(paths[0])
+    finally:
+        set_strict_auth_mode(None)
+    assert response.status_code == 401, response.text
