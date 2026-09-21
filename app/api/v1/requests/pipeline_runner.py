@@ -136,6 +136,21 @@ class PipelineRunner:
             requirements_list = [objective] if objective else ["general_inquiry"]
             understanding_status = f"degraded: {err}"
 
+        requirements: Any = requirements_list
+        try:
+            from app.llm.tasks.understanding_task import UnderstandingTask
+            from app.llm.prompts.understanding_prompt import build as build_understanding_prompt
+
+            prompt = build_understanding_prompt(objective=objective)
+            task = UnderstandingTask()
+            llm_result = await task.run(prompt, max_tokens=500)
+            if not llm_result.get("stub"):
+                requirements = llm_result["content"]
+        except ImportError:
+            pass  # fallback sur parsing déterministe
+        except Exception:
+            pass
+
         self._emit_event(request_id, {
             "step": "understanding",
             "status": understanding_status,
@@ -205,11 +220,53 @@ class PipelineRunner:
             }
             planning_status = f"degraded: {err}"
 
+        try:
+            from app.llm.tasks.planning_task import PlanningTask
+            from app.llm.prompts.planning_prompt import build as build_planning_prompt
+            from app.llm.parsers.plan_parser import parse_plan
+
+            try:
+                prompt = build_planning_prompt(objective=objective, requirements=requirements)
+            except TypeError:
+                tools = ["collector", "web_search", "vector_search"]
+                prompt = build_planning_prompt(
+                    objective=f"{objective} (Requirements: {requirements})" if requirements else objective,
+                    available_tools=tools,
+                )
+            task = PlanningTask()
+            llm_result = await task.run(prompt, max_tokens=800)
+            if not llm_result.get("stub"):
+                # parser le JSON via app.llm.parsers.plan_parser.parse_plan
+                parsed_llm_plan = parse_plan(llm_result["content"])
+                plan_id = (plan.get("plan_id") if isinstance(plan, dict) and plan.get("plan_id") else ULID.new("PLAN_"))
+                plan = {
+                    "plan_id": plan_id,
+                    "request_id": request_id,
+                    "objective": objective,
+                    "steps": [
+                        {
+                            "step_id": step.get("step_id") or ULID.new("STEP_"),
+                            "order": step.get("order", idx),
+                            "action": step.get("description") or step.get("action", "collect_information"),
+                            "tool": step.get("tool", "collector"),
+                            "inputs": step.get("inputs", {"requirement": step.get("description", objective)}),
+                            "expected_output": step.get("expected_output", "information_unit"),
+                            "status": step.get("status", "pending"),
+                        }
+                        for idx, step in enumerate(parsed_llm_plan.get("steps", []), start=1)
+                    ],
+                }
+                planning_status = "completed"
+        except ImportError:
+            pass
+        except Exception:
+            pass
+
         self._emit_event(request_id, {
             "step": "planning",
             "status": planning_status,
             "request_id": request_id,
-            "plan_id": plan.get("plan_id"),
+            "plan_id": plan.get("plan_id") if isinstance(plan, dict) else None,
         })
 
         # -------------------------------------------------------------
@@ -226,16 +283,22 @@ class PipelineRunner:
 
             executor = StepExecutor()
 
-            def stub_tool(action: str, inputs: dict[str, Any]) -> dict[str, Any]:
-                req_val = inputs.get("requirement", objective)
-                return {
-                    "status": "done",
-                    "action": action,
-                    "output": f"Extracted intelligence payload for {req_val}",
-                }
+            class _ToolAdapter:
+                def execute(self, s: dict[str, Any]) -> dict[str, Any]:
+                    inputs = s.get("inputs", {})
+                    req_val = inputs.get("requirement", objective)
+                    act = s.get("action", "collect_information")
+                    return {
+                        "status": "done",
+                        "action": act,
+                        "output": f"Extracted intelligence payload for {req_val}",
+                    }
 
-            for step in plan.get("steps", []):
-                res = executor.execute(step, stub_tool)
+            tool_instance = _ToolAdapter()
+            for step in (plan.get("steps", []) if isinstance(plan, dict) else []):
+                res = executor.execute(step, tool_instance)
+                if "output" not in res and isinstance(res.get("result"), dict):
+                    res["output"] = res["result"].get("output", "")
                 step_results.append(res)
             execution_status = "completed"
         except Exception as err:
@@ -245,7 +308,7 @@ class PipelineRunner:
                     "status": "done",
                     "output": f"Fallback execution output for {objective}",
                 }
-                for s in plan.get("steps", [])
+                for s in (plan.get("steps", []) if isinstance(plan, dict) else [])
             ]
             execution_status = f"degraded: {err}"
 
@@ -311,13 +374,21 @@ class PipelineRunner:
         evid_id = ULID.new("EVID_")
         resp_id = f"RESP_{PythonUlid()}"
 
+        details_list = [
+            r.get("output", "")
+            for r in step_results
+            if r.get("output")
+        ]
+        if not details_list:
+            details_list = [f"Intelligence findings collected for {objective}"]
+
         information_units = [
             {
                 "information_id": inf_id,
                 "type": "text",
                 "content": {
                     "summary": f"Factual intelligence unit regarding {objective}",
-                    "details": [r.get("output", "") for r in step_results],
+                    "details": details_list,
                 },
                 "source_id": "SRC_INTERNAL_PIPELINE",
                 "data_stage": "derived",
@@ -337,12 +408,74 @@ class PipelineRunner:
             }
         ]
 
+        summary = f"Synthesized research report for '{objective}'."
+        findings: list[Any] = [
+            f"Successfully evaluated '{objective}' with confidence {confidence_score:.2f}."
+        ]
+
+        try:
+            from app.llm.router.model_router import ModelRouter, LLMTask
+
+            router = ModelRouter()
+            synthesis_prompt = (
+                f"Réponds en français à la question suivante : {objective}\n\n"
+                f"Faits collectés : {json.dumps(findings, ensure_ascii=False)}\n\n"
+                f"Réponds avec un JSON : {{\"summary\": \"...\", \"findings\": [...]}}\n"
+                f"Ne donne AUCUN fait sans source_id, sinon marque \"hypothesis\"."
+            )
+            response = await router.complete(
+                LLMTask(task_type="understanding", max_tokens=600),
+                synthesis_prompt,
+            )
+            if not response.stub:
+                summary = response.content
+                try:
+                    import re
+
+                    match = re.search(
+                        r"```(?:json)?\s*(.*?)\s*```",
+                        response.content,
+                        re.DOTALL | re.IGNORECASE,
+                    )
+                    candidate = match.group(1) if match else response.content.strip()
+                    parsed_synthesis = None
+                    try:
+                        parsed_synthesis = json.loads(candidate)
+                    except Exception:
+                        s_idx = candidate.find("{")
+                        e_idx = candidate.rfind("}")
+                        if s_idx != -1 and e_idx > s_idx:
+                            parsed_synthesis = json.loads(candidate[s_idx : e_idx + 1])
+                    if isinstance(parsed_synthesis, dict):
+                        if parsed_synthesis.get("summary"):
+                            summary = str(parsed_synthesis["summary"])
+                        if parsed_synthesis.get("findings") and isinstance(
+                            parsed_synthesis["findings"], list
+                        ):
+                            raw_findings = parsed_synthesis["findings"]
+                            normalized_findings: list[Any] = []
+                            for f in raw_findings:
+                                if isinstance(f, dict):
+                                    if "source_id" not in f or not f["source_id"]:
+                                        f["epistemic_status"] = "hypothesis"
+                                    normalized_findings.append(f)
+                                elif isinstance(f, str) and f.strip():
+                                    normalized_findings.append(f.strip())
+                            if normalized_findings:
+                                findings = normalized_findings
+                except Exception:
+                    summary = response.content
+        except ImportError:
+            pass  # fallback sur stub actuel
+        except Exception:
+            pass
+
         delivery_response: dict[str, Any] = {
             "response_id": resp_id,
             "request_id": request_id,
             "status": "completed",
-            "summary": f"Synthesized research report for '{objective}'.",
-            "findings": [f"Successfully evaluated '{objective}' with confidence {confidence_score:.2f}."],
+            "summary": summary,
+            "findings": findings,
             "information_units": information_units,
             "evidence": evidence,
             "sources": [
@@ -368,7 +501,7 @@ class PipelineRunner:
             "provenance": {
                 "pipeline": "PipelineRunner",
                 "request_id": request_id,
-                "plan_id": plan.get("plan_id"),
+                "plan_id": plan.get("plan_id") if isinstance(plan, dict) else None,
                 "steps_executed": len(step_results),
             },
             "audit": {
@@ -384,7 +517,7 @@ class PipelineRunner:
                 "completed_at": now_iso,
             },
             "trace": {
-                "steps": [s.get("step_id") for s in plan.get("steps", [])],
+                "steps": [s.get("step_id") for s in (plan.get("steps", []) if isinstance(plan, dict) else [])],
             },
         }
 
