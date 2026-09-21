@@ -314,3 +314,38 @@ Zones cibles :
 - Intégrateur : `tests/integration/test_phase_09_e2e.py`
 
 Référence : `INIS_SPEC.md` §7, §8, §22, §28.
+## PHASE-09 — Orchestration E2E du pipeline agent — ✅ TERMINÉE
+Date : 2026-09-21 — Commit : <sha final> — Tests : 415+ passed
+
+### Zones couvertes
+| Zone | Agent | Fichiers clés |
+|---|---|---|
+| app/agents/understanding/ | Codex | request_parser, requirement_extractor, clarification_detector, context_enricher |
+| app/agents/decision/ | Codex | termination_evaluator (§8.5), delegation_decider, partial_result_packager |
+| app/agents/pipeline/ | Codex | pipeline_coordinator, step_executor |
+| app/planning/ | Devin | plan_executor, iteration_manager, dependency_resolver, step_selector |
+| app/agents/runtime/budget_tracker.py | Devin | persist_usage (budget_usage 0005) |
+| app/llm/ | OpenCode | ModelRouter réel, 5 tasks, 5 prompts, parsers, LLM trace writer |
+| app/api/v1/requests/ | Antigravity | pipeline_runner, SSE endpoints |
+| frontend/src/types/ | Antigravity | fix TS types |
+| tests/integration/ | Intégrateur | test_phase_09_e2e.py |
+
+### Gate PHASE-09
+- [x] Understanding + decision + pipeline_coordinator
+- [x] PlanExecutor + IterationManager (§8.3, §8.5)
+- [x] ModelRouter réel (httpx OpenAI-compatible, stub sans clé)
+- [x] 5 tasks LLM + 5 builders de prompts (§22.3)
+- [x] LLM trace writer (§41.12, prompt_hash sha256)
+- [x] PipelineRunner E2E (BackgroundTasks + SSE)
+- [x] Frontend TS build → 0 erreur
+- [x] 415+ tests, 0 failed
+
+### Dette résiduelle
+- `test_pipeline_runner_imports` skip justifié (pas de classe `*Runner` — rôle tenu par `PipelineCoordinator`)
+- LLM non câblé à un backend réel (stub déterministe sans `LLM_API_KEY`)
+
+---
+
+## PHASE-10 — Extensions (OCR, audio, vidéo, cloud) — 🚀 À LANCER
+
+Référence : `INIS_SPEC.md` §35 (Phase 9 de la roadmap).
