@@ -7,16 +7,12 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
 
-from app.api.v1.conflicts.router import _CONFLICTS_STORE
-from app.api.v1.conflicts.schemas import ConflictCreate, ConflictResponse
 from app.api.v1.quality.schemas import (
-    ConflictListResponse,
     QualityCheckRequest,
     QualityCheckResponse,
     QualityCheckResult,
     QualityReportResponse,
 )
-from app.domain.value_objects.ulid import ULID
 
 router = APIRouter(tags=["quality"])
 
@@ -104,65 +100,3 @@ def get_quality_report(target_id: str) -> QualityReportResponse:
         )
     return _QUALITY_REPORTS_STORE[target_id]
 
-
-@router.get(
-    "/conflicts",
-    response_model=ConflictListResponse,
-    summary="List conflicts per §14.3",
-)
-def list_conflicts(status: str | None = None) -> ConflictListResponse:
-    """Return stored conflicts, optionally filtered by status."""
-    items = list(_CONFLICTS_STORE.values())
-    if status is not None:
-        target_status = status.lower()
-        items = [
-            c
-            for c in items
-            if c.status.lower() == target_status
-            or c.resolution_status.lower() == target_status
-        ]
-    return ConflictListResponse(items=items, conflicts=items, total=len(items))
-
-
-@router.post(
-    "/conflicts",
-    response_model=ConflictResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Record a detected conflict per §14.3",
-)
-def create_conflict(payload: ConflictCreate) -> ConflictResponse:
-    """Record a new conflict and return its generated conflict_id."""
-    conflict_id = ULID.new("CONFLICT_")
-    now = datetime.now(timezone.utc).isoformat()
-    status_val = payload.status or payload.resolution_status or "open"
-    item = ConflictResponse(
-        conflict_id=conflict_id,
-        information_a=payload.information_a,
-        information_b=payload.information_b,
-        information_ids=payload.information_ids,
-        claim_ids=payload.claim_ids,
-        difference_type=payload.difference_type,
-        severity=payload.severity,
-        status=status_val,
-        resolution_status=status_val,
-        description=payload.description,
-        resolution_evidence=payload.resolution_evidence,
-        detected_at=now,
-    )
-    _CONFLICTS_STORE[conflict_id] = item
-    return item
-
-
-@router.get(
-    "/conflicts/{id}",
-    response_model=ConflictResponse,
-    summary="Get a conflict by ID per §14.3",
-)
-def get_conflict(id: str) -> ConflictResponse:
-    """Retrieve an existing conflict by its ID or return 404."""
-    if id not in _CONFLICTS_STORE:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Conflict '{id}' not found",
-        )
-    return _CONFLICTS_STORE[id]
