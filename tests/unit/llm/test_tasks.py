@@ -23,7 +23,7 @@ class TestTasks:
         result = await task.run(build_understanding(objective="Assess Q2 outlook"))
         assert result["task_type"] == "understanding"
         assert result["stub"] is True
-        assert result["model"] == "gpt-4"
+        assert result["model"] == "openai/gpt-4"
         assert result["content"]
 
     async def test_classification_run_mocked_call(
