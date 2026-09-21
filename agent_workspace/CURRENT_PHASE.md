@@ -349,3 +349,38 @@ Date : 2026-09-21 — Commit : <sha final> — Tests : 415+ passed
 ## PHASE-10 — Extensions (OCR, audio, vidéo, cloud) — 🚀 À LANCER
 
 Référence : `INIS_SPEC.md` §35 (Phase 9 de la roadmap).
+## PHASE-10 — Vraie recherche web — ✅ TERMINÉE
+Date : 2026-09-21 — Commit : <sha final> — Tests : 452+ passed
+
+### Zones couvertes
+| Zone | Agent | Fichiers clés |
+|---|---|---|
+| app/connectors/web/ | OpenCode | wikipedia_provider, provider_router, wikipedia_extractor |
+| app/knowledge/extraction/ | Codex | fact_extractor, sentence_splitter |
+| app/quality/ | Devin | source_reliability (§10.2) |
+| app/api/v1/requests/ | Antigravity | StepExecutor réel (search + fetch + extract) |
+| tests/integration/ | Intégrateur | test_phase_10_e2e.py |
+
+### Gate PHASE-10
+- [x] Provider web réel (Serper / Brave / Wikipedia)
+- [x] Extraction texte (Trafilatura)
+- [x] FactExtractor → InformationUnit + Evidence
+- [x] Scoring de fiabilité par domaine (§10.2)
+- [x] StepExecutor câblé (recherche réelle)
+- [x] Findings sourcés (`SRC_ULID` + `EVID_ULID`)
+- [x] §0.2 inv.8 respecté (LLM jamais source unique)
+- [x] Test E2E validé avec Serper
+- [x] 452+ tests verts
+
+---
+
+## PHASE-11 — Extensions (§35 phase 9) — 🚀 À LANCER
+
+Candidats :
+- OCR avancé
+- Audio / Vidéo / Streaming
+- Connecteurs additionnels (XML, PDF avancé, DOCX)
+- Déploiement Cloud
+- Exécution sandboxée
+
+Référence : INIS_SPEC.md §35 (phase 9), §9.2, §23.
