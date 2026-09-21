@@ -47,13 +47,14 @@ async def test_get_request_returns_pipeline_state() -> None:
 
     # Execute pipeline runner synchronously
     result = await pipeline_runner.run(actual_id, payload)
-    assert result["status"] == "completed"
+    # Stub pipeline has no real SRC_ sources → INSUFFICIENT_EVIDENCE (§1.3)
+    assert result["status"] in ("completed", "INSUFFICIENT_EVIDENCE")
 
     # Fetch request
     get_res = client.get(f"/v1/requests/{actual_id}")
     assert get_res.status_code == 200
     res_data = get_res.json()
-    assert res_data["status"] == "completed"
+    assert res_data["status"] in ("completed", "INSUFFICIENT_EVIDENCE")
     assert res_data["pipeline_state"] is not None
     assert res_data["pipeline_state"]["response_id"].startswith("RESP_")
     assert res_data["pipeline_state"]["request_id"] == actual_id
@@ -105,12 +106,17 @@ async def test_pipeline_degrades_gracefully_without_understanding() -> None:
     ):
         result = await runner.run(req_id, payload)
 
-    assert result["status"] == "completed"
+    assert result["status"] in ("completed", "INSUFFICIENT_EVIDENCE")
     assert result["request_id"] == req_id
     assert result["response_id"].startswith("RESP_")
-    assert len(result["findings"]) > 0
+    # Unsourced findings go to assumptions, so findings may be empty
+    assert isinstance(result["findings"], list)
     assert "confidence" in result
     assert result["confidence"]["score"] > 0.0
+    # §0.2 — no finding should carry "hypothesis" as source_id
+    for finding in result["findings"]:
+        if isinstance(finding, dict):
+            assert finding.get("source_id") != "hypothesis"
 
 
 @pytest.mark.asyncio
@@ -158,7 +164,8 @@ async def test_pipeline_full_with_stubs() -> None:
     assert expected_keys.issubset(delivery.keys())
     assert delivery["response_id"].startswith("RESP_")
     assert delivery["request_id"] == req_id
-    assert delivery["status"] == "completed"
+    # Stub pipeline has no real SRC_ sources → INSUFFICIENT_EVIDENCE (§1.3)
+    assert delivery["status"] in ("completed", "INSUFFICIENT_EVIDENCE")
     assert isinstance(delivery["information_units"], list)
     assert len(delivery["information_units"]) > 0
     assert delivery["information_units"][0]["information_id"].startswith("INF_")
@@ -170,6 +177,12 @@ async def test_pipeline_full_with_stubs() -> None:
     assert delivery["provenance"]["pipeline"] == "PipelineRunner"
     assert "started_at" in delivery["timestamps"]
     assert "completed_at" in delivery["timestamps"]
+    # §0.2 — limitations must always include the notice
+    assert any("§0.2" in lim for lim in delivery["limitations"])
+    # §0.2 — no finding may have "hypothesis" as source_id
+    for finding in delivery["findings"]:
+        if isinstance(finding, dict):
+            assert finding.get("source_id") != "hypothesis"
 
 
 @pytest.mark.asyncio
@@ -178,6 +191,8 @@ async def test_pipeline_wires_real_llm_calls(monkeypatch: pytest.MonkeyPatch) ->
     from app.llm.router.model_router import LLMResponse, LLMTask
 
     calls: list[str] = []
+    FAKE_SRC = "SRC_TEST00000000000000000"
+    FAKE_EVID = "EVID_TEST00000000000000000"
 
     async def mock_complete(self: Any, task: LLMTask, prompt: str, **kwargs: Any) -> LLMResponse:
         calls.append(task.task_type)
@@ -185,7 +200,14 @@ async def test_pipeline_wires_real_llm_calls(monkeypatch: pytest.MonkeyPatch) ->
             return LLMResponse(
                 content=json.dumps({
                     "summary": "La capitale de la France est Paris.",
-                    "findings": ["Paris est la capitale et chef-lieu de la région Île-de-France."],
+                    "findings": [
+                        {
+                            "source_id": FAKE_SRC,
+                            "evidence_id": FAKE_EVID,
+                            "value": "Paris est la capitale de la France.",
+                            "epistemic_status": "factual",
+                        }
+                    ],
                 }),
                 model="test-model",
                 stub=False,
@@ -229,9 +251,68 @@ async def test_pipeline_wires_real_llm_calls(monkeypatch: pytest.MonkeyPatch) ->
     delivery = await runner.run(req_id, payload)
 
     assert "Paris" in delivery["summary"]
+    # Verified finding must be present (has SRC_ source + evidence_id)
+    assert delivery["status"] == "completed"
     assert len(delivery["findings"]) > 0
-    assert any("Paris" in f for f in delivery["findings"])
+    assert delivery["findings"][0]["source_id"] == FAKE_SRC
+    # No finding may carry "hypothesis" as source_id (§0.2)
+    for finding in delivery["findings"]:
+        if isinstance(finding, dict):
+            assert finding.get("source_id") != "hypothesis"
     assert "understanding" in calls
     assert "planning" in calls
     assert delivery["information_units"][0]["content"]["details"] != [""]
+    assert any("§0.2" in lim for lim in delivery["limitations"])
 
+
+@pytest.mark.asyncio
+async def test_pipeline_marks_unsourced_facts_as_hypothesis(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unsourced LLM claims must go to assumptions, not findings (§0.2 invariant 8)."""
+    from app.llm.router.model_router import LLMResponse, LLMTask
+
+    async def mock_complete(self: Any, task: LLMTask, prompt: str, **kwargs: Any) -> LLMResponse:
+        if "Réponds en français" in prompt:
+            # LLM returns facts without source_id / evidence_id
+            return LLMResponse(
+                content=json.dumps({
+                    "summary": "Paris est la capitale.",
+                    "findings": [
+                        {"source_id": "hypothesis", "finding": "Paris est la capitale de la France."},
+                        "La Tour Eiffel se trouve à Paris.",
+                    ],
+                }),
+                model="test-model",
+                stub=False,
+            )
+        return LLMResponse(content="stub", model="test-model", stub=True)
+
+    monkeypatch.setattr("app.llm.router.model_router.ModelRouter.complete", mock_complete)
+
+    runner = PipelineRunner()
+    req_id = ULID.new("REQ_")
+    payload = {
+        "objective": "Quelle est la capitale de la France ?",
+        "request_type": "research",
+    }
+
+    delivery = await runner.run(req_id, payload)
+
+    # §0.2: no finding should have "hypothesis" as source_id
+    for finding in delivery["findings"]:
+        if isinstance(finding, dict):
+            assert finding.get("source_id") != "hypothesis", (
+                f"finding with source_id='hypothesis' must not appear in findings: {finding}"
+            )
+
+    # Unsourced claims must be in assumptions, not findings
+    assert delivery["status"] == "INSUFFICIENT_EVIDENCE"
+    assert len(delivery["assumptions"]) >= 2
+    assert all(
+        a.get("epistemic_status") == "hypothesis" for a in delivery["assumptions"]
+    )
+    assert all(
+        a.get("reason") == "no_source" for a in delivery["assumptions"]
+    )
+
+    # §0.2 limitation notice must be present
+    assert any("§0.2" in lim for lim in delivery["limitations"])
