@@ -452,17 +452,7 @@ class PipelineRunner:
                         if parsed_synthesis.get("findings") and isinstance(
                             parsed_synthesis["findings"], list
                         ):
-                            raw_findings = parsed_synthesis["findings"]
-                            normalized_findings: list[Any] = []
-                            for f in raw_findings:
-                                if isinstance(f, dict):
-                                    if "source_id" not in f or not f["source_id"]:
-                                        f["epistemic_status"] = "hypothesis"
-                                    normalized_findings.append(f)
-                                elif isinstance(f, str) and f.strip():
-                                    normalized_findings.append(f.strip())
-                            if normalized_findings:
-                                findings = normalized_findings
+                            findings = parsed_synthesis["findings"]
                 except Exception:
                     summary = response.content
         except ImportError:
@@ -470,10 +460,59 @@ class PipelineRunner:
         except Exception:
             pass
 
+        # ------------------------------------------------------------------
+        # §0.2 invariant 8 — separate verified findings from unsourced claims
+        # A finding is verified iff it has a source_id starting with "SRC_"
+        # AND a non-empty evidence_id.  Everything else → assumptions.
+        # ------------------------------------------------------------------
+        verified_findings: list[Any] = []
+        assumptions_from_llm: list[dict[str, Any]] = []
+
+        for item in findings:
+            if isinstance(item, dict):
+                src = item.get("source_id", "")
+                evid = item.get("evidence_id", "")
+                # Reject "hypothesis" string as source_id (§0.2)
+                if (
+                    isinstance(src, str)
+                    and src.startswith("SRC_")
+                    and evid
+                ):  # verified fact
+                    verified_findings.append(item)
+                else:  # unverifiable — demote to assumption
+                    stmt = (
+                        item.get("finding")
+                        or item.get("value")
+                        or item.get("statement")
+                        or str(item)
+                    )
+                    assumptions_from_llm.append({
+                        "statement": stmt,
+                        "reason": "no_source",
+                        "epistemic_status": "hypothesis",
+                    })
+            elif isinstance(item, str) and item.strip():
+                # Plain strings have no source — always assumptions
+                assumptions_from_llm.append({
+                    "statement": item.strip(),
+                    "reason": "no_source",
+                    "epistemic_status": "hypothesis",
+                })
+
+        findings = verified_findings
+
+        # §1.3 — status depends on whether verified findings exist
+        delivery_status = "completed" if findings else "INSUFFICIENT_EVIDENCE"
+
+        # §0.2 limitation notice — always present when unsourced claims exist
+        base_limitations: list[str] = [
+            "Les affirmations sans source_id vérifié sont marquées comme hypothèses §0.2."
+        ]
+
         delivery_response: dict[str, Any] = {
             "response_id": resp_id,
             "request_id": request_id,
-            "status": "completed",
+            "status": delivery_status,
             "summary": summary,
             "findings": findings,
             "information_units": information_units,
@@ -491,8 +530,8 @@ class PipelineRunner:
             "transformations": [],
             "conflicts": [],
             "confidence": confidence_details,
-            "limitations": [],
-            "assumptions": [],
+            "limitations": base_limitations,
+            "assumptions": assumptions_from_llm,
             "missing_information": [],
             "recommended_next_actions": [
                 "Review evidence package",
