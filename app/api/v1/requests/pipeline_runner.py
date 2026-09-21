@@ -270,7 +270,7 @@ class PipelineRunner:
         })
 
         # -------------------------------------------------------------
-        # Stage 3: Pipeline Coordinator / Execution (with graceful degradation)
+        # Stage 3: Real web-search execution per §9/§10 (graceful degradation)
         # -------------------------------------------------------------
         self._emit_event(request_id, {
             "step": "executing",
@@ -278,45 +278,150 @@ class PipelineRunner:
             "request_id": request_id,
         })
         step_results: list[dict[str, Any]] = []
+        # Accumulated facts with real SRC_ provenance (§0.2-compliant)
+        web_facts: list[dict[str, Any]] = []
+        # Accumulated source entries for the delivery sources[] field
+        web_sources: list[dict[str, Any]] = []
+        execution_status = "completed"
+
+        steps_to_run = plan.get("steps", []) if isinstance(plan, dict) else []
+
         try:
-            from app.agents.pipeline.step_executor import StepExecutor
+            from app.connectors.web.provider_router import ProviderRouter
+            from app.connectors.web.extractors.wikipedia_extractor import WikipediaExtractor
+            from app.knowledge.extraction.fact_extractor import FactExtractor
+            from app.quality.source_reliability import SourceReliabilityScorer
 
-            executor = StepExecutor()
+            provider_router = ProviderRouter()
+            wiki_extractor = WikipediaExtractor()
+            fact_extractor = FactExtractor()
+            reliability_scorer = SourceReliabilityScorer()
 
-            class _ToolAdapter:
-                def execute(self, s: dict[str, Any]) -> dict[str, Any]:
-                    inputs = s.get("inputs", {})
-                    req_val = inputs.get("requirement", objective)
-                    act = s.get("action", "collect_information")
-                    return {
+            for step in steps_to_run:
+                action = step.get("action", "")
+                inputs = step.get("inputs", {})
+                # Derive the search query from step inputs or the objective
+                query = (
+                    inputs.get("query")
+                    or inputs.get("requirement")
+                    or action
+                    or objective
+                )
+
+                try:
+                    # ------ web_search ------------------------------------------------
+                    search_results = await provider_router.search(
+                        query=str(query), limit=5
+                    )
+
+                    step_output_snippets: list[str] = []
+
+                    # ------ fetch_page for top-3 results ------------------------------
+                    for result in search_results[:3]:
+                        url = result.url
+                        snippet = result.snippet or result.title
+
+                        # Extract full page text
+                        try:
+                            page = await wiki_extractor.extract(url)
+                            page_text = page.get("text", "")
+                        except Exception:
+                            page_text = ""
+
+                        text_to_extract = page_text if page_text else snippet or ""
+
+                        if text_to_extract:
+                            src_id = ULID.new("SRC_")
+                            doc_id = ULID.new("DOC_")
+                            try:
+                                facts = await fact_extractor.extract(
+                                    text=text_to_extract,
+                                    source_id=src_id,
+                                    document_id=doc_id,
+                                    url=url,
+                                )
+                                web_facts.extend(facts)
+                            except Exception:
+                                pass
+
+                            # Source entry with reliability score
+                            rel_score = reliability_scorer.score(url)
+                            web_sources.append({
+                                "source_id": src_id,
+                                "url": url,
+                                "title": result.title,
+                                "provider": result.provider,
+                                "reliability_score": rel_score,
+                                "search_score": result.score,
+                                "source_type": "web",
+                            })
+                            step_output_snippets.append(
+                                f"[{result.title}] {snippet}"
+                            )
+
+                    step_results.append({
+                        "step_id": step.get("step_id", ULID.new("STEP_")),
                         "status": "done",
-                        "action": act,
-                        "output": f"Extracted intelligence payload for {req_val}",
-                    }
+                        "action": action,
+                        "output": " | ".join(step_output_snippets) if step_output_snippets else f"No results for: {query}",
+                        "results_count": len(search_results),
+                    })
 
-            tool_instance = _ToolAdapter()
-            for step in (plan.get("steps", []) if isinstance(plan, dict) else []):
-                res = executor.execute(step, tool_instance)
-                if "output" not in res and isinstance(res.get("result"), dict):
-                    res["output"] = res["result"].get("output", "")
-                step_results.append(res)
-            execution_status = "completed"
+                except Exception as step_err:
+                    step_results.append({
+                        "step_id": step.get("step_id", ULID.new("STEP_")),
+                        "status": "degraded",
+                        "action": action,
+                        "output": f"Step degraded: {step_err}",
+                    })
+
+        except ImportError:
+            # Connectors not available — fall back to stub
+            execution_status = "degraded: connectors not available"
         except Exception as err:
-            step_results = [
-                {
-                    "step_id": s.get("step_id", ULID.new("STEP_")),
-                    "status": "done",
-                    "output": f"Fallback execution output for {objective}",
-                }
-                for s in (plan.get("steps", []) if isinstance(plan, dict) else [])
-            ]
             execution_status = f"degraded: {err}"
+
+        if not step_results:
+            # Pure stub fallback when no steps ran
+            try:
+                from app.agents.pipeline.step_executor import StepExecutor
+
+                executor = StepExecutor()
+
+                class _ToolAdapter:
+                    def execute(self, s: dict[str, Any]) -> dict[str, Any]:
+                        inputs = s.get("inputs", {})
+                        req_val = inputs.get("requirement", objective)
+                        act = s.get("action", "collect_information")
+                        return {
+                            "status": "done",
+                            "action": act,
+                            "output": f"Extracted intelligence payload for {req_val}",
+                        }
+
+                tool_instance = _ToolAdapter()
+                for step in steps_to_run:
+                    res = executor.execute(step, tool_instance)
+                    if "output" not in res and isinstance(res.get("result"), dict):
+                        res["output"] = res["result"].get("output", "")
+                    step_results.append(res)
+            except Exception as fallback_err:
+                step_results = [
+                    {
+                        "step_id": s.get("step_id", ULID.new("STEP_")),
+                        "status": "done",
+                        "output": f"Fallback execution output for {objective}",
+                    }
+                    for s in steps_to_run
+                ]
+                execution_status = f"degraded: {fallback_err}"
 
         self._emit_event(request_id, {
             "step": "executing",
             "status": execution_status,
             "request_id": request_id,
             "results_count": len(step_results),
+            "facts_extracted": len(web_facts),
         })
 
         # -------------------------------------------------------------
@@ -409,9 +514,8 @@ class PipelineRunner:
         ]
 
         summary = f"Synthesized research report for '{objective}'."
-        findings: list[Any] = [
-            f"Successfully evaluated '{objective}' with confidence {confidence_score:.2f}."
-        ]
+        # Seed findings with real web facts extracted in Stage 3 (§0.2-compliant)
+        findings: list[Any] = list(web_facts)
 
         try:
             from app.llm.router.model_router import ModelRouter, LLMTask
@@ -504,10 +608,24 @@ class PipelineRunner:
         # §1.3 — status depends on whether verified findings exist
         delivery_status = "completed" if findings else "INSUFFICIENT_EVIDENCE"
 
-        # §0.2 limitation notice — always present when unsourced claims exist
+        # Build limitations — always include §0.2 notice; add connector note if degraded
         base_limitations: list[str] = [
             "Les affirmations sans source_id vérifié sont marquées comme hypothèses §0.2."
         ]
+        if "degraded" in execution_status:
+            base_limitations.append(
+                f"Web connectors non disponibles ({execution_status}) — fallback sur stub."
+            )
+
+        # Merge internal pipeline source + real web sources
+        final_sources: list[dict[str, Any]] = [
+            {
+                "source_id": "SRC_INTERNAL_PIPELINE",
+                "name": "INIS Internal Pipeline",
+                "source_type": "internal",
+                "trust_level": 9,
+            }
+        ] + web_sources
 
         delivery_response: dict[str, Any] = {
             "response_id": resp_id,
@@ -517,14 +635,7 @@ class PipelineRunner:
             "findings": findings,
             "information_units": information_units,
             "evidence": evidence,
-            "sources": [
-                {
-                    "source_id": "SRC_INTERNAL_PIPELINE",
-                    "name": "INIS Internal Pipeline",
-                    "source_type": "internal",
-                    "trust_level": 9,
-                }
-            ],
+            "sources": final_sources,
             "datasets": [],
             "artifacts": [],
             "transformations": [],
