@@ -190,6 +190,12 @@ def test_frontend_buildable() -> None:
 
     if not _has_dir(FRONTEND / "node_modules"):
         pytest.skip("node_modules absent : build non vérifié")
+    package_json = FRONTEND / "package.json"
+    if (
+        not _has_dir(FRONTEND / "node_modules" / "msw")
+        and '"msw"' in package_json.read_text(encoding="utf-8")
+    ):
+        pytest.skip("dépendance npm non installée (npm install requis)")
     if shutil.which("npm") is None:
         pytest.skip("npm introuvable : build non vérifié")
     completed = subprocess.run(
