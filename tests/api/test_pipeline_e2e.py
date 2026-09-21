@@ -316,3 +316,73 @@ async def test_pipeline_marks_unsourced_facts_as_hypothesis(monkeypatch: pytest.
 
     # §0.2 limitation notice must be present
     assert any("§0.2" in lim for lim in delivery["limitations"])
+
+
+@pytest.mark.asyncio
+async def test_pipeline_real_web_search_wiring(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stage 3 wires ProviderRouter → FactExtractor → §0.2-compliant findings per §9/§10."""
+    from unittest.mock import AsyncMock, MagicMock
+    from app.domain.entities.search_result import SearchResult
+
+    # ---- mock ProviderRouter.search ----------------------------------------
+    fake_result = SearchResult(
+        title="Paris — Wikipédia",
+        url="https://fr.wikipedia.org/wiki/Paris",
+        snippet="Paris est la capitale et la plus grande ville de France.",
+        score=0.95,
+        provider="wikipedia",
+    )
+    mock_search = AsyncMock(return_value=[fake_result])
+    monkeypatch.setattr(
+        "app.connectors.web.provider_router.ProviderRouter.search", mock_search
+    )
+
+    # ---- mock WikipediaExtractor.extract -----------------------------------
+    mock_extract = AsyncMock(return_value={
+        "title": "Paris",
+        "text": "Paris est la capitale et la plus grande ville de France. "
+                "La ville est le centre politique, économique et culturel du pays.",
+        "language": "fr",
+        "url": "https://fr.wikipedia.org/wiki/Paris",
+        "error": None,
+    })
+    monkeypatch.setattr(
+        "app.connectors.web.extractors.wikipedia_extractor.WikipediaExtractor.extract",
+        mock_extract,
+    )
+
+    runner = PipelineRunner()
+    req_id = ULID.new("REQ_")
+    payload = {
+        "objective": "Quelle est la capitale de la France ?",
+        "request_type": "research",
+    }
+
+    delivery = await runner.run(req_id, payload)
+
+    # Web search was called
+    assert mock_search.called
+
+    # Findings must be §0.2-compliant (SRC_ + evidence_id)
+    for finding in delivery["findings"]:
+        if isinstance(finding, dict):
+            assert isinstance(finding.get("source_id"), str)
+            assert finding["source_id"].startswith("SRC_"), (
+                f"finding without real SRC_: {finding}"
+            )
+            assert finding.get("evidence_id"), "finding must have evidence_id"
+            assert finding.get("source_id") != "hypothesis"
+
+    # At least one web source with reliability_score must be present
+    web_srcs = [s for s in delivery["sources"] if s.get("source_type") == "web"]
+    assert len(web_srcs) >= 1
+    for ws in web_srcs:
+        assert ws["source_id"].startswith("SRC_")
+        assert "reliability_score" in ws
+        assert 0.0 <= ws["reliability_score"] <= 1.0
+
+    # With real facts → status must be completed
+    assert delivery["status"] == "completed"
+
+    # §0.2 limitation notice still present
+    assert any("§0.2" in lim for lim in delivery["limitations"])
