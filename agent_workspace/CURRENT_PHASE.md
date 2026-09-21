@@ -227,3 +227,45 @@ OpenCode a couvert `app/confidence/` (zone Codex) sous accord explicite.
 Objectif : authentification (§19.2), autorisation RBAC+ABAC (§19.3), PII (§19.4), audit renforcé.
 
 Référence : `INIS_SPEC.md` §19, §20, §41.9.
+## PHASE-07 — Security — ✅ TERMINÉE
+Date : 2026-09-21 — Commit : <sha final> — Tests : 365 passed, 13 skipped (Docker)
+
+### Zones couvertes
+| Zone | Agent | Fichiers clés |
+|---|---|---|
+| app/domain/entities/ | Codex | access_policy, security_classification |
+| app/security/ | Devin | authn (jwt, api_key, mtls), authz (rbac, abac), pii, rate_limiting |
+| app/governance/ | OpenCode (exception) | retention, gdpr_handler, pseudonymizer |
+| app/observability/ | OpenCode | tracing |
+| app/api/middleware/ + app/api/v1/auth/ | Antigravity | auth_middleware, login/refresh/me |
+| app/main.py | Antigravity (07.4) | mount individuel sous-routers |
+| tests/integration/ | Intégrateur | test_phase_07_e2e |
+
+### Gate PHASE-07
+- [x] AccessPolicy + SecurityClassification entities
+- [x] Authn : JWT + API key + mTLS (stub)
+- [x] Authz : RBAC + ABAC + policy evaluation
+- [x] PII : détection + redaction + classification
+- [x] Rate limiting : token bucket
+- [x] Retention + GDPR handler
+- [x] Tracing (TraceContext 32hex/16hex)
+- [x] Middleware auth opt-in (`INIS_AUTH_ENABLED`)
+- [x] Endpoints /v1/auth/login, /refresh, /me
+- [x] 365 tests, 0 failed
+
+### Exception documentée
+OpenCode a couvert `app/governance/` (zone Devin) sous accord explicite.
+
+### Dette technique majeure résolue
+FastAPI 0.141.1 : `_IncludedRouter` paresseux cassait le montage agrégé
+`v1_router`. Résolu par montage individuel des 13 sous-routers dans `app/main.py`.
+Aucun impact performance.
+
+---
+
+## PHASE-08 — Frontend — 🚀 À LANCER
+
+Objectif : React + Vite + TypeScript, 9 écrans §31.
+
+Zone : `frontend/`
+Référence : `INIS_SPEC.md` §31.
