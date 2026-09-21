@@ -269,3 +269,48 @@ Objectif : React + Vite + TypeScript, 9 écrans §31.
 
 Zone : `frontend/`
 Référence : `INIS_SPEC.md` §31.
+## PHASE-08 — Frontend — ✅ TERMINÉE
+Date : 2026-09-21 — Commit : `33777d5` — Tests : 374 passed, 1 skipped (node_modules)
+
+### Zones couvertes
+| Zone | Agent | Fichiers clés |
+|---|---|---|
+| frontend/ (config + 9 écrans) | Antigravity | package.json, vite, 9 pages §31.1, 6 composants |
+| frontend/src/types/ | Codex | domain.ts, api.ts, protocol.ts |
+| frontend/src/mocks/ | OpenCode | fixtures.ts, server.ts (MSW) |
+| docker/ + deploy/ | Devin | Dockerfile.frontend, nginx.conf, compose |
+| tests/integration/ | Intégrateur | test_phase_08_e2e.py |
+
+### Gate PHASE-08
+- [x] React + Vite + TypeScript configuré
+- [x] 9 écrans §31.1 (SubmitRequest, RequestStatus, Sources, ConfidenceMatrix, Conflicts, InformationUnits, AgentsSolicited, Traceability, RequestHistory)
+- [x] 6 composants (Layout, AgentCard, ConfidenceBar, ConflictCard, EpistemicBadge, ProgressStepper, ProvenanceTree)
+- [x] 9 clients API + types TS
+- [x] Contexts (Auth, Trace) + hooks (useRequest, useSSE, useConfidence)
+- [x] Mocks MSW pour dev/test
+- [x] Docker frontend + nginx + compose
+- [x] `npm run build` OK (116 modules, 267 kB)
+- [x] `npm test -- --run` OK (1 passed)
+- [x] 374 tests Python verts
+
+### Exception documentée
+- Codex a couvert `frontend/src/types/` (zone Antigravity) sous accord
+- OpenCode a couvert `frontend/src/mocks/` (zone Antigravity) sous accord
+
+### Dette résiduelle
+Test `test_frontend_buildable` skip car `node_modules` non commité. À exécuter en CI avec `npm install` préalable.
+
+---
+
+## PHASE-09 — Orchestration E2E du pipeline agent — 🚀 À LANCER
+
+Objectif : câbler les briques existantes (understanding, planning, execution, confidence) en un pipeline fonctionnel de bout en bout.
+
+Zones cibles :
+- Codex : `app/agents/understanding/`, `app/agents/decision/`, `app/agents/pipeline/`
+- Devin : `app/planning/` (executor, iterations, budget usage)
+- OpenCode : `app/llm/router/` (appels LLM réels), `app/llm/tasks/`, `app/llm/prompts/`
+- Antigravity : `app/api/v1/requests/` (pipeline E2E endpoints)
+- Intégrateur : `tests/integration/test_phase_09_e2e.py`
+
+Référence : `INIS_SPEC.md` §7, §8, §22, §28.

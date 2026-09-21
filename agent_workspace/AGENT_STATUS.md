@@ -1,10 +1,10 @@
 # Agent Status
 
 ## Dernière mise à jour
-2026-09-21 — PHASE-07 clôturée, PHASE-08 à lancer
+2026-09-21 — PHASE-08 clôturée, PHASE-09 à lancer
 
 ## Commit de référence
-`<sha final PHASE-07>` — main
+`33777d5` — main
 
 ## État des phases
 
@@ -17,25 +17,26 @@
 | PHASE-04.2 — Corrections & Convergence | ✅ | `276e8f8` | 158 | 3 + intégrateur |
 | PHASE-04.3 — Intégration réelle | ✅ | `c25e2bc` | 169 | 4 + intégrateur |
 | PHASE-05 — Knowledge Layer | ✅ | `79500dd` | 209 | 4 + intégrateur |
-| PHASE-05.2/05.3/05.4 — Consolidation | ✅ | `fea9262` | 238 (+1 skip) | 4 + Codex |
+| PHASE-05.2/05.3/05.4 — Consolidation | ✅ | `fea9262` | 238 | 4 + Codex |
 | PHASE-05.5 — Nettoyage dettes | ✅ | `0533316` | 243 (0 skip) | 1 (Codex) |
-| PHASE-06 — Quality & Confidence | ✅ | `5c0cca3` | 299 (0 skip) | 4 + intégrateur |
-| PHASE-07 — Security | ✅ | `<sha final>` | 365+ (13 skip Docker) | 4 + intégrateur |
-| PHASE-07.4 — Fix FastAPI lazy includes | ✅ | `d0f6fdb` | 359+ | 1 (Antigravity) |
-| PHASE-08 — Frontend | 🚀 à lancer | — | — | — |
+| PHASE-06 — Quality & Confidence | ✅ | `5c0cca3` | 299 | 4 + intégrateur |
+| PHASE-07 — Security | ✅ | `4ed0fa1` | 365 | 4 + intégrateur |
+| PHASE-07.4 — Fix FastAPI lazy includes | ✅ | `d0f6fdb` | 359 | 1 (Antigravity) |
+| PHASE-08 — Frontend | ✅ | `33777d5` | 374 (+1 skip) | 4 + intégrateur |
+| PHASE-09 — Orchestration E2E | 🚀 à lancer | — | — | — |
 
 ## État des agents (par phase)
 
-| Agent | Branche | P1 | P2 | P3 | P4 | P4.2 | P4.3 | P5 | P5.2-4 | P5.5 | P6 | P7 | P7.4 | P8 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Codex | agent/codex/domain | ✅ | ✅ | ⏸️ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⏸️ | 🚀 |
-| Devin | agent/devin/storage | ✅ | ✅ | ⏸️ | ✅ | ✅ | ✅ | ✅ | ✅ | ⏸️ | ✅ | ✅ | ⏸️ | 🚀 |
-| OpenCode | agent/opencode/messaging | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⏸️ | ✅ | ✅ | ⏸️ | 🚀 |
-| Antigravity | agent/antigravity/api | ✅ | ✅ | ⏸️ | ✅ | ⏸️ | ✅ | ✅ | ✅ | ⏸️ | ✅ | ✅ | ✅ | 🚀 |
-| Intégrateur (OpenCode) | agent/cursor/integration | ✅ | ✅ | ⏸️ | ✅ | ⏸️ | ✅ | ✅ | ✅ | ⏸️ | ✅ | ✅ | ⏸️ | 🚀 |
+| Agent | Branche | P1 | P2 | P3 | P4 | P5 | P6 | P7 | P8 | P9 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Codex | agent/codex/domain | ✅ | ✅ | ⏸️ | ✅ | ✅ | ✅ | ✅ | ✅ | 🚀 |
+| Devin | agent/devin/storage | ✅ | ✅ | ⏸️ | ✅ | ✅ | ✅ | ✅ | ✅ | 🚀 |
+| OpenCode | agent/opencode/messaging | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🚀 |
+| Antigravity | agent/antigravity/api | ✅ | ✅ | ⏸️ | ✅ | ✅ | ✅ | ✅ | ✅ | 🚀 |
+| Intégrateur (OpenCode) | agent/cursor/integration | ✅ | ✅ | ⏸️ | ✅ | ✅ | ✅ | ✅ | ✅ | 🚀 |
 
 ## Tests
-main @ `<sha final>` : **365+ passed, 0 failed, 13 skipped** (Docker non disponible en local)
+main @ `33777d5` : **374 passed, 1 skipped** (node_modules non commité)
 
 ## Emplacements des worktrees
 
@@ -52,55 +53,41 @@ main @ `<sha final>` : **365+ passed, 0 failed, 13 skipped** (Docker non disponi
 
 **Aucune bloquante.**
 
-### Observations mineures (PHASE-08+)
-1. **Skips Docker (13)** — tests testcontainers skippent si Docker Desktop n'est pas lancé. À exécuter en CI ou en local avec Docker.
-2. **mTLS validator** — implémentation stub V1 (`app/security/authn/mtls_validator.py`). Validation de certificat complète reportée.
-3. **Formulaire frontend** — à venir en PHASE-08.
+### Observations mineures (PHASE-09+)
+1. **Test frontend build non vérifié** — `node_modules` non commité. À tester en CI avec `npm install` préalable.
+2. **mTLS validator stub** — implémentation complète reportée.
+3. **LLM non câblé** — `ModelRouter` retourne une décision mais pas d'appel réel.
 
 ## Exceptions documentées
 
-- **PHASE-02** : Codex a couvert `app/registry/` et `app/workers/` (zone OpenCode) car OpenCode n'a pas contribué.
-- **PHASE-04** : OpenCode a couvert `app/connectors/api/` et `app/connectors/web/` (zone Devin) sous accord explicite.
-- **PHASE-05.3 → 05.4** : Devin a échoué 2 fois sur `alembic upgrade head`. Codex est intervenu sur `migrations/`, `alembic.ini`, `app/connectors/database/`, `tests/integration/`.
-- **PHASE-05.5** : Codex a couvert 6 zones (Devin × 3, Antigravity × 1, OpenCode × 2, Cursor × 1) pour solder les 7 dettes.
-- **PHASE-06** : OpenCode a couvert `app/confidence/` (zone Codex) sous accord explicite.
-- **PHASE-07** : OpenCode a couvert `app/governance/retention/` + `app/governance/lifecycle/` (zone Devin) sous accord explicite.
-- **PHASE-07.4** : Antigravity a modifié `app/main.py` (mount individuel des sous-routers) pour contourner le bug FastAPI 0.141 lazy includes.
+- **PHASE-02** : Codex a couvert `app/registry/` et `app/workers/` (zone OpenCode).
+- **PHASE-04** : OpenCode a couvert `app/connectors/api/` + `web/` (zone Devin).
+- **PHASE-05.3 → 05.4** : Codex a couvert `migrations/` + `app/connectors/database/` (zone Devin).
+- **PHASE-05.5** : Codex a couvert 6 zones pour solder les 7 dettes.
+- **PHASE-06** : OpenCode a couvert `app/confidence/` (zone Codex).
+- **PHASE-07** : OpenCode a couvert `app/governance/retention/` + `lifecycle/` (zone Devin).
+- **PHASE-07.4** : Antigravity a modifié `app/main.py` (mount individuel sous-routers) pour FastAPI 0.141.
+- **PHASE-08** : Codex a couvert `frontend/src/types/` (zone Antigravity). OpenCode a couvert `frontend/src/mocks/` (zone Antigravity).
 
 ## Règles ajoutées
 
-- **Règle 9** (`AGENT_RULES.md`) : gestion des placeholders vides en conflit (renommer/remplir, ne pas créer de doublon).
-- **Règle 10** (`AGENT_RULES.md`) : tout agent qui crée/modifie une migration Alembic DOIT tester `upgrade head` + `downgrade base` sur une vraie DB avant commit.
+- **Règle 9** (`AGENT_RULES.md`) : placeholders vides en conflit.
+- **Règle 10** (`AGENT_RULES.md`) : migrations Alembic testées `upgrade head` + `downgrade base`.
 
 ## Notes de configuration
 
-- **OpenCode** travaille dans `C:\Users\LATITUDE 5420\Documents\INIS-opencode\opencode` (isolé).
-- **Intégrateur** : session OpenCode dédiée sur `INIS-worktrees\cursor`, branche `agent/cursor/integration`.
-- **FastAPI 0.141.1** : montage individuel des 13 sous-routers dans `app/main.py` (les `_IncludedRouter` paresseux cassent le montage agrégé).
-- **Dépendances ajoutées par l'humain** au `pyproject.toml` :
-  - `paho-mqtt` (PHASE-03)
-  - `trafilatura` + `readability-lxml` (PHASE-04.3)
-  - `pgvector` + `numpy` (PHASE-05)
-  - `aiosqlite` (PHASE-05.2)
-- **Docker Desktop** : requis pour tests testcontainers (PostgreSQL 16 + pgvector).
-- **Middleware auth** : opt-in via `INIS_AUTH_ENABLED=true` (désactivé par défaut pour ne pas casser les tests existants).
+- **OpenCode** : `C:\Users\LATITUDE 5420\Documents\INIS-opencode\opencode`
+- **Intégrateur** : session OpenCode dédiée sur `INIS-worktrees\cursor`
+- **FastAPI 0.141.1** : 13 sous-routers montés individuellement dans `app/main.py`
+- **Dépendances** : `paho-mqtt`, `trafilatura`, `readability-lxml`, `pgvector`, `numpy`, `aiosqlite`, `msw`
+- **Docker Desktop** : requis pour testcontainers
+- **Middleware auth** : opt-in `INIS_AUTH_ENABLED=true`
+- **Frontend** : `npm install && npm run dev` (proxy `/v1` → localhost:8000)
 
 ## Prochaines actions
 
-**PHASE-08 — Frontend** (référence `INIS_SPEC.md` §31).
+**PHASE-09 — Orchestration E2E du pipeline agent**
 
-Zone : `frontend/`
-Stack cible : React + Vite + TypeScript
+5 agents en parallèle. Objectif : câbler understanding → planning → execution → confidence.
 
-9 écrans obligatoires §31.1 :
-1. Soumettre une demande
-2. Voir l'état d'une recherche
-3. Visualiser les sources
-4. Consulter la matrice de confiance
-5. Consulter les contradictions
-6. Voir les informations extraites
-7. Voir les agents sollicités
-8. Consulter la traçabilité
-9. Consulter l'historique d'une requête
-
-Écran de confiance §31.2 : visualisation des 7 dimensions.
+Référence : `INIS_SPEC.md` §7, §8, §22, §28.
