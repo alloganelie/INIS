@@ -196,10 +196,11 @@ def test_frontend_buildable() -> None:
         and '"msw"' in package_json.read_text(encoding="utf-8")
     ):
         pytest.skip("dépendance npm non installée (npm install requis)")
-    if shutil.which("npm") is None:
+    npm_path = shutil.which("npm")
+    if npm_path is None:
         pytest.skip("npm introuvable : build non vérifié")
     completed = subprocess.run(
-        ["npm", "run", "build", "--prefix", str(FRONTEND)],
+        [npm_path, "run", "build", "--prefix", str(FRONTEND)],
         capture_output=True,
         text=True,
         timeout=600,
