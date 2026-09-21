@@ -77,14 +77,14 @@ class ModelRouter:
     ) -> None:
         """Initialize the model router with default decision table."""
         self._decision_table = {
-            "reasoning": "gpt-4",
-            "understanding": "gpt-4",
-            "classification": "gpt-3.5-turbo",
-            "extraction": "gpt-3.5-turbo",
-            "planning": "gpt-4",
-            "confidence_signal": "gpt-3.5-turbo",
-            "conflict_detection": "gpt-4",
-            "default": "gpt-3.5-turbo",
+            "reasoning": "openai/gpt-4",
+            "understanding": "openai/gpt-4",
+            "classification": "openai/gpt-3.5-turbo",
+            "extraction": "openai/gpt-3.5-turbo",
+            "planning": "openai/gpt-4",
+            "confidence_signal": "openai/gpt-3.5-turbo",
+            "conflict_detection": "openai/gpt-4",
+            "default": "openai/gpt-3.5-turbo",
         }
         self._default_base_url = default_base_url
         self._timeout_seconds = timeout_seconds
@@ -105,18 +105,19 @@ class ModelRouter:
         Returns:
             Model identifier string.
 
-        Raises:
-            ValueError: If task_type is not recognized.
         """
         if task_type not in self._decision_table:
-            raise ValueError(f"Unknown task type: {task_type}")
+            task_type = "default"
 
-        # Simple decision logic based on cost and latency budgets
-        if cost_budget is not None and cost_budget < 0.01:
-            return "gpt-3.5-turbo"
+        env_key = f"LLM_MODEL_{task_type.upper()}"
+        if os.environ.get(env_key, "").strip():
+            return os.environ[env_key].strip()
 
-        if latency_budget is not None and latency_budget < 1.0:
-            return "gpt-3.5-turbo"
+        if os.environ.get("LLM_MODEL_DEFAULT", "").strip():
+            return os.environ["LLM_MODEL_DEFAULT"].strip()
+
+        if os.environ.get("LLM_MODEL", "").strip():
+            return os.environ["LLM_MODEL"].strip()
 
         return self._decision_table[task_type]
 
