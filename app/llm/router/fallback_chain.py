@@ -1,5 +1,14 @@
 """Fallback Chain for LLM model selection per INIS spec §22."""
 
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from typing import TypeVar
+
+from app.core.errors import InfrastructureError
+
+T = TypeVar("T")
+
 
 class FallbackChain:
     """Manages ordered list of models for fallback scenarios per §22.2."""
@@ -68,3 +77,26 @@ class FallbackChain:
         if len(self._chain) == 1:
             raise ValueError("Cannot remove last model from fallback chain")
         self._chain.remove(model_id)
+
+    async def run(self, func: Callable[[str], Awaitable[T]]) -> T:
+        """Try the primary model, then each fallback, return first success.
+
+        Args:
+            func: Async callable receiving a model ID and returning a result.
+
+        Returns:
+            Result of the first successful call.
+
+        Raises:
+            InfrastructureError: If every model in the chain fails.
+        """
+        failures: list[str] = []
+        for model_id in self._chain:
+            try:
+                return await func(model_id)
+            except Exception as exc:  # noqa: BLE001 - collected and reported
+                failures.append(f"{model_id}: {exc}")
+        raise InfrastructureError(
+            f"All {len(self._chain)} models in the fallback chain failed: "
+            + "; ".join(failures)
+        )
