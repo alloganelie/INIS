@@ -74,3 +74,4 @@ class InformationRequestResponse(BaseModel):
     permissions: dict[str, Any] = Field(default_factory=dict)
     status: str = "received"
     created_at: str | None = None
+    pipeline_state: dict[str, Any] | None = None

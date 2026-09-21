@@ -5,43 +5,43 @@ export type EpistemicStatus = 'fact' | 'factual' | 'hypothesis' | 'assumption' |
 
 export interface InformationUnit {
   information_id: string;
-  type: 'text' | 'number' | 'table' | 'record' | 'image_region' | 'document_fragment';
+  type: 'text' | 'number' | 'table' | 'record' | 'image_region' | 'document_fragment' | string;
   content: Record<string, unknown>;
-  raw_reference: Record<string, unknown>;
+  raw_reference?: Record<string, unknown>;
   source_id: string;
-  document_id: string | null;
-  dataset_id: string | null;
-  location: Record<string, unknown>;
-  context: Record<string, unknown>;
-  language: string | null;
-  unit: string | null;
-  time: Record<string, unknown>;
-  classification: Record<string, unknown>;
-  quality: Record<string, unknown>;
-  confidence: Record<string, unknown>;
-  provenance: Record<string, unknown>;
-  versions: string[];
+  document_id?: string | null;
+  dataset_id?: string | null;
+  location?: Record<string, unknown>;
+  context?: Record<string, unknown>;
+  language?: string | null;
+  unit?: string | null;
+  time?: Record<string, unknown>;
+  classification?: Record<string, unknown>;
+  quality?: Record<string, unknown>;
+  confidence?: Record<string, unknown>;
+  provenance?: Record<string, unknown>;
+  versions?: string[];
   data_stage: DataStage;
   epistemic_status: EpistemicStatus;
-  created_at: string | null;
-  updated_at: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface Evidence {
   evidence_id: string;
-  claim_id: string | null;
-  information_id: string | null;
-  document_id: string | null;
-  source_id: string | null;
-  dataset_id: string | null;
-  transformation_id: string | null;
-  excerpt: string | null;
-  location: Record<string, unknown>;
+  claim_id?: string | null;
+  information_id?: string | null;
+  document_id?: string | null;
+  source_id?: string | null;
+  dataset_id?: string | null;
+  transformation_id?: string | null;
+  excerpt?: string | null;
+  location?: Record<string, unknown>;
   strength: number;
-  confidence: Record<string, unknown>;
-  provenance: Record<string, unknown>;
-  epistemic_status: EpistemicStatus;
-  created_at: string | null;
+  confidence?: Record<string, unknown>;
+  provenance?: Record<string, unknown>;
+  epistemic_status?: EpistemicStatus | string;
+  created_at?: string | null;
 }
 
 export interface Claim {

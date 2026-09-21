@@ -31,17 +31,17 @@ export interface InformationRequestCreate {
 
 export interface InformationRequestResponse {
   request_id: string;
-  request_type: 'research' | 'source' | 'evidence' | 'data' | 'artifact';
+  request_type: 'research' | 'source' | 'evidence' | 'data' | 'artifact' | string;
   objective: string;
-  question: string | null;
-  context: Record<string, unknown>;
-  required_information: string[];
-  constraints: RequestConstraints;
-  required_output: RequiredOutput;
-  requester: Record<string, unknown>;
-  permissions: Record<string, unknown>;
+  question?: string | null;
+  context?: Record<string, unknown>;
+  required_information?: string[];
+  constraints?: RequestConstraints;
+  required_output?: RequiredOutput;
+  requester?: Record<string, unknown>;
+  permissions?: Record<string, unknown>;
   status: string;
-  created_at: string | null;
+  created_at?: string | null;
 }
 
 export type InformationRequest = InformationRequestResponse;
@@ -168,18 +168,18 @@ export interface AgentIdentity {
   name: string;
   description: string;
   version: string;
-  status: 'available' | 'degraded' | 'unavailable' | 'maintenance';
+  status: 'available' | 'degraded' | 'unavailable' | 'maintenance' | string;
   capabilities: string[];
   protocols: string[];
   message_types: string[];
-  input_schemas: Record<string, unknown>[];
-  output_schemas: Record<string, unknown>[];
-  security_requirements: string[];
-  health: Record<string, unknown>;
-  performance_profile: Record<string, unknown>;
-  learning_profile: Record<string, unknown>;
-  registered_at: string | null;
-  last_seen_at: string | null;
+  input_schemas?: Record<string, unknown>[];
+  output_schemas?: Record<string, unknown>[];
+  security_requirements?: string[];
+  health?: Record<string, unknown>;
+  performance_profile?: Record<string, unknown>;
+  learning_profile?: Record<string, unknown>;
+  registered_at?: string | null;
+  last_seen_at?: string | null;
 }
 
 export type Agent = AgentIdentity;
