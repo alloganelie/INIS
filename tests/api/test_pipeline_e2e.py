@@ -170,3 +170,68 @@ async def test_pipeline_full_with_stubs() -> None:
     assert delivery["provenance"]["pipeline"] == "PipelineRunner"
     assert "started_at" in delivery["timestamps"]
     assert "completed_at" in delivery["timestamps"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_wires_real_llm_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure pipeline runner invokes LLM tasks for understanding, planning, and synthesis."""
+    from app.llm.router.model_router import LLMResponse, LLMTask
+
+    calls: list[str] = []
+
+    async def mock_complete(self: Any, task: LLMTask, prompt: str, **kwargs: Any) -> LLMResponse:
+        calls.append(task.task_type)
+        if "Réponds en français" in prompt:
+            return LLMResponse(
+                content=json.dumps({
+                    "summary": "La capitale de la France est Paris.",
+                    "findings": ["Paris est la capitale et chef-lieu de la région Île-de-France."],
+                }),
+                model="test-model",
+                stub=False,
+            )
+        elif task.task_type == "planning":
+            return LLMResponse(
+                content=json.dumps({
+                    "steps": [
+                        {
+                            "order": 1,
+                            "tool": "collector",
+                            "description": "Rechercher la capitale française",
+                            "expected_output": "information_unit",
+                        }
+                    ]
+                }),
+                model="test-model",
+                stub=False,
+            )
+        else:
+            return LLMResponse(
+                content=json.dumps({
+                    "intent": "Identifier la capitale",
+                    "entities": ["France"],
+                    "required_information": ["capitale"],
+                    "ambiguities": [],
+                }),
+                model="test-model",
+                stub=False,
+            )
+
+    monkeypatch.setattr("app.llm.router.model_router.ModelRouter.complete", mock_complete)
+
+    runner = PipelineRunner()
+    req_id = ULID.new("REQ_")
+    payload = {
+        "objective": "Quelle est la capitale de la France ?",
+        "request_type": "research",
+    }
+
+    delivery = await runner.run(req_id, payload)
+
+    assert "Paris" in delivery["summary"]
+    assert len(delivery["findings"]) > 0
+    assert any("Paris" in f for f in delivery["findings"])
+    assert "understanding" in calls
+    assert "planning" in calls
+    assert delivery["information_units"][0]["content"]["details"] != [""]
+
