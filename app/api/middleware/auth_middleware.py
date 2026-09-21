@@ -234,13 +234,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
             request.state.actor_id = actor_id
             request.state.scopes = scopes
-                return JSONResponse(
-                    status_code=401,
-                    content={"detail": "Invalid API key"},
-                )
-
-            request.state.actor_id = actor_id
-            request.state.scopes = scopes
 
         else:
             # Neither token nor API key provided
