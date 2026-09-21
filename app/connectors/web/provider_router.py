@@ -10,6 +10,7 @@ these types from this module; the router never imports providers
 
 from __future__ import annotations
 
+import os
 from typing import Protocol
 from typing import runtime_checkable
 
@@ -26,15 +27,30 @@ class SearchProvider(Protocol):
 
 
 class ProviderRouter:
-    """Route a search to the configured provider (§10.1)."""
+    """Route a search to the configured provider (§10.1).
+
+    When no explicit ``providers`` mapping is given, the primary provider
+    is auto-selected from the environment: ``SerperProvider`` when
+    ``SERPER_API_KEY`` is set, else ``BraveProvider`` when
+    ``BRAVE_API_KEY`` is set, else the free ``WikipediaProvider`` fallback.
+    Provider modules are imported lazily so this module keeps its
+    no-cycle invariant (providers import ``SearchResult`` from here).
+    """
 
     def __init__(
         self,
         providers: dict[str, SearchProvider] | None = None,
-        default_provider_id: str = "mock",
+        default_provider_id: str | None = None,
     ) -> None:
-        self._providers: dict[str, SearchProvider] = dict(providers or {})
-        self._default_provider_id = default_provider_id
+        if providers is None:
+            primary = _auto_select_primary()
+            self._providers: dict[str, SearchProvider] = {
+                primary.provider_id: primary
+            }
+            self._default_provider_id = primary.provider_id
+        else:
+            self._providers = dict(providers)
+            self._default_provider_id = default_provider_id or "mock"
 
     def register(self, provider: SearchProvider) -> None:
         """Register (or replace) a provider by its ``provider_id``."""
@@ -73,3 +89,22 @@ class ProviderRouter:
         if limit < 1:
             raise ValueError("limit must be >= 1")
         return await self.resolve(provider_id).search(query, limit)
+
+
+def _auto_select_primary() -> SearchProvider:
+    """Select the primary provider from the environment (lazy imports).
+
+    ``SERPER_API_KEY`` wins, then ``BRAVE_API_KEY``, else the free
+    Wikipedia fallback which needs no key.
+    """
+    if os.environ.get("SERPER_API_KEY"):
+        from app.connectors.web.providers.serper_provider import SerperProvider
+
+        return SerperProvider()
+    if os.environ.get("BRAVE_API_KEY"):
+        from app.connectors.web.providers.brave_provider import BraveProvider
+
+        return BraveProvider()
+    from app.connectors.web.providers.wikipedia_provider import WikipediaProvider
+
+    return WikipediaProvider()

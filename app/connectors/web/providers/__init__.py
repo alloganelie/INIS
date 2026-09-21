@@ -3,9 +3,11 @@
 from app.connectors.web.providers.brave_provider import BraveProvider
 from app.connectors.web.providers.mock_provider import MockProvider
 from app.connectors.web.providers.serper_provider import SerperProvider
+from app.connectors.web.providers.wikipedia_provider import WikipediaProvider
 
 __all__ = [
     "MockProvider",
     "SerperProvider",
     "BraveProvider",
+    "WikipediaProvider",
 ]
