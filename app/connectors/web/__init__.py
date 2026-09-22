@@ -6,6 +6,7 @@ from app.domain.entities.search_result import SearchResult
 from app.connectors.web.providers.brave_provider import BraveProvider
 from app.connectors.web.providers.mock_provider import MockProvider
 from app.connectors.web.providers.serper_provider import SerperProvider
+from app.connectors.web.rss_connector import RSSConnector
 
 __all__ = [
     "ProviderRouter",
@@ -14,4 +15,5 @@ __all__ = [
     "MockProvider",
     "SerperProvider",
     "BraveProvider",
+    "RSSConnector",
 ]
