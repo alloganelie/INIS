@@ -1,0 +1,120 @@
+# Production Docker Compose Template for INIS stack
+# Includes: PostgreSQL (pgvector) + Redis + MinIO + RabbitMQ + INIS API
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: inis-prod-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-inis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-inis_secure_password}
+      POSTGRES_DB: ${POSTGRES_DB:-inis_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-inis} -d ${POSTGRES_DB:-inis_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: inis-prod-redis
+    restart: always
+    command: redis-server --requirepass ${REDIS_PASSWORD:-inis_redis_password}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-inis_redis_password}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: inis-prod-minio
+    restart: always
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-inis_minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-inis_minio_secret_key}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: inis-prod-rabbitmq
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-inis}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-inis_rabbit_password}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  inis-api:
+    image: inis-api:latest
+    build:
+      context: ../../
+      dockerfile: docker/Dockerfile.dev
+    container_name: inis-prod-api
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
+      PORT: 8000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-inis}:${POSTGRES_PASSWORD:-inis_secure_password}@postgres:5432/${POSTGRES_DB:-inis_db}
+      INIS_DATABASE_URL: postgresql://${POSTGRES_USER:-inis}:${POSTGRES_PASSWORD:-inis_secure_password}@postgres:5432/${POSTGRES_DB:-inis_db}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-inis_redis_password}@redis:6379/0
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-inis}:${RABBITMQ_PASSWORD:-inis_rabbit_password}@rabbitmq:5672//
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-inis_minio_admin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-inis_minio_secret_key}
+      S3_BUCKET: inis-artifacts
+      S3_USE_SSL: "false"
+      JWT_SECRET: ${JWT_SECRET:-inis_jwt_production_secret_key_hex}
+      LLM_API_KEY: ${LLM_API_KEY:-PLACEHOLDER_LLM_KEY}
+      SERPER_API_KEY: ${SERPER_API_KEY:-PLACEHOLDER_SERPER_KEY}
+      AUTH_STRICT_MODE: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  rabbitmq_data:
