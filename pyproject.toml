@@ -21,6 +21,7 @@ dependencies = [
     "readability-lxml>=0.8.1",
     "pgvector>=0.3",
     "numpy>=1.26",
+    "boto3",
 ]
 
 [project.optional-dependencies]
