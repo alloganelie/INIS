@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+pypdf = pytest.importorskip("pypdf", reason="pypdf non installé")
+
 from app.connectors.base import Query
 from app.connectors.files.pdf_connector import PDFConnector
 

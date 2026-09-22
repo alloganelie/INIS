@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+docx = pytest.importorskip("docx", reason="python-docx non installé")
+
 from app.connectors.base import Query
 from app.connectors.files.docx_connector import DOCXConnector
 
