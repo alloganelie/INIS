@@ -75,12 +75,17 @@ def test_session_entity_imports() -> None:
 
 
 def test_email_vo_validates() -> None:
-    """Value object Email (skip si module absent)."""
-    _require_any_symbol(
-        "app.domain.value_objects.email", ["Email", "EmailAddress"]
-    ) if _has_module("app.domain.value_objects.email") else pytest.skip(
-        "module absent: app.domain.value_objects.email"
+    """Value object Email : valide accepte, invalide rejette (skip si absent)."""
+    module_name = "app.domain.value_objects.email"
+    module = _import_or_skip(module_name)
+    email_cls = getattr(module, "Email", None) or getattr(
+        module, "EmailAddress", None
     )
+    if email_cls is None:
+        pytest.skip(f"aucun symbole ['Email', 'EmailAddress'] in {module_name}")
+    assert str(email_cls("test@example.com")) == "test@example.com"
+    with pytest.raises(ValueError):
+        email_cls("not-an-email")
 
 
 def test_account_repository_imports() -> None:
@@ -139,101 +144,109 @@ def test_rss_connector_imports() -> None:
 
 
 def test_password_hasher_imports() -> None:
-    """Hachage mot de passe (skip si symbole absent : app/core/hashing.py vide)."""
-    for candidate in (
-        "app.core.hashing",
-        "app.security.authn.password_hasher",
-    ):
-        if _has_module(candidate):
-            try:
-                return _require_any_symbol(
-                    candidate, ["PasswordHasher", "hash_password", "verify_password"]
-                )
-            except Exception:
-                continue
-    pytest.skip(
-        "aucun symbole [PasswordHasher, hash_password, verify_password] "
-        "in app.core.hashing, app.security.authn.password_hasher"
+    """Hachage mot de passe (skip si symbole absent)."""
+    _require_any_symbol(
+        "app.api.v1.accounts.password_hasher", ["PasswordHasher"]
     )
 
 
 async def test_accounts_endpoint_register() -> None:
-    """POST /v1/accounts/register (skip si endpoint absent)."""
-    for candidate in ("app.api.v1.accounts", "app.api.v1.accounts.router"):
-        if _has_symbol(candidate, "router"):
-            import httpx
-            from fastapi import FastAPI
+    """POST /v1/accounts → 201 (skip si endpoint absent)."""
+    module_name = "app.api.v1.accounts.router"
+    module = _import_or_skip(module_name)
+    router = getattr(module, "router", None)
+    if router is None:
+        pytest.skip(f"symbol absent: router in {module_name}")
+    reset = getattr(module, "reset_accounts_store", None)
+    if callable(reset):
+        reset()
 
-            module = importlib.import_module(candidate)
-            app = FastAPI()
-            app.include_router(module.router, prefix="/v1")
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(
-                transport=transport, base_url="http://test"
-            ) as client:
-                response = await client.post(
-                    "/v1/accounts/register",
-                    json={"email": "test@example.com", "password": "secret123"},
-                )
-            assert response.status_code in (200, 201), response.text
-            return
-    pytest.skip("endpoint absent: POST /v1/accounts/register")
+    import httpx
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    # Le router porte déjà prefix="/accounts" : monter sous "/v1" donne /v1/accounts.
+    app.include_router(router, prefix="/v1")
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/v1/accounts",
+            json={
+                "username": "wave1user",
+                "email": "wave1user@example.com",
+                "password": "secret123",
+            },
+        )
+    assert response.status_code == 201, response.text
+    assert response.json().get("id", "").startswith("ACC_")
 
 
 async def test_accounts_endpoint_login() -> None:
-    """POST /v1/accounts/login (skip si endpoint absent)."""
-    for candidate in ("app.api.v1.accounts", "app.api.v1.accounts.router"):
-        if _has_symbol(candidate, "router"):
-            import httpx
-            from fastapi import FastAPI
+    """Register puis POST /v1/auth/login → 200 (skip si endpoint absent)."""
+    accounts_module = _import_or_skip("app.api.v1.accounts.router")
+    auth_module = _import_or_skip("app.api.v1.auth.router")
+    accounts_router = getattr(accounts_module, "router", None)
+    auth_router = getattr(auth_module, "router", None)
+    if accounts_router is None or auth_router is None:
+        pytest.skip("symbol absent: router in accounts/auth")
+    reset = getattr(accounts_module, "reset_accounts_store", None)
+    if callable(reset):
+        reset()
 
-            module = importlib.import_module(candidate)
-            app = FastAPI()
-            app.include_router(module.router, prefix="/v1")
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(
-                transport=transport, base_url="http://test"
-            ) as client:
-                response = await client.post(
-                    "/v1/accounts/login",
-                    json={"email": "test@example.com", "password": "secret123"},
-                )
-            assert response.status_code == 200, response.text
-            return
-    pytest.skip("endpoint absent: POST /v1/accounts/login")
+    import httpx
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    app.include_router(accounts_router, prefix="/v1")
+    app.include_router(auth_router, prefix="/v1")
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/v1/accounts",
+            json={
+                "username": "wave1login",
+                "email": "wave1login@example.com",
+                "password": "secret123",
+            },
+        )
+        assert created.status_code == 201, created.text
+        response = await client.post(
+            "/v1/auth/login",
+            json={"username": "wave1login", "password": "secret123"},
+        )
+    assert response.status_code == 200, response.text
+    assert response.json().get("access_token")
 
 
 def test_password_hash_verify_roundtrip() -> None:
     """Hash puis vérification mot de passe (skip si hasher absent)."""
-    for module_name in ("app.core.hashing", "app.security.authn.password_hasher"):
-        if not _has_module(module_name):
-            continue
-        module = importlib.import_module(module_name)
-        hasher = getattr(module, "PasswordHasher", None)
-        if hasher is not None:
-            hashed = hasher.hash("secret123")
-            assert hasher.verify("secret123", hashed) is True
-            assert hasher.verify("wrong", hashed) is False
-            return
-        hash_fn = getattr(module, "hash_password", None)
-        verify_fn = getattr(module, "verify_password", None)
-        if callable(hash_fn) and callable(verify_fn):
-            hashed = hash_fn("secret123")
-            assert verify_fn("secret123", hashed) is True
-            assert verify_fn("wrong", hashed) is False
-            return
-    pytest.skip("hasher absent : aucun roundtrip vérifiable")
+    module_name = "app.api.v1.accounts.password_hasher"
+    module = _import_or_skip(module_name)
+    hasher = getattr(module, "PasswordHasher", None)
+    if hasher is None:
+        pytest.skip(f"symbol absent: PasswordHasher in {module_name}")
+    hashed = hasher.hash("secret123")
+    assert hashed != "secret123"
+    assert hasher.verify("secret123", hashed) is True
+    assert hasher.verify("wrong", hashed) is False
 
 
 def test_cloud_configs_exist() -> None:
-    """Configs cloud (skip si deploy/cloud/ absent : constaté helm+k8s seuls)."""
+    """Configs cloud (skip si fichier absent)."""
     cloud = ROOT / "deploy" / "cloud"
     if not cloud.is_dir():
         pytest.skip("répertoire absent: deploy/cloud/")
     _require_files(
         [
-            cloud / "main.tf",
-            cloud / "variables.tf",
+            cloud / "README.md",
+            cloud / "k8s" / "deployment.yaml.example",
+            cloud / "k8s" / "secrets.yaml.example",
+            cloud / "helm" / "Chart.yaml",
+            cloud / "docker-compose.prod.yaml.example",
         ],
         "configs cloud",
     )
