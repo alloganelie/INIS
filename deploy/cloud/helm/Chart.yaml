@@ -1,0 +1,14 @@
+apiVersion: v2
+name: inis
+description: Enterprise Helm Chart for INIS Intelligent Information Service
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+maintainers:
+  - name: INIS Team
+    email: dev@inis.internal
+keywords:
+  - inis
+  - ai-agent
+  - knowledge
+  - vector-search

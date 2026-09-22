@@ -1,0 +1,92 @@
+# Default values for inis Helm chart.
+
+replicaCount: 3
+
+image:
+  repository: inis-registry.example.com/inis/api
+  pullPolicy: IfNotPresent
+  tag: "0.1.0"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  fsGroup: 10001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 8000
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "64m"
+  hosts:
+    - host: inis.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: inis-tls-cert
+      hosts:
+        - inis.example.com
+
+resources:
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 75
+  targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Application configuration
+config:
+  environment: "production"
+  logLevel: "INFO"
+  corsOrigins: "https://inis.example.com"
+  s3Bucket: "inis-artifacts"
+  s3Region: "eu-west-3"
+  s3UseSsl: "true"
+  authStrictMode: "true"
+  accessTokenExpireMinutes: "60"
+
+# Secrets placeholders
+secrets:
+  databaseUrl: "postgresql://inis_user:PLACEHOLDER_PASS@postgres:5432/inis_db"
+  redisUrl: "redis://:PLACEHOLDER_PASS@redis:6379/0"
+  rabbitmqUrl: "amqp://inis:PLACEHOLDER_PASS@rabbitmq:5672//"
+  s3Endpoint: "https://s3.eu-west-3.amazonaws.com"
+  s3AccessKey: "PLACEHOLDER_S3_KEY"
+  s3SecretKey: "PLACEHOLDER_S3_SECRET"
+  jwtSecret: "PLACEHOLDER_JWT_SECRET"
+  llmApiKey: "PLACEHOLDER_LLM_KEY"
+  serperApiKey: "PLACEHOLDER_SERPER_KEY"

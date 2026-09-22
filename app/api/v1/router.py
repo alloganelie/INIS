@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from app.api.v1.accounts.router import router as accounts_router
 from app.api.v1.agents.router import router as agents_router
 from app.api.v1.auth.router import router as auth_router
 from app.api.v1.confidence.router import router as confidence_router
@@ -27,6 +28,7 @@ def get_status() -> dict[str, str]:
     return {"status": "ready"}
 
 
+router.include_router(accounts_router)
 router.include_router(auth_router)
 router.include_router(requests_router)
 router.include_router(progress_router)
@@ -40,3 +42,5 @@ router.include_router(confidence_router)
 router.include_router(changelog_router)
 router.include_router(metrics_router)
 router.include_router(health_router)
+
+__all__ = ["accounts_router", "router"]
