@@ -1,11 +1,15 @@
 """In-memory and database-backed writers for INIS audit events."""
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.errors import ValidationError
+from app.core.hashing import after_hash as compute_after_hash
+from app.core.hashing import before_hash as compute_before_hash
 from app.domain.value_objects.ulid import ULID
 
 
@@ -30,8 +34,27 @@ class AuditWriter:
         self._engine = engine
         self._events: dict[str, dict] = {}
 
-    async def write(self, event: dict) -> None:
-        """Store an audit event after adding its required technical metadata."""
+    async def write(
+        self,
+        event: dict,
+        *,
+        before: Mapping[str, Any] | None = None,
+        after: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Store an audit event after adding its required technical metadata.
+
+        Args:
+            event: Audit event following the §20.1 contract.
+            before: Optional snapshot of the record **before** the
+                modification. Its deterministic SHA-256 fills ``before_hash``
+                when the caller did not supply one.
+            after: Optional snapshot of the record **after** the modification.
+                Its deterministic SHA-256 fills ``after_hash`` when the caller
+                did not supply one.
+
+        Raises:
+            ValidationError: If a required §20.1 field is missing.
+        """
         missing_fields = _REQUIRED_EVENT_FIELDS.difference(event)
         if missing_fields:
             missing = ", ".join(sorted(missing_fields))
@@ -40,8 +63,8 @@ class AuditWriter:
         stored_event = dict(event)
         stored_event.setdefault("audit_event_id", ULID.new("AUD_"))
         stored_event.setdefault("timestamp", self._utc_timestamp())
-        stored_event.setdefault("before_hash", None)
-        stored_event.setdefault("after_hash", None)
+        stored_event.setdefault("before_hash", compute_before_hash(before))
+        stored_event.setdefault("after_hash", compute_after_hash(after))
         if self._engine is None:
             self._events[stored_event["audit_event_id"]] = stored_event
             return

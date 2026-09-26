@@ -2,10 +2,9 @@
 
 from datetime import UTC, datetime, timedelta
 
-import pytest
 
 from app.registry.agent_registry import AgentIdentity, AgentRegistry
-from app.workers.heartbeat_worker import HeartbeatWorker, DEFAULT_TTL_SECONDS
+from app.workers.heartbeat_worker import HeartbeatWorker
 
 
 def _iso_z(value: datetime) -> str:

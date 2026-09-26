@@ -321,7 +321,7 @@ async def test_pipeline_marks_unsourced_facts_as_hypothesis(monkeypatch: pytest.
 @pytest.mark.asyncio
 async def test_pipeline_real_web_search_wiring(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stage 3 wires ProviderRouter → FactExtractor → §0.2-compliant findings per §9/§10."""
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import AsyncMock
     from app.domain.entities.search_result import SearchResult
 
     # ---- mock ProviderRouter.search ----------------------------------------

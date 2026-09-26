@@ -110,3 +110,39 @@ def test_audit_writer_lists_persisted_events_with_mock_engine() -> None:
             "action": "search",
         }
     ]
+
+
+def test_audit_writer_fills_hashes_from_record_snapshots() -> None:
+    """§20.1: before/after digests are computed from the record snapshots."""
+    from app.core.hashing import after_hash, before_hash
+
+    async def write_and_read() -> dict:
+        writer = AuditWriter()
+        await writer.write(
+            event(),
+            before={"status": "active"},
+            after={"status": "archived"},
+        )
+        return (await writer.list_events("agent-1"))[0]
+
+    stored = asyncio.run(write_and_read())
+
+    assert stored["before_hash"] == before_hash({"status": "active"})
+    assert stored["after_hash"] == after_hash({"status": "archived"})
+    assert stored["before_hash"] != stored["after_hash"]
+
+
+def test_audit_writer_keeps_explicit_hashes_over_snapshots() -> None:
+    """An explicit hash provided by the caller is never overwritten."""
+    async def write_and_read() -> dict:
+        writer = AuditWriter()
+        explicit = dict(event())
+        explicit["before_hash"] = "f" * 64
+        await writer.write(explicit, before={"status": "active"})
+        return (await writer.list_events("agent-1"))[0]
+
+    stored = asyncio.run(write_and_read())
+
+    assert stored["before_hash"] == "f" * 64
+    assert stored["after_hash"] is None
+

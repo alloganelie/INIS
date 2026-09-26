@@ -7,7 +7,6 @@ from app.registry.agent_registry import (
     AgentRegistry,
     AgentNotFoundError,
     AgentAlreadyRegisteredError,
-    VALID_STATUSES,
 )
 
 

@@ -2,7 +2,6 @@
 
 import time
 
-import pytest
 
 from app.security.rate_limiting import RateLimiter, RateLimitStore
 

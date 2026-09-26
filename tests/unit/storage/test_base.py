@@ -2,7 +2,6 @@
 
 from datetime import datetime, timezone
 
-import pytest
 from sqlalchemy import Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 

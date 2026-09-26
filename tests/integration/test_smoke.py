@@ -1,6 +1,5 @@
 """Smoke tests for PHASE-01 foundations per §33."""
 
-import pytest
 
 from app.domain.entities.information_package import InformationPackage
 from app.domain.value_objects.ulid import ULID

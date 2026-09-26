@@ -1,6 +1,5 @@
 """Tests for RBAC engine per INIS §19.3."""
 
-import pytest
 
 from app.security.authz import RBACEngine
 

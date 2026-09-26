@@ -1,6 +1,5 @@
 """Tests for quality scoring per INIS §13.3."""
 
-import pytest
 
 from app.quality.score import DEFAULT_WEIGHTS, score, weighted_mean
 

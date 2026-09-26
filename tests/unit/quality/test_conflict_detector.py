@@ -2,7 +2,6 @@
 
 import pytest
 
-from app.domain.entities.conflict import Conflict
 from app.domain.entities.information_unit import InformationUnit
 from app.domain.value_objects.ulid import ULID
 from app.quality.conflict import (
