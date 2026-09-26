@@ -103,6 +103,7 @@ app/domain/value_objects/
 ├── semver.py                      # Version sémantique avec comparaison
 ├── storage_ref.py                 # s3://bucket/path avec validation format
 ├── sha256_hash.py                 # Hash immuable avec vérification intégrité
+├── request_constraints.py         # RequestConstraints et RequiredOutput (§7 canonical)
 ├── bcp47_language.py              # Code langue BCP-47 validé
 └── money.py                       # Montant + devise pour budgets et coûts
 ```
