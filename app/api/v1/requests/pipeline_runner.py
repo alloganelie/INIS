@@ -127,7 +127,7 @@ class PipelineRunner:
             enricher = ContextEnricher()
             enricher.enrich(parsed_req, context)
             detector = ClarificationDetector()
-            clarification = detector.detect(parsed_req)
+            detector.detect(parsed_req)
             extractor = RequirementExtractor()
             reqs = extractor.extract(parsed_req)
             requirements_list = [r.description for r in reqs] if reqs else [objective]

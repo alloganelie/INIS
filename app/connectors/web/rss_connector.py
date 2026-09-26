@@ -22,7 +22,6 @@ from app.connectors.base import (
     Query,
     RawSource,
     SourceCandidate,
-    SourceConnector,
     SourceMetadata,
 )
 from app.core.errors import InfrastructureError

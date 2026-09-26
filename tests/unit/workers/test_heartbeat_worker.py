@@ -1,11 +1,16 @@
 """Tests for HeartbeatWorker."""
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from app.registry.agent_registry import AgentIdentity, AgentRegistry
 from app.workers.heartbeat_worker import HeartbeatWorker, DEFAULT_TTL_SECONDS
+
+
+def _iso_z(value: datetime) -> str:
+    """Serialise a timezone-aware datetime the way the registry does."""
+    return value.isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def create_test_identity(agent_id: str = "test_agent") -> AgentIdentity:
@@ -38,8 +43,8 @@ class TestHeartbeatWorker:
         registry.register("agent_1", identity)
 
         # Set last_seen_at to 120 seconds ago (TTL is 90)
-        old_time = datetime.utcnow() - timedelta(seconds=120)
-        identity.last_seen_at = old_time.isoformat(timespec="microseconds") + "Z"
+        old_time = datetime.now(UTC) - timedelta(seconds=120)
+        identity.last_seen_at = _iso_z(old_time)
 
         worker = HeartbeatWorker(registry, ttl_seconds=90)
         stale = worker.check_stale()
@@ -65,8 +70,8 @@ class TestHeartbeatWorker:
         registry.register("agent_1", identity)
 
         # Set last_seen_at to 120 seconds ago
-        old_time = datetime.utcnow() - timedelta(seconds=120)
-        identity.last_seen_at = old_time.isoformat(timespec="microseconds") + "Z"
+        old_time = datetime.now(UTC) - timedelta(seconds=120)
+        identity.last_seen_at = _iso_z(old_time)
 
         # Use a 'now' that's only 30 seconds after last_seen
         check_time = old_time + timedelta(seconds=30)
@@ -83,8 +88,8 @@ class TestHeartbeatWorker:
         registry.register("agent_1", identity)
 
         # Set last_seen_at to 120 seconds ago
-        old_time = datetime.utcnow() - timedelta(seconds=120)
-        identity.last_seen_at = old_time.isoformat(timespec="microseconds") + "Z"
+        old_time = datetime.now(UTC) - timedelta(seconds=120)
+        identity.last_seen_at = _iso_z(old_time)
 
         worker = HeartbeatWorker(registry, ttl_seconds=90)
         marked = worker.mark_stale_as_unavailable()
@@ -95,7 +100,7 @@ class TestHeartbeatWorker:
 
     def test_process_heartbeat_updates_last_seen(self) -> None:
         """Test process_heartbeat updates last_seen_at."""
-        from datetime import datetime, timedelta
+        from datetime import UTC, datetime, timedelta
 
         registry = AgentRegistry()
         identity = create_test_identity("agent_1")
@@ -104,7 +109,7 @@ class TestHeartbeatWorker:
         original_last_seen = identity.last_seen_at
 
         # Use a later time for the heartbeat
-        later_time = datetime.utcnow() + timedelta(seconds=1)
+        later_time = datetime.now(UTC) + timedelta(seconds=1)
         worker = HeartbeatWorker(registry, ttl_seconds=90)
         result = worker.process_heartbeat("agent_1", health={"latency_ms_p95": 50}, now=later_time)
 
@@ -127,7 +132,7 @@ class TestHeartbeatWorker:
         registry = AgentRegistry()
         worker = HeartbeatWorker(registry, ttl_seconds=90)
 
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         next_check = worker.get_next_check_time(now)
 
         # Default TTL is 90, check interval should be TTL/3 = 30

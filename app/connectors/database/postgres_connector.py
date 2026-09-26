@@ -13,7 +13,6 @@ from app.connectors.base import (
     Query,
     RawSource,
     SourceCandidate,
-    SourceConnector,
     SourceMetadata,
 )
 from app.storage.database.engine import create_engine

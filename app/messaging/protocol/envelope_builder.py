@@ -1,6 +1,7 @@
 """Envelope builder for INIS messaging protocol per §5.1."""
 
-from datetime import datetime
+import secrets
+from datetime import UTC, datetime
 from typing import Any
 from typing import Optional
 
@@ -92,17 +93,15 @@ class EnvelopeBuilder:
         message_id = ULID.new("MSG_")
         corr_id = correlation_id or ULID.new("CORR_")
 
-        now_utc = datetime.utcnow().isoformat(timespec="microseconds") + "Z"
+        now_utc = datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
         sender_id = sender_agent_id or self._default_sender_agent_id
         sender_version = sender_agent_version or self._default_sender_agent_version
         sender_instance_id = sender_agent_instance_id or self._default_sender_agent_instance_id
 
         if trace_id is None:
-            import secrets
             trace_id = secrets.token_hex(16)
         if span_id is None:
-            import secrets
             span_id = secrets.token_hex(8)
 
         envelope: dict[str, Any] = {

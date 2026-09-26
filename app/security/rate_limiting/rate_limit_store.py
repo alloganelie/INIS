@@ -1,6 +1,5 @@
 """Rate limit store per INIS §19."""
 
-import time
 from typing import Dict, Tuple
 
 
