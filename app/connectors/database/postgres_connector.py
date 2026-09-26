@@ -15,7 +15,7 @@ from app.connectors.base import (
     SourceCandidate,
     SourceMetadata,
 )
-from app.storage.database.engine import create_engine
+from app.storage.database.engine import create_engine_or_none
 
 
 class PostgresConnector:
@@ -49,11 +49,7 @@ class PostgresConnector:
     async def _get_engine(self) -> Optional[AsyncEngine]:
         """Get or create the async engine. Returns None in degraded mode."""
         if self._engine is None:
-            try:
-                self._engine = create_engine(self._connection_string)
-            except Exception:
-                # Degraded mode: engine not available
-                return None
+            self._engine = create_engine_or_none(self._connection_string)
         return self._engine
 
     async def discover(self, query: Query) -> list[SourceCandidate]:

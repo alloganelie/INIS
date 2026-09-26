@@ -5,7 +5,7 @@ from typing import List, Optional
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from app.storage.database.engine import create_engine
+from app.storage.database.engine import create_engine_or_none
 
 
 class FullTextSearch:
@@ -23,11 +23,7 @@ class FullTextSearch:
     async def _get_engine(self) -> Optional[AsyncEngine]:
         """Get or create the async engine. Returns None in degraded mode."""
         if self._engine is None:
-            try:
-                self._engine = create_engine(self._connection_string)
-            except Exception:
-                # Degraded mode: engine not available
-                return None
+            self._engine = create_engine_or_none(self._connection_string)
         return self._engine
 
     async def search(

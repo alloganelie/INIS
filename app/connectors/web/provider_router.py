@@ -1,29 +1,21 @@
 """Web-search provider router (§10.1).
 
-``SearchResult`` is imported from the consolidated
-``app.domain.entities.search_result`` module (Codex). The
-``SearchProvider`` protocol stays local: ``app/domain/interfaces/
-search_provider.py`` is still an empty placeholder. Providers import
-these types from this module; the router never imports providers
-(injection only, no cycle).
+``SearchResult`` and ``SearchProvider`` come from their canonical
+locations — ``app.domain.entities.search_result`` and
+``app.domain.interfaces.search_provider`` — and are re-exported here so
+providers keep a single import site. The router never imports providers
+(injection only, lazy imports in ``_auto_select_primary``), which keeps the
+module free of cycles.
 """
 
 from __future__ import annotations
 
 import os
-from typing import Protocol
-from typing import runtime_checkable
 
 from app.domain.entities.search_result import SearchResult
+from app.domain.interfaces.search_provider import SearchProvider
 
-
-@runtime_checkable
-class SearchProvider(Protocol):
-    """Local copy of the §10.1 SearchProvider contract (see module note)."""
-
-    provider_id: str
-
-    async def search(self, query: str, limit: int) -> list[SearchResult]: ...
+__all__ = ["ProviderRouter", "SearchProvider", "SearchResult"]
 
 
 class ProviderRouter:
