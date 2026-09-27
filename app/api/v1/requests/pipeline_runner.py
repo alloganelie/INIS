@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import UTC, datetime, timezone
 import json
 import time
@@ -28,6 +29,11 @@ PIPELINE_STEPS_TOTAL = 22
 #: §41.5 L1 cache namespaces used by the web acquisition stage.
 CACHE_NS_WEB_SEARCH = "web_search"
 CACHE_NS_PAGE_FETCH = "page_fetch"
+
+#: §41.13 Safeguards on execution complexity
+DEFAULT_MAX_PLAN_STEPS = 50
+DEFAULT_MAX_PARALLEL_TOOL_CALLS = 10
+PLANNING_LIMIT_EXCEEDED_STATUS = "PLANNING_LIMIT_EXCEEDED"
 
 
 class PipelineRunner:
@@ -703,6 +709,30 @@ class PipelineRunner:
         execution_status = "completed"
 
         steps_to_run = plan.get("steps", []) if isinstance(plan, dict) else []
+
+        # §41.13 Safeguard: max_plan_steps
+        max_plan_steps = int(os.getenv("MAX_PLAN_STEPS", DEFAULT_MAX_PLAN_STEPS))
+        if len(steps_to_run) > max_plan_steps:
+            delivery_response = {
+                "response_id": f"RESP_{PythonUlid()}",
+                "request_id": request_id,
+                "status": PLANNING_LIMIT_EXCEEDED_STATUS,
+                "summary": f"Plan steps ({len(steps_to_run)}) exceeded safeguard threshold ({max_plan_steps})",
+                "findings": [],
+                "information_units": [],
+                "evidence": [],
+                "sources": [],
+                "limitations": [f"Plan rejected: {len(steps_to_run)} steps > {max_plan_steps}"],
+                "confidence": {"score": 0.0},
+            }
+            self._run_states[request_id] = delivery_response
+            self._running.discard(request_id)
+            return delivery_response
+
+        # §41.13 Safeguard: max_parallel_tool_calls semaphore
+        max_tool_calls = int(os.getenv("MAX_PARALLEL_TOOL_CALLS", DEFAULT_MAX_PARALLEL_TOOL_CALLS))
+        tool_semaphore = asyncio.Semaphore(max_tool_calls)
+
 
         try:
             from app.connectors.web.provider_router import ProviderRouter
