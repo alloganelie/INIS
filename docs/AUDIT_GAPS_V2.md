@@ -82,16 +82,16 @@ Légende : ✅ **Conforme** · 🟡 **Partiel** · ❌ **Absent**
 
 | § | Sujet | Statut | Fichier(s) | Preuve | Effort |
 |---|---|---|---|---|---|
-| §41.1 | Lifecycle requêtes longues | 🟡 | `app/api/v1/requests/progress_handler.py` (snapshot synthétique) | `tests/api/test_progress_changelog.py` | M |
-| §41.2 | Quotas et facturation | ❌ | — | — | M |
+| §41.1 | Lifecycle requêtes longues | ✅ | `app/agents/runtime/lifecycle.py` | `tests/api/test_request_resume.py`, `tests/agentic/test_resume_after_crash.py` | — |
+| §41.2 | Quotas et facturation | ✅ | `app/governance/budget/quotas.py` | `tests/unit/governance/test_quotas.py`, `tests/agentic/test_budget_exceeded.py` | — |
 | §41.3 | i18n et multilinguisme | ❌ | — | — | M |
 | §41.4 | Credential vault | ❌ | `app/security/vault/` vide | — | M |
-| §41.5 | Cache L1/L2 + invalidation | ❌ | `app/storage/cache/` vide | — | M |
+| §41.5 | Cache L1/L2 + invalidation | 🟡 | `app/storage/cache/cache_store.py` (L1 câblé ; L2/L3 absents) | `tests/unit/storage/test_cache_store.py`, `tests/agentic/test_data_changed_between_searches.py` | M |
 | §41.6 | Chunked datasets | ❌ | — | — | M |
 | §41.7 | Désinformation | ❌ | `app/quality/suspicion/` vide | — | M |
 | §41.8 | Retry + circuit breaker | 🟡 | `RetryPolicy` existe (`dead_letter_handler.py:27`) ; **CircuitBreaker absent** | — | M |
 | §41.9 | GDPR complet | 🟡 | `GDPRHandler` existe ; portabilité/rectification absents | `tests/unit/governance/test_gdpr_handler.py` (vide) | M |
-| §41.10 | Topologie de délégation | ❌ | — | — | M |
+| §41.10 | Topologie de délégation | ✅ | `app/registry/delegation_graph.py`, `app/registry/trust_graph.py` | `tests/unit/registry/test_delegation_graph.py`, `tests/agentic/test_delegation_cycle_detection.py` | — |
 | §41.11 | Compatibilité protocole | ❌ | version codée en dur `"1.0"` dans 3 fichiers | `tests/unit/messaging/test_envelope_validator.py:48` | M |
 | §41.12 | Observabilité LLM | 🟡 | `app/llm/tracing/llm_trace_writer.py` existe, non câblé au pipeline | `tests/integration/test_phase_09_e2e.py:126` | S |
 | §41.13 | Tests de charge | ❌ | `tests/performance/*` vides | — | M |
@@ -212,24 +212,33 @@ mais n'est alimenté par aucun outil.
 
 ---
 
-## 5. §33.3 — Scénarios agentiques : 0 / 10 couverts
+## 5. §33.3 — Scénarios agentiques : 10 / 10 couverts ✅ (résolu le 27/09/2026)
 
-| # | Scénario SPEC | Test prévu | Taille | Couvert |
+| # | Scénario SPEC | Test prévu | État | Couvert |
 |---|---|---|---|---|
-| 1 | source fiable unique | `tests/agentic/test_single_reliable_source.py` | **0 o** | ❌ |
-| 2 | sources contradictoires | `tests/agentic/test_conflicting_sources.py` | **0 o** | ❌ |
-| 3 | information obsolète | `tests/agentic/test_stale_information.py` | **0 o** | ❌ |
-| 4 | information insuffisante | `tests/agentic/test_insufficient_evidence.py` | **0 o** | ❌ |
-| 5 | outil indisponible | `tests/agentic/test_tool_unavailable.py` | **0 o** | ❌ |
-| 6 | agent externe indisponible | `tests/agentic/test_agent_unavailable.py` | **0 o** | ❌ |
-| 7 | permission refusée | `tests/agentic/test_access_denied.py` | **0 o** | ❌ |
-| 8 | demande ambiguë | `tests/agentic/test_ambiguous_request.py` | **0 o** | ❌ |
-| 9 | réutilisation de mémoire | `tests/agentic/test_memory_reuse.py` | **0 o** | ❌ |
-| 10 | données modifiées entre 2 recherches | `tests/agentic/test_data_changed_between_searches.py` | **0 o** | ❌ |
+| 1 | source fiable unique | `tests/agentic/test_single_reliable_source.py` | rempli | ✅ |
+| 2 | sources contradictoires | `tests/agentic/test_conflicting_sources.py` | rempli | ✅ |
+| 3 | information obsolète | `tests/agentic/test_stale_information.py` | rempli | ✅ |
+| 4 | information insuffisante | `tests/agentic/test_insufficient_evidence.py` | rempli | ✅ |
+| 5 | outil indisponible | `tests/agentic/test_tool_unavailable.py` | rempli | ✅ |
+| 6 | agent externe indisponible | `tests/agentic/test_agent_unavailable.py` | rempli | ✅ |
+| 7 | permission refusée | `tests/agentic/test_access_denied.py` | rempli | ✅ |
+| 8 | demande ambiguë | `tests/agentic/test_ambiguous_request.py` | rempli | ✅ |
+| 9 | réutilisation de mémoire | `tests/agentic/test_memory_reuse.py` | rempli | ✅ |
+| 10 | données modifiées entre 2 recherches | `tests/agentic/test_data_changed_between_searches.py` | rempli | ✅ |
 
-Couverture §33.4 (non-hallucination) : partielle — `tests/agentic/test_non_hallucination.py` vide,
-mais `tests/integration/test_phase_10_e2e.py:194-247` couvre 2 cas (§0.2 findings sourcés,
-hypothèses sans preuve).
+Couverture §33.4 (non-hallucination) : résolue — `tests/agentic/test_non_hallucination.py`
+couvre 4 cas (findings tracés `SRC_` + `evidence_id`, claims sans preuve reléguées en
+hypothèses, interdiction de blanchiment hypothèse → finding, chaîne de provenance des faits
+extraits vers la source livrée), en plus de `tests/integration/test_phase_10_e2e.py:194-247`
+(2 cas §0.2).
+
+> **État v2 (27/09/2026)** : les 5 derniers fichiers vides de `tests/agentic/`
+> (`test_data_changed_between_searches`, `test_delegation_cycle_detection`,
+> `test_budget_exceeded`, `test_resume_after_crash`, `test_non_hallucination`) sont remplis.
+> Suite complète **1038 passed, 1 skipped** ; `check_architecture.py` et `check_contracts.py` OK.
+> Bug corrigé au passage : `PipelineRunner.run` ignorait la clé `budget` d'un payload `dict`
+> (chemin `RequestWorker`) — la garde §41.2 ne s'installait jamais, exécution non bornée.
 
 ---
 

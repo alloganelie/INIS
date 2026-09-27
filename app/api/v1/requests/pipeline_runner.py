@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import UTC, datetime, timezone
 import json
 import time
@@ -11,6 +10,14 @@ from typing import Any, AsyncGenerator
 
 from app.agents.runtime.lifecycle import GRACEFUL_EXPIRY_STATUS, RequestLifecycle
 from app.domain.value_objects.ulid import ULID
+from app.core.statuses import resolve_delivery_status
+from app.planning.limits import (
+    PLANNING_LIMIT_EXCEEDED_STATUS,
+    ConcurrencyLimiter,
+    max_parallel_tool_calls,
+    max_plan_steps,
+)
+from app.quality.conflict.conflict_status import conflict_payload
 from app.governance.budget.quotas import (
     BUDGET_EXCEEDED_STATUS,
     GLOBAL_USAGE,
@@ -23,6 +30,11 @@ from app.storage.cache.cache_store import CacheStore
 from app.api.v1.requests.pipeline_persistence import persist_pipeline_delivery
 from ulid import ULID as PythonUlid
 
+#: §34 ``llm_cost`` fallback pricing (USD per token) when the provider response
+#: carries no ``cost_usd``. Documented estimate, not a billing figure.
+_LLM_COST_PER_INPUT_TOKEN = 1.5e-6
+_LLM_COST_PER_OUTPUT_TOKEN = 6.0e-6
+
 #: Nominal number of plan steps (§28 cycle) used for progress reporting.
 PIPELINE_STEPS_TOTAL = 22
 
@@ -30,10 +42,9 @@ PIPELINE_STEPS_TOTAL = 22
 CACHE_NS_WEB_SEARCH = "web_search"
 CACHE_NS_PAGE_FETCH = "page_fetch"
 
-#: §41.13 Safeguards on execution complexity
-DEFAULT_MAX_PLAN_STEPS = 50
-DEFAULT_MAX_PARALLEL_TOOL_CALLS = 10
-PLANNING_LIMIT_EXCEEDED_STATUS = "PLANNING_LIMIT_EXCEEDED"
+#: §41.13 Safeguards on execution complexity — thresholds and the
+#: ``ConcurrencyLimiter`` live in :mod:`app.planning.limits`; the names below
+#: are re-exported so existing importers keep working.
 
 
 class PipelineRunner:
@@ -52,6 +63,41 @@ class PipelineRunner:
         self._trace_step_ids: dict[tuple[str, str], str] = {}
         #: §41.5 — L1 cache backing web_search / fetch_page reuse.
         self._cache: CacheStore = CacheStore()
+        #: §41.13 — gate bounding concurrent tool calls of the last run.
+        self._last_tool_gate: ConcurrencyLimiter | None = None
+
+    # -- §34 metric feeds -----------------------------------------------
+
+    def _record_metric(self, name: str, *, failure: bool = False) -> None:
+        """Feed a §34 rate gauge (best effort — never breaks a delivery)."""
+        try:
+            from app.observability.metrics import record_outcome
+
+            record_outcome(name, failure=failure)
+        except Exception:  # noqa: BLE001 - observability never breaks the run
+            pass
+
+    def _observe_metric(self, name: str, value: float) -> None:
+        """Feed a §34 histogram (best effort — never breaks a delivery)."""
+        try:
+            from app.observability.metrics import observe_value
+
+            observe_value(name, float(value))
+        except Exception:  # noqa: BLE001 - observability never breaks the run
+            pass
+
+    def _add_cost(self, amount: float) -> None:
+        """Feed the §34 ``llm_cost`` counter (best effort)."""
+        try:
+            from app.observability.metrics import add_cost
+
+            add_cost(float(amount))
+        except Exception:  # noqa: BLE001 - observability never breaks the run
+            pass
+
+    def tool_gate(self) -> ConcurrencyLimiter | None:
+        """Return the §41.13 concurrency gate of the last executed run."""
+        return self._last_tool_gate
 
     # -- §41.5 L1 cache --------------------------------------------------
 
@@ -144,6 +190,7 @@ class PipelineRunner:
         self._lifecycles.clear()
         self._guards.clear()
         self._trace_step_ids.clear()
+        self._last_tool_gate = None
         if self._cache is not None:
             self._cache.clear()
             self._cache.hits = 0
@@ -317,6 +364,15 @@ class PipelineRunner:
             or 0
         )
         cost_usd = float(usage.get("cost_usd", 0.0) or 0.0)
+        # §34 — llm_cost: use the provider price when reported, otherwise a
+        # documented per-token estimate so the counter is never silent. The
+        # budget guard below keeps receiving the provider-reported value only.
+        self._add_cost(
+            cost_usd
+            if cost_usd > 0
+            else input_tokens * _LLM_COST_PER_INPUT_TOKEN
+            + output_tokens * _LLM_COST_PER_OUTPUT_TOKEN
+        )
         try:
             guard.charge_llm(input_tokens, output_tokens, cost_usd=cost_usd)
         except BudgetExceeded:
@@ -415,6 +471,7 @@ class PipelineRunner:
                 latency_ms=int(result.get("latency_ms", 0) or 0),
                 decision_summary=f"[{phase}] {decision_summary}".strip(),
             )
+            self._observe_metric("llm_latency", float(result.get("latency_ms", 0) or 0))
             return self._llm_traces.write(trace)
         except Exception:  # noqa: BLE001 - observability must never break the run
             return None
@@ -473,7 +530,11 @@ class PipelineRunner:
         )
 
         # §41.2 — install the budget guard before any metered work happens.
+        # A dict payload (RequestWorker path, direct calls) carries the budget
+        # under a key, not an attribute — same fallback as objective/context.
         budget = getattr(payload, "budget", None)
+        if budget is None and isinstance(payload, dict):
+            budget = payload.get("budget")
         if budget is not None and hasattr(budget, "to_domain"):
             budget = budget.to_domain()
         elif isinstance(budget, dict):
@@ -505,6 +566,9 @@ class PipelineRunner:
             "request_id": request_id,
         })
         requirements_list: list[str] = []
+        #: §33.3 — reasons why the objective is underspecified, echoed in the
+        #: delivery ``missing_information`` field instead of being discarded.
+        clarifications: list[str] = []
         try:
             from app.agents.understanding.clarification_detector import ClarificationDetector
             from app.agents.understanding.context_enricher import ContextEnricher
@@ -516,7 +580,7 @@ class PipelineRunner:
             enricher = ContextEnricher()
             enricher.enrich(parsed_req, context)
             detector = ClarificationDetector()
-            detector.detect(parsed_req)
+            clarifications = list(detector.detect(parsed_req).reasons)
             extractor = RequirementExtractor()
             reqs = extractor.extract(parsed_req)
             requirements_list = [r.description for r in reqs] if reqs else [objective]
@@ -711,27 +775,30 @@ class PipelineRunner:
         steps_to_run = plan.get("steps", []) if isinstance(plan, dict) else []
 
         # §41.13 Safeguard: max_plan_steps
-        max_plan_steps = int(os.getenv("MAX_PLAN_STEPS", DEFAULT_MAX_PLAN_STEPS))
-        if len(steps_to_run) > max_plan_steps:
+        max_plan_steps_limit = max_plan_steps()
+        if len(steps_to_run) > max_plan_steps_limit:
             delivery_response = {
                 "response_id": f"RESP_{PythonUlid()}",
                 "request_id": request_id,
                 "status": PLANNING_LIMIT_EXCEEDED_STATUS,
-                "summary": f"Plan steps ({len(steps_to_run)}) exceeded safeguard threshold ({max_plan_steps})",
+                "summary": f"Plan steps ({len(steps_to_run)}) exceeded safeguard threshold ({max_plan_steps_limit})",
                 "findings": [],
                 "information_units": [],
                 "evidence": [],
                 "sources": [],
-                "limitations": [f"Plan rejected: {len(steps_to_run)} steps > {max_plan_steps}"],
+                "limitations": [f"Plan rejected: {len(steps_to_run)} steps > {max_plan_steps_limit}"],
                 "confidence": {"score": 0.0},
             }
             self._run_states[request_id] = delivery_response
             self._running.discard(request_id)
+            self._record_metric("request_success_rate", failure=True)
+            self._record_metric("agent_success_rate", failure=True)
             return delivery_response
 
-        # §41.13 Safeguard: max_parallel_tool_calls semaphore
-        max_tool_calls = int(os.getenv("MAX_PARALLEL_TOOL_CALLS", DEFAULT_MAX_PARALLEL_TOOL_CALLS))
-        tool_semaphore = asyncio.Semaphore(max_tool_calls)
+        # §41.13 Safeguard: bound the number of concurrent tool calls
+        max_tool_calls = max_parallel_tool_calls()
+        tool_gate = ConcurrencyLimiter(max_tool_calls)
+        self._last_tool_gate = tool_gate
 
 
         try:
@@ -767,8 +834,8 @@ class PipelineRunner:
 
                     # ------ web_search ---------------------------------------
                     # §41.5: the L1 cache short-circuits identical queries.
-                    search_results = await self._search_with_cache(
-                        provider_router, str(query), 5
+                    search_results = await tool_gate.run(
+                        self._search_with_cache, provider_router, str(query), 5
                     )
 
                     step_output_snippets: list[str] = []
@@ -787,10 +854,13 @@ class PipelineRunner:
 
                         # Extract full page text
                         try:
-                            page = await self._extract_with_cache(wiki_extractor, url)
+                            page = await tool_gate.run(
+                                self._extract_with_cache, wiki_extractor, url
+                            )
                             page_text = page.get("text", "")
                         except Exception:
                             page_text = ""
+                            self._record_metric("source_failure_rate", failure=True)
 
                         text_to_extract = page_text if page_text else snippet or ""
 
@@ -830,8 +900,11 @@ class PipelineRunner:
                         "output": " | ".join(step_output_snippets) if step_output_snippets else f"No results for: {query}",
                         "results_count": len(search_results),
                     })
+                    # §34 — the step completed: one successful source acquisition.
+                    self._record_metric("source_failure_rate", failure=False)
 
                 except Exception as step_err:
+                    self._record_metric("source_failure_rate", failure=True)
                     step_results.append({
                         "step_id": step.get("step_id", ULID.new("STEP_")),
                         "status": "degraded",
@@ -1118,8 +1191,16 @@ class PipelineRunner:
 
         findings = verified_findings
 
-        # §1.3 — status depends on whether verified findings exist
-        delivery_status = "completed" if findings else "INSUFFICIENT_EVIDENCE"
+        # §14.4 — unit-level conflicts are detected in the quality zone over
+        # InformationUnits (§27). The facts accumulated here carry no
+        # subject/predicate triple, so nothing is flagged; the slot exists so
+        # ``assess_conflicts`` output drops straight into the delivery.
+        conflicts: list[Any] = []
+
+        # §1.3 — the status is decided by app.core.statuses, never inline.
+        delivery_status = resolve_delivery_status(
+            findings=findings, conflicts=len(conflicts)
+        )
         # §41.2 — a breached budget is reported explicitly, never silently.
         if budget_exceeded:
             delivery_status = BUDGET_EXCEEDED_STATUS
@@ -1138,6 +1219,13 @@ class PipelineRunner:
         base_limitations: list[str] = [
             "Les affirmations sans source_id vérifié sont marquées comme hypothèses §0.2."
         ]
+        # §33.3 « demande ambiguë » — the ambiguity is stated, never hidden.
+        missing_information: list[str] = list(clarifications)
+        if missing_information:
+            base_limitations.append(
+                "Demande ambiguë (§33.3) — informations manquantes : "
+                + "; ".join(missing_information)
+            )
         if "degraded" in execution_status:
             base_limitations.append(
                 f"Web connectors non disponibles ({execution_status}) — fallback sur stub."
@@ -1184,11 +1272,11 @@ class PipelineRunner:
             "datasets": [],
             "artifacts": [],
             "transformations": [],
-            "conflicts": [],
+            "conflicts": conflict_payload(conflicts),
             "confidence": confidence_details,
             "limitations": base_limitations,
             "assumptions": assumptions_from_llm,
-            "missing_information": [],
+            "missing_information": missing_information,
             # §41.2 — every delivery carries its consumption report.
             "usage_report": usage_report,
             "recommended_next_actions": [
@@ -1232,13 +1320,11 @@ class PipelineRunner:
         lifecycle.commit_step("DELIVERY", {"response_id": resp_id})
         lifecycle.complete()
 
-        # Notify observability metrics if present
-        try:
-            from app.observability.metrics import DEFAULT_REGISTRY
-            DEFAULT_REGISTRY.increment("agent_success_rate", 1)
-            DEFAULT_REGISTRY.observe("request_latency", duration)
-        except Exception:
-            pass
+        # §34 — instrument the delivery: latency, success rate, confidence.
+        self._observe_metric("request_latency", duration)
+        self._observe_metric("confidence_distribution", confidence_score)
+        self._record_metric("request_success_rate", failure=False)
+        self._record_metric("agent_success_rate", failure=False)
 
         self._emit_event(request_id, {
             "step": "delivering",

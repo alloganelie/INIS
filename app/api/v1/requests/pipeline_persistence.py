@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 import os
 from datetime import datetime, timezone
 from typing import Any
@@ -53,6 +54,7 @@ async def persist_pipeline_delivery(
         "reason": f"Delivery synthesized for '{objective[:80]}'",
     }
     stored_audit: dict[str, Any] = fallback_audit
+    started = time.perf_counter()
     try:
         async for session in get_session():
             now_dt = datetime.now(timezone.utc)
@@ -62,14 +64,26 @@ async def persist_pipeline_delivery(
             await _insert_evidence(session, evidence, now_dt)
             await _insert_lineage(session, sources, inf_ids, step_results, delivery_status, request_id, now_dt)
             await session.commit()
+            _observe_postgres_latency(started)
             return True, [], stored_audit
     except Exception as exc:
+        _observe_postgres_latency(started)
         return (
             False,
             [f"persistence: db write degraded ({type(exc).__name__}: {exc})"],
             stored_audit,
         )
     return False, ["persistence: no session acquired"], fallback_audit
+
+
+def _observe_postgres_latency(started: float) -> None:
+    """Feed the §34 ``postgres_latency`` histogram (milliseconds)."""
+    try:
+        from app.observability.metrics import observe_value
+
+        observe_value("postgres_latency", (time.perf_counter() - started) * 1000.0)
+    except Exception:  # noqa: BLE001 - observability never breaks persistence
+        pass
 
 
 async def _insert_sources(session: Any, sources: list[dict[str, Any]], now_dt: datetime) -> None:

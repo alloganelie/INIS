@@ -22,3 +22,9 @@ def get_metrics(registry: MetricsRegistry | None = None) -> dict[str, Any]:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "metrics": active.snapshot(),
     }
+
+
+def get_prometheus_metrics(registry: MetricsRegistry | None = None) -> str:
+    """Return the 14 §34 metrics in the Prometheus text exposition format."""
+    active = registry or DEFAULT_REGISTRY
+    return active.render_prometheus()

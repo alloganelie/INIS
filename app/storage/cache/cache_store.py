@@ -279,22 +279,52 @@ class CacheStore:
         raw = backend.get(key)
         if raw is None:
             self.misses += 1
+            self._record_cache(False)
             return None
         if not isinstance(raw, CacheEntry):
             self.misses += 1
+            self._record_cache(False)
             return None
         if raw.is_expired():
             backend.delete(key)
             self.misses += 1
+            self._record_cache(False)
             return None
         if not raw.is_fresh_enough(self.policy):
             # Too stale to reuse: drop it so the next call re-fetches.
             backend.delete(key)
             self.stale_rejections += 1
             self.misses += 1
+            self._record_cache(False)
+            self._record_stale()
             return None
         self.hits += 1
+        self._record_cache(True)
         return raw.value
+
+    # -- §34 metric feeds ------------------------------------------------
+
+    def _record_cache(self, hit: bool) -> None:
+        """Feed the §34 ``cache_hit_rate`` / ``stale_data_rate`` gauges."""
+        try:
+            from app.observability.metrics import record_outcome
+
+            record_outcome("cache_hit_rate", failure=not hit)
+            if hit:
+                # A served entry passed both the TTL and the freshness gate.
+                record_outcome("stale_data_rate", failure=False)
+        except Exception:  # noqa: BLE001 - observability never breaks storage
+            pass
+
+    def _record_stale(self) -> None:
+        """Feed the §34 ``stale_data_rate`` gauge on a staleness rejection."""
+        try:
+            from app.observability.metrics import record_outcome
+
+            record_outcome("stale_data_rate", failure=True)
+        except Exception:  # noqa: BLE001 - observability never breaks storage
+            pass
+
 
     def delete(self, namespace: str, *parts: Any, level: str = L1) -> bool:
         """Remove one entry, returning whether it existed."""

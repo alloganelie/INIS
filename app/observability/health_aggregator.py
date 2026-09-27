@@ -51,6 +51,24 @@ async def _maybe_await(value: Any) -> Any:
     return await value if inspect.isawaitable(value) else value
 
 
+def _observe_metric(name: str, check: HealthCheck) -> HealthCheck:
+    """Wrap *check* so its measured latency feeds one §34 histogram."""
+
+    async def wrapped() -> Any:
+        result = await check()
+        try:
+            from app.observability.metrics import observe_value
+
+            latency = result.get("latency_ms") if isinstance(result, dict) else None
+            if latency is not None:
+                observe_value(name, float(latency))
+        except Exception:  # noqa: BLE001 - observability never breaks health
+            pass
+        return result
+
+    return wrapped
+
+
 def make_postgres_check(engine: SqlEngine) -> HealthCheck:
     """Build a ``SELECT 1`` + latency check from an async SQL engine."""
 
@@ -70,7 +88,8 @@ def make_postgres_check(engine: SqlEngine) -> HealthCheck:
                     await _maybe_await(close())
         return {"status": "up", "latency_ms": round((time.perf_counter() - started) * 1000.0, 3)}
 
-    return check_postgres
+    # §34 — the probe latency doubles as the postgres_latency sample.
+    return _observe_metric("postgres_latency", check_postgres)
 
 
 async def _run_select_one(conn: Any) -> None:
@@ -106,7 +125,9 @@ def make_broker_check(broker: BrokerLike) -> HealthCheck:
             return payload
         return {"status": "up" if result else "down", "latency_ms": latency_ms}
 
-    return check_broker
+    # §34 — the PING latency doubles as the postgres-independent redis probe;
+    # the metric of record for broker round-trips stays broker_latency.
+    return _observe_metric("broker_latency", check_broker)
 
 
 def make_default_checks(

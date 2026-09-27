@@ -1,5 +1,6 @@
 """Vector search using pgvector per §16.1."""
 
+import time
 from typing import List, Tuple, Optional
 
 from sqlalchemy import text
@@ -50,6 +51,7 @@ class VectorSearch:
         # Convert vector to PostgreSQL array format
         vector_str = "[" + ",".join(map(str, query_vector)) + "]"
 
+        started = time.perf_counter()
         async with engine.connect() as conn:
             result = await conn.execute(
                 text(
@@ -66,4 +68,12 @@ class VectorSearch:
                 },
             )
             rows = result.fetchall()
-            return [(row[0], float(row[1])) for row in rows]
+        # §34 — feed vector_search_latency (milliseconds).
+        try:
+            from app.observability.metrics import observe_value
+
+            observe_value("vector_search_latency", (time.perf_counter() - started) * 1000.0)
+        except Exception:  # noqa: BLE001 - observability never breaks search
+            pass
+        return [(row[0], float(row[1])) for row in rows]
+
