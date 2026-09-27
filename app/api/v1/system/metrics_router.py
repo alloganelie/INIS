@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from fastapi import APIRouter
@@ -50,7 +51,6 @@ def get_metrics() -> dict[str, Any]:
         pass
 
     # §41.13 Benchmarks & Safeguard thresholds
-    import os
     benchmarks = {
         "max_plan_steps": int(os.getenv("MAX_PLAN_STEPS", 50)),
         "max_parallel_tool_calls": int(os.getenv("MAX_PARALLEL_TOOL_CALLS", 10)),

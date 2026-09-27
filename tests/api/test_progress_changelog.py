@@ -66,7 +66,7 @@ def test_changelog_returns_expected_structure() -> None:
 
 
 def test_changelog_current_version() -> None:
-    """Ensure current_version matches the running API version."""
+    """Ensure current_version matches the v2 release version (§41.15)."""
     res = client.get("/v1/changelog")
     assert res.status_code == 200
-    assert res.json()["current_version"] == "0.1.0"
+    assert res.json()["current_version"] == "2.0.0"
