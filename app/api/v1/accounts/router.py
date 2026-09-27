@@ -49,15 +49,39 @@ def get_account_repository() -> Any | None:
     return AccountRepository
 
 
+#: Fallbacks for a row written before migration 0009, and for a JSONB column
+#: read back as a string. Never used to invent a value the DB does not hold.
+LEGACY_ROLE = "operator"
+LEGACY_SCOPES = ["read", "write"]
+
+
+def _as_scopes(raw: Any) -> list[str]:
+    """Return ``accounts.scopes`` as a list, whatever the driver returned."""
+    if raw is None:
+        return list(LEGACY_SCOPES)
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return list(LEGACY_SCOPES)
+    if isinstance(raw, (list, tuple)):
+        return [str(item) for item in raw]
+    return list(LEGACY_SCOPES)
+
+
 def _db_account_to_dict(account: Any) -> dict[str, Any]:
-    """Project an ``Account`` ORM row onto the API response shape."""
+    """Project an ``Account`` ORM row onto the API response shape.
+
+    ``role`` and ``scopes`` are read from the row (B4-ter-2): they are no longer
+    hardcoded, so a ``role=reader`` account survives an API restart.
+    """
     return {
         "id": account.account_id,
         "username": account.username,
         "email": account.email,
         "hashed_password": account.password_hash,
-        "role": "operator",
-        "scopes": ["read", "write"],
+        "role": account.role or LEGACY_ROLE,
+        "scopes": _as_scopes(account.scopes),
         "is_active": account.status != "deleted",
         "status": account.status,
         "created_at": account.created_at.isoformat() if account.created_at else None,
@@ -120,12 +144,11 @@ async def create_account(payload: AccountCreateRequest) -> AccountResponse:
                 email=payload.email,
                 password_hash=PasswordHasher.hash(payload.password),
                 status="active",
+                role=payload.role,
+                scopes=payload.scopes,
             )
             await repo.session.commit()
-            data = _db_account_to_dict(created)
-            data["role"] = payload.role
-            data["scopes"] = payload.scopes
-            return AccountResponse(**data)
+            return AccountResponse(**_db_account_to_dict(created))
 
     for account in _ACCOUNTS_STORE.values():
         if account["username"].lower() == payload.username.lower():
@@ -214,13 +237,12 @@ async def update_account(account_id: str, payload: AccountUpdateRequest) -> Acco
                 await repo.update_status(
                     account_id, "active" if payload.is_active else "deleted"
                 )
+            if payload.role is not None or payload.scopes is not None:
+                await repo.update_authorization(
+                    account_id, role=payload.role, scopes=payload.scopes
+                )
             await repo.session.commit()
-            data = _db_account_to_dict(await repo.get_by_id(account_id))
-            if payload.role is not None:
-                data["role"] = payload.role
-            if payload.scopes is not None:
-                data["scopes"] = payload.scopes
-            return AccountResponse(**data)
+            return AccountResponse(**_db_account_to_dict(await repo.get_by_id(account_id)))
 
     account = _ACCOUNTS_STORE.get(account_id)
     if not account:

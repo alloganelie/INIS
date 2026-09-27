@@ -3,10 +3,16 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, JSON
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.storage.models.base import Base, SoftDeleteMixin, TimestampMixin
+
+#: ``scopes`` storage type: JSONB on PostgreSQL (migration 0009) but plain
+#: JSON on other dialects, so the ORM metadata still builds on the SQLite
+#: in-memory engine the repository unit tests run against.
+SCOPES_TYPE = postgresql.JSONB().with_variant(JSON(), "sqlite")
 
 
 class Account(Base, TimestampMixin, SoftDeleteMixin):
@@ -17,6 +23,8 @@ class Account(Base, TimestampMixin, SoftDeleteMixin):
         username: Unique username for login.
         email: Unique email address.
         password_hash: Hashed password (never store plaintext).
+        role: Authorization role (admin, operator, reader) per §19.2.
+        scopes: Granted scopes, persisted as a JSONB list (§19.2).
         status: Account status (active, archived, deleted, superseded).
         created_at: Timestamp when account was created.
         updated_at: Timestamp when account was last updated.
@@ -31,6 +39,17 @@ class Account(Base, TimestampMixin, SoftDeleteMixin):
     username: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(
+        String(50), default="operator", server_default="operator", nullable=False
+    )
+    # Only the Python default is declared here: the SQL server default lives in
+    # migration 0009 and uses a PostgreSQL-only ``::jsonb`` cast that the SQLite
+    # engine of the repository unit tests cannot parse.
+    scopes: Mapped[list] = mapped_column(
+        SCOPES_TYPE,
+        default=lambda: ["read", "write"],
+        nullable=False,
+    )
 
     sessions: Mapped[list["Session"]] = relationship(
         "Session", back_populates="account", cascade="all, delete-orphan"
@@ -40,11 +59,8 @@ class Account(Base, TimestampMixin, SoftDeleteMixin):
 class Session(Base):
     """Session model for authentication tokens.
 
-    The ``sessions`` table created by migration 0006 carries ``created_at`` but
-    no ``updated_at``: a session row is immutable apart from ``revoked_at``.
-    This model therefore declares ``created_at`` explicitly instead of mixing
-    in :class:`~app.storage.models.base.TimestampMixin`, so the ORM mapping and
-    the migrated schema stay identical.
+    The ``sessions`` table has no ``updated_at`` yet (added in migration 0010,
+    B4-ter-3), so ``created_at`` is declared explicitly here.
 
     Attributes:
         session_id: Unique identifier for the session (ULID).

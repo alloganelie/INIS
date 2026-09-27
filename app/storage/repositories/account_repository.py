@@ -1,7 +1,7 @@
 """Repository for Account entity per §19.2 (authentication)."""
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Sequence
 
 from sqlalchemy import Result, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,6 +36,8 @@ class AccountRepository:
         email: str,
         password_hash: str,
         status: str = "active",
+        role: str = "operator",
+        scopes: Optional[Sequence[str]] = None,
     ) -> Account:
         """Create a new account.
 
@@ -45,6 +47,8 @@ class AccountRepository:
             email: Unique email address.
             password_hash: Hashed password.
             status: Account status (default: active).
+            role: Authorization role per §19.2 (B4-ter-2).
+            scopes: Granted scopes per §19.2 (B4-ter-2).
 
         Returns:
             The created Account instance.
@@ -55,6 +59,8 @@ class AccountRepository:
             email=email,
             password_hash=password_hash,
             status=status,
+            role=role,
+            scopes=list(scopes) if scopes is not None else ["read", "write"],
         )
         self._session.add(account)
         await self._session.flush()
@@ -117,6 +123,35 @@ class AccountRepository:
             update(Account)
             .where(Account.account_id == account_id)
             .values(status=status, updated_at=datetime.now(timezone.utc))
+        )
+        await self._session.flush()
+        return await self.get_by_id(account_id)
+
+    async def update_authorization(
+        self,
+        account_id: str,
+        role: Optional[str] = None,
+        scopes: Optional[Sequence[str]] = None,
+    ) -> Optional[Account]:
+        """Update the authorization attributes of an account (§19.2, B4-ter-2).
+
+        Args:
+            account_id: The account to update.
+            role: New role, or None to leave it unchanged.
+            scopes: New scopes, or None to leave them unchanged.
+
+        Returns:
+            The updated Account if found, None otherwise.
+        """
+        values: dict = {"updated_at": datetime.now(timezone.utc)}
+        if role is not None:
+            values["role"] = role
+        if scopes is not None:
+            values["scopes"] = list(scopes)
+        await self._session.execute(
+            update(Account)
+            .where(Account.account_id == account_id)
+            .values(**values)
         )
         await self._session.flush()
         return await self.get_by_id(account_id)
