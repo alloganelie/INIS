@@ -1,4 +1,4 @@
-﻿"""Persistence helper for pipeline delivery findings per section 0.2, 12, 20, 27."""
+"""Persistence helper for pipeline delivery findings per section 0.2, 12, 20, 27."""
 
 from __future__ import annotations
 

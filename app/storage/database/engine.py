@@ -1,4 +1,4 @@
-﻿"""PostgreSQL async engine factory for INIS storage layer."""
+"""PostgreSQL async engine factory for INIS storage layer."""
 
 import os
 from sqlalchemy.ext.asyncio import create_async_engine as sa_create_async_engine, AsyncEngine

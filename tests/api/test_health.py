@@ -30,15 +30,15 @@ def test_version_returns_version() -> None:
 
 
 def test_v1_health_ready_default() -> None:
-    """Ensure GET /v1/health/ready returns 200 with ready status by default."""
+    """With nothing configured, readiness is degraded - never a false 'ready'."""
     res = client.get("/v1/health/ready")
     assert res.status_code == 200
     data = res.json()
-    assert data["status"] == "ready"
+    assert data["status"] == "degraded"
     assert "database" in data["checks"]
-    assert data["checks"]["database"]["status"] == "ready"
+    assert data["checks"]["database"]["status"] == "not_configured"
     assert "broker" in data["checks"]
-    assert data["checks"]["broker"]["status"] == "ready"
+    assert data["checks"]["broker"]["status"] == "not_configured"
 
 
 def test_v1_health_ready_with_database(monkeypatch: any) -> None:
@@ -47,8 +47,9 @@ def test_v1_health_ready_with_database(monkeypatch: any) -> None:
     res = client.get("/v1/health/ready")
     assert res.status_code == 200
     data = res.json()
-    assert data["status"] == "ready"
     assert data["checks"]["database"]["status"] == "ready"
+    # Broker, Redis and LLM remain unconfigured, so overall stays degraded.
+    assert data["status"] == "degraded"
 
 
 def test_v1_health_ready_database_failure(monkeypatch: any) -> None:
@@ -78,11 +79,11 @@ def test_v1_health_ready_broker_states() -> None:
         assert res.json()["status"] == "not_ready"
         assert res.json()["checks"]["broker"]["status"] == "not_ready"
 
-        # 2. Connected broker -> 200
+        # 2. Connected broker -> 200 (overall degraded: db/redis/llm unconfigured)
         set_broker_check(DummyBroker(connected=True))
         res_ok = client.get("/v1/health/ready")
         assert res_ok.status_code == 200
-        assert res_ok.json()["status"] == "ready"
+        assert res_ok.json()["status"] == "degraded"
         assert res_ok.json()["checks"]["broker"]["status"] == "ready"
     finally:
         set_broker_check(None)
@@ -109,7 +110,7 @@ def test_v1_health_exposes_circuit_breaker_states() -> None:
         assert cb["status"] == "degraded"
         # An open breaker isolates a dependency; INIS itself stays ready.
         assert res.status_code == 200
-        assert res.json()["status"] == "ready"
+        assert res.json()["status"] == "degraded"
     finally:
         registry.reset(default_config=CircuitBreakerConfig())
 
@@ -120,9 +121,7 @@ def test_v1_health_ready_reports_every_wired_subsystem() -> None:
 
     checks = res.json()["checks"]
     assert res.status_code == 200
-    assert set(checks) == {"database", "broker", "redis", "circuit_breakers"}
-    assert checks["database"]["status"] == "ready"
-    assert checks["redis"]["status"] == "ready"
+    assert set(checks) == {"database", "broker", "redis", "llm", "circuit_breakers"}
     assert "latency_ms" in checks["database"]
 
 
@@ -228,5 +227,81 @@ def test_v1_health_ready_broker_health_check_probe() -> None:
         assert unhealthy.json()["checks"]["broker"]["status"] == "not_ready"
     finally:
         set_broker_check(None)
+
+
+# ---------------------------------------------------------------------------
+# B4-bis Constat 3 — the health endpoints must not lie about the real state
+# ---------------------------------------------------------------------------
+
+
+def test_health_reports_llm_not_configured(monkeypatch: Any) -> None:
+    """Without LLM_API_KEY the LLM check is not_configured, never ready."""
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+
+    res = client.get("/v1/health")
+
+    assert res.status_code == 200
+    llm = res.json()["checks"]["llm"]
+    assert llm["status"] == "not_configured"
+    assert llm["configured"] is False
+    assert "LLM_API_KEY" in llm["reason"]
+
+
+def test_health_reports_database_not_configured_without_url(monkeypatch: Any) -> None:
+    """Without INIS_DATABASE_URL the database check is not_configured."""
+    monkeypatch.delenv("INIS_DATABASE_URL", raising=False)
+
+    res = client.get("/v1/health")
+
+    database = res.json()["checks"]["database"]
+    assert database["status"] == "not_configured"
+    assert database["configured"] is False
+
+
+def test_health_reports_broker_not_configured_without_url(monkeypatch: Any) -> None:
+    """Without AMQP_URL/INIS_BROKER_URL the broker check is not_configured."""
+    monkeypatch.delenv("AMQP_URL", raising=False)
+    monkeypatch.delenv("INIS_BROKER_URL", raising=False)
+
+    res = client.get("/v1/health")
+
+    broker = res.json()["checks"]["broker"]
+    assert broker["status"] == "not_configured"
+    assert broker["configured"] is False
+
+
+def test_health_ready_degraded_when_llm_stub(monkeypatch: Any) -> None:
+    """The pipeline depends on the LLM, so a stub-only LLM means degraded."""
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+
+    res = client.get("/v1/health/ready")
+
+    assert res.status_code == 200
+    assert res.json()["status"] == "degraded"
+    assert res.json()["checks"]["llm"]["status"] == "not_configured"
+
+
+def test_health_exposes_the_full_contract() -> None:
+    """/v1/health exposes {status, version, circuit_breakers, checks{...}} (§32)."""
+    res = client.get("/v1/health")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert set(body) == {"status", "version", "circuit_breakers", "checks"}
+    assert set(body["checks"]) == {"database", "redis", "broker", "llm"}
+    assert body["version"] == "0.1.0"
+    assert isinstance(body["circuit_breakers"], dict)
+
+
+def test_health_llm_down_when_configured_but_unreachable(monkeypatch: Any) -> None:
+    """A configured LLM that cannot be reached is reported as not_ready."""
+    monkeypatch.setenv("LLM_API_KEY", "sk-not-a-real-key")
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:1/v1")
+
+    res = client.get("/v1/health/ready")
+
+    assert res.status_code == 503
+    assert res.json()["status"] == "not_ready"
+    assert res.json()["checks"]["llm"]["status"] == "not_ready"
 
 

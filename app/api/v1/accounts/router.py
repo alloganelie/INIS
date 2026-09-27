@@ -1,4 +1,4 @@
-﻿"""Router for Account management per §19 and §32.
+"""Router for Account management per §19 and §32.
 
 Persistence rule (B4-bis constat 2): when ``INIS_DATABASE_URL`` is set the
 ``accounts`` table is the single source of truth and a database failure is a

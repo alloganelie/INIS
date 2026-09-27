@@ -1,4 +1,4 @@
-﻿"""Authentication endpoints per §19 and §32."""
+"""Authentication endpoints per §19 and §32."""
 
 from __future__ import annotations
 

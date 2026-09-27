@@ -1,18 +1,29 @@
-"""Health router providing health and readiness endpoints per §32, §34.
+"""Health router exposing the real subsystem state per §32, §34.
 
-Readiness is delegated to
-:class:`app.observability.health_aggregator.HealthAggregator`: every subsystem
-check runs under a bounded timeout, exceptions are isolated as ``down``, and an
-unreachable dependency never blocks the endpoint. The aggregator is the single
-implementation of the readiness logic; this router only maps its report onto the
-HTTP contract ``{"status": ready|not_ready, "checks": {...}}``, plus the §41.8
-circuit breaker states, which are informational and never gate readiness.
+Before B4-bis this endpoint lied: with no database it answered ``up`` for
+``database``, with no broker it answered ``up`` for ``broker``, and the LLM
+was not checked at all — so ``/v1/health/ready`` returned ``ready`` while 100%
+of the LLM calls were silent stubs.
+
+The contract is now:
+
+* every subsystem is probed for real (SQL ``SELECT 1``, Redis ``PING``, an
+  AMQP connection, a minimal LLM completion);
+* an unconfigured subsystem reports ``not_configured`` — never ``up``;
+* ``/v1/health`` exposes ``{status, version, circuit_breakers, checks}``;
+* ``/v1/health/ready`` is ``degraded`` (HTTP 200) when a dependency is merely
+  unconfigured, and ``not_ready`` (HTTP 503) when a configured dependency is
+  actually down.
+
+Probes run through :class:`~app.observability.health_aggregator.HealthAggregator`:
+bounded by ``_READINESS_TIMEOUT_SECONDS``, isolated, never raising.
 """
 
 from __future__ import annotations
 
 import inspect
 import os
+import time
 from typing import Any
 
 from fastapi import APIRouter, status
@@ -30,16 +41,17 @@ from app.observability.health_aggregator import (
 
 router = APIRouter(prefix="/health", tags=["system"])
 
-#: Subsystem names exposed by ``GET /v1/health/ready`` (§32 contract).
+#: Subsystem names exposed by ``GET /v1/health`` and ``/v1/health/ready`` (§32).
 DATABASE_CHECK = "database"
 BROKER_CHECK = "broker"
 REDIS_CHECK = "redis"
+LLM_CHECK = "llm"
 CIRCUIT_BREAKER_CHECK = "circuit_breakers"
 
 #: Checks that can gate readiness; the others stay informational (§41.8).
-_GATING_CHECKS = (DATABASE_CHECK, BROKER_CHECK, REDIS_CHECK)
+_GATING_CHECKS = (DATABASE_CHECK, BROKER_CHECK, REDIS_CHECK, LLM_CHECK)
 
-#: Aggregator status → status exposed by this endpoint.
+#: Aggregator status -> status exposed by the readiness endpoint.
 _STATUS_MAP = {
     "up": "ready",
     "down": "not_ready",
@@ -49,6 +61,9 @@ _STATUS_MAP = {
 
 #: Upper bound for a single subsystem probe (the aggregator never blocks).
 _READINESS_TIMEOUT_SECONDS = 2.0
+
+#: The LLM probe is a 5-token ping: enough to prove the credential works.
+_LLM_PROBE_MAX_TOKENS = 5
 
 _broker_probe: Any | None = None
 _redis_probe: Any | None = None
@@ -103,15 +118,19 @@ class _BrokerProbe:
         return {"status": "up"}
 
 
-async def _in_memory_database() -> dict[str, Any]:
-    """Default database answer when no database is configured (§32)."""
-    return {"status": "up", "detail": "in_memory"}
-
-
 def _database_check() -> HealthCheck:
     """Build the database readiness check from ``INIS_DATABASE_URL``."""
     if not os.getenv("INIS_DATABASE_URL"):
-        return _in_memory_database
+
+        async def database_not_configured() -> dict[str, Any]:
+            return {
+                "status": "degraded",
+                "detail": "not_configured",
+                "configured": False,
+                "reason": "INIS_DATABASE_URL is not set: runs in in-memory mode",
+            }
+
+        return database_not_configured
 
     async def check_database() -> dict[str, Any]:
         # Resolved inside the check so a broken URL is isolated by the aggregator
@@ -124,25 +143,48 @@ def _database_check() -> HealthCheck:
     return check_database
 
 
+def _broker_url() -> str | None:
+    """Return the configured AMQP endpoint, if any."""
+    return os.getenv("AMQP_URL") or os.getenv("INIS_BROKER_URL")
+
+
 def _broker_check() -> HealthCheck:
-    """Build the broker readiness check (``not_applicable`` when unconfigured)."""
+    """Build the broker readiness check (real AMQP connection when configured)."""
     if _broker_probe is not None:
         return make_broker_check(_BrokerProbe(_broker_probe))
 
-    if os.getenv("AMQP_URL") or os.getenv("INIS_BROKER_URL"):
+    if _broker_url():
 
-        async def broker_missing() -> dict[str, Any]:
-            return {
-                "status": "down",
-                "error": "broker configured but no connected instance found",
-            }
+        async def check_broker_connection() -> dict[str, Any]:
+            try:
+                import aio_pika
+            except ImportError:
+                return {
+                    "status": "down",
+                    "error": "broker configured but aio_pika is not installed",
+                }
+            try:
+                connection = await aio_pika.connect(
+                    _broker_url(), timeout=_READINESS_TIMEOUT_SECONDS
+                )
+            except Exception as exc:  # noqa: BLE001 - reported as down
+                return {"status": "down", "error": f"{type(exc).__name__}: {exc}"}
+            try:
+                return {"status": "up", "detail": "amqp"}
+            finally:
+                await connection.close()
 
-        return broker_missing
+        return check_broker_connection
 
-    async def broker_not_applicable() -> dict[str, Any]:
-        return {"status": "up", "detail": "not_applicable"}
+    async def broker_not_configured() -> dict[str, Any]:
+        return {
+            "status": "degraded",
+            "detail": "not_configured",
+            "configured": False,
+            "reason": "neither AMQP_URL nor INIS_BROKER_URL is set",
+        }
 
-    return broker_not_applicable
+    return broker_not_configured
 
 
 def _redis_client_from_env() -> Any | None:
@@ -165,7 +207,12 @@ def _redis_check() -> HealthCheck:
     if _redis_probe is None and not os.getenv("REDIS_URL"):
 
         async def redis_not_configured() -> dict[str, Any]:
-            return {"status": "up", "detail": "not_configured"}
+            return {
+                "status": "degraded",
+                "detail": "not_configured",
+                "configured": False,
+                "reason": "REDIS_URL is not set: caches and shared limits are per-process",
+            }
 
         return redis_not_configured
 
@@ -193,27 +240,104 @@ def _redis_check() -> HealthCheck:
     return redis_probe_callable
 
 
+def _llm_check() -> HealthCheck:
+    """Build the §22.1 LLM availability check.
+
+    Without ``LLM_API_KEY`` every ``ModelRouter.complete`` call returns a
+    deterministic stub, so the pipeline is still "green" while producing no
+    real intelligence. That is reported as ``not_configured`` (degraded), never
+    as ``up``.
+    """
+    from app.llm.router.model_router import ENV_API_KEY, LLMTask, ModelRouter
+
+    async def check_llm() -> dict[str, Any]:
+        if not os.getenv(ENV_API_KEY):
+            return {
+                "status": "degraded",
+                "detail": "not_configured",
+                "configured": False,
+                "reason": (
+                    f"{ENV_API_KEY} is not set: ModelRouter returns deterministic stubs, "
+                    "every LLM call is a stub"
+                ),
+            }
+        router = ModelRouter(timeout_seconds=_READINESS_TIMEOUT_SECONDS)
+        task = LLMTask(task_type="default", max_tokens=_LLM_PROBE_MAX_TOKENS)
+        try:
+            response = await router.complete(task, "ping")
+        except Exception as exc:  # noqa: BLE001 - reported as down
+            return {"status": "down", "error": f"{type(exc).__name__}: {exc}"}
+        if getattr(response, "stub", False):
+            return {
+                "status": "degraded",
+                "detail": "stub",
+                "configured": True,
+                "reason": f"{ENV_API_KEY} is set but the router answered with a stub",
+            }
+        return {"status": "up", "model": getattr(response, "model", None)}
+
+    return check_llm
+
+
 async def _circuit_breaker_check() -> dict[str, Any]:
     """§41.8: expose breaker states as a non-gating, informational check."""
     states = breaker_registry.states()
     return {"status": "degraded" if "open" in states.values() else "up", "states": states}
 
 
+def _all_checks() -> dict[str, HealthCheck]:
+    """Return the four real subsystem checks plus the informational breakers."""
+    return {
+        DATABASE_CHECK: _database_check(),
+        BROKER_CHECK: _broker_check(),
+        REDIS_CHECK: _redis_check(),
+        LLM_CHECK: _llm_check(),
+        CIRCUIT_BREAKER_CHECK: _circuit_breaker_check,
+    }
+
+
+async def _aggregate() -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run every check and return ``(report, payload)`` ready for the response."""
+    report = await HealthAggregator(
+        checks=_all_checks(),
+        timeout_seconds=_READINESS_TIMEOUT_SECONDS,
+    ).aggregate()
+
+    payload: dict[str, Any] = {}
+    for subsystem in report["subsystems"]:
+        name = str(subsystem["subsystem"])
+        result = {key: value for key, value in subsystem.items() if key != "subsystem"}
+        readiness = _STATUS_MAP.get(str(result.get("status")), "degraded")
+        if result.get("detail") == "not_configured":
+            readiness = "not_configured"
+        result["status"] = readiness
+        payload[name] = result
+    return report, payload
+
+
 @router.get(
     "",
-    summary="Basic liveness check per §32",
+    summary="Liveness and subsystem status per §32",
 )
-def get_health() -> dict[str, Any]:
-    """Basic health check returning operational status.
-
-    Also exposes the per-scope circuit breaker states ``open | closed |
-    half_open`` required by §41.8.
-    """
-    return {
-        "status": "ok",
-        "version": "0.1.0",
-        "circuit_breakers": breaker_registry.states(),
+async def get_health() -> JSONResponse:
+    """Report the real state of every dependency plus the §41.8 breaker states."""
+    _report, payload = await _aggregate()
+    checks = {
+        name: payload[name]
+        for name in (DATABASE_CHECK, REDIS_CHECK, BROKER_CHECK, LLM_CHECK)
+        if name in payload
     }
+    degraded = [name for name, value in checks.items() if value["status"] != "ready"]
+    overall = "ok" if not degraded else "degraded"
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "status": overall,
+            "version": "0.1.0",
+            "circuit_breakers": breaker_registry.states(),
+            "checks": checks,
+        },
+    )
 
 
 @router.get(
@@ -223,43 +347,34 @@ def get_health() -> dict[str, Any]:
 async def get_health_ready() -> JSONResponse:
     """Aggregate the subsystem checks and expose the readiness verdict.
 
-    Every check runs through
-    :class:`~app.observability.health_aggregator.HealthAggregator`: bounded by
-    ``_READINESS_TIMEOUT_SECONDS``, isolated from the others, and reported as
-    ``down`` when it raises.
-
-    Returns HTTP 200 when every gating subsystem is up, HTTP 503 otherwise.
-    Format: {"status": "ready" | "not_ready", "checks": {...}}
+    Returns HTTP 200 with ``ready`` or ``degraded``, HTTP 503 with
+    ``not_ready`` when a *configured* dependency is down.
+    Format: ``{"status": ready | degraded | not_ready, "checks": {...}}``
     """
-    checks: dict[str, HealthCheck] = {
-        DATABASE_CHECK: _database_check(),
-        BROKER_CHECK: _broker_check(),
-        REDIS_CHECK: _redis_check(),
-        CIRCUIT_BREAKER_CHECK: _circuit_breaker_check,
-    }
-    report = await HealthAggregator(
-        checks=checks,
-        timeout_seconds=_READINESS_TIMEOUT_SECONDS,
-    ).aggregate()
+    _report, payload = await _aggregate()
 
-    payload: dict[str, Any] = {}
     is_ready = True
-    for subsystem in report["subsystems"]:
-        name = str(subsystem["subsystem"])
-        readiness = _STATUS_MAP.get(str(subsystem.get("status")), "degraded")
-        result = {key: value for key, value in subsystem.items() if key != "subsystem"}
-        result["status"] = readiness
-        payload[name] = result
-        if name in _GATING_CHECKS and readiness == "not_ready":
+    for name in _GATING_CHECKS:
+        if payload.get(name, {}).get("status") == "not_ready":
             is_ready = False
 
-    overall_status = "ready" if is_ready else "not_ready"
+    if not is_ready:
+        overall_status = "not_ready"
+    elif any(
+        payload.get(name, {}).get("status") in ("degraded", "not_configured")
+        for name in _GATING_CHECKS
+    ):
+        overall_status = "degraded"
+    else:
+        overall_status = "ready"
+
     http_status = status.HTTP_200_OK if is_ready else status.HTTP_503_SERVICE_UNAVAILABLE
 
     return JSONResponse(
         status_code=http_status,
         content={
             "status": overall_status,
+            "checked_at": time.time(),
             "checks": payload,
         },
     )

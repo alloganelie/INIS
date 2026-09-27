@@ -1,4 +1,4 @@
-﻿"""Tests for real database persistence of accounts and sessions per §19.2.
+"""Tests for real database persistence of accounts and sessions per §19.2.
 
 Acceptance criteria of B4-bis Constat 2:
 - test_accounts_persists_to_db_with_url: create account -> SELECT accounts -> present
