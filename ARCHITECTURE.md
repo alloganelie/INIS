@@ -423,7 +423,9 @@ app/quality/
     ├── __init__.py
     ├── synthetic_detector.py      # Détecte contenu généré par IA
     ├── mirror_detector.py         # Détecte sites miroirs ou copies
-    └── bias_assessor.py           # Évalue le biais éditorial systématique d'une source
+    ├── bias_assessor.py           # Évalue le biais éditorial systématique d'une source
+    ├── freshness_detector.py      # Détecte la fraîcheur artificielle (re-dating)
+    └── assessor.py                # Compose source_suspicion §41.7 + règles d'avertissement
 ```
 
 ---
