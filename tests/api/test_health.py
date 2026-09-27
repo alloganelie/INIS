@@ -287,7 +287,9 @@ def test_health_exposes_the_full_contract() -> None:
 
     assert res.status_code == 200
     body = res.json()
-    assert set(body) == {"status", "version", "circuit_breakers", "checks"}
+    assert set(body) == {"status", "version", "circuit_breakers", "checks", "migrations", "build"}
+    assert "head" in body["migrations"]
+    assert "git_sha" in body["build"]
     assert set(body["checks"]) == {"database", "redis", "broker", "llm"}
     assert body["version"] == "0.1.0"
     assert isinstance(body["circuit_breakers"], dict)

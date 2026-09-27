@@ -315,12 +315,128 @@ async def _aggregate() -> tuple[dict[str, Any], dict[str, Any]]:
     return report, payload
 
 
+
+
+def _resolve_migrations_status() -> dict[str, Any]:
+    """Return applied and available Alembic migrations status per §41.14."""
+    from pathlib import Path
+    mig_dir = Path("migrations/versions")
+    vfiles = sorted([f.stem for f in mig_dir.glob("*.py") if not f.name.startswith("__")])
+    latest_avail = vfiles[-1].split("_")[0] if vfiles else "0000"
+
+    # In-memory or unconfigured database
+    if not os.getenv("INIS_DATABASE_URL"):
+        return {
+            "applied": 0,
+            "head": "none",
+            "latest_available": latest_avail,
+            "up_to_date": False,
+        }
+
+    # If database engine is reachable, query alembic_version
+    engine = get_database_engine()
+    if engine is None:
+        return {
+            "applied": 0,
+            "head": "unknown",
+            "latest_available": latest_avail,
+            "up_to_date": False,
+        }
+
+    applied_head = "unknown"
+    applied_count = 0
+    try:
+        from sqlalchemy import text
+        import asyncio
+
+        async def _query():
+            async with engine.connect() as conn:
+                res = await conn.execute(text("SELECT version_num FROM alembic_version"))
+                rows = res.fetchall()
+                if rows:
+                    return rows[0][0]
+                return "0000"
+
+        # Attempt to run query if loop is running or synchronously
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # schedule task or wait
+                task = loop.create_task(_query())
+                # Since this helper is called from async endpoint, we will make an async variant
+            else:
+                applied_head = loop.run_until_complete(_query())
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    return {
+        "applied": len(vfiles) if applied_head == latest_avail else 0,
+        "head": applied_head,
+        "latest_available": latest_avail,
+        "up_to_date": (applied_head == latest_avail and applied_head != "unknown"),
+    }
+
+
+async def _async_migrations_status() -> dict[str, Any]:
+    from pathlib import Path
+    mig_dir = Path("migrations/versions")
+    vfiles = sorted([f.stem for f in mig_dir.glob("*.py") if not f.name.startswith("__")])
+    latest_avail = vfiles[-1].split("_")[0] if vfiles else "0000"
+
+    if not os.getenv("INIS_DATABASE_URL"):
+        return {
+            "applied": 0,
+            "head": "none",
+            "latest_available": latest_avail,
+            "up_to_date": False,
+        }
+
+    engine = get_database_engine()
+    if engine is None:
+        return {
+            "applied": 0,
+            "head": "unknown",
+            "latest_available": latest_avail,
+            "up_to_date": False,
+        }
+
+    try:
+        from sqlalchemy import text
+        async with engine.connect() as conn:
+            res = await conn.execute(text("SELECT version_num FROM alembic_version"))
+            rows = res.fetchall()
+            applied_head = rows[0][0] if rows else "0000"
+            idx = next((i for i, f in enumerate(vfiles, start=1) if f.startswith(applied_head)), 0)
+            return {
+                "applied": idx,
+                "head": applied_head,
+                "latest_available": latest_avail,
+                "up_to_date": (applied_head == latest_avail),
+            }
+    except Exception:
+        return {
+            "applied": 0,
+            "head": "unknown",
+            "latest_available": latest_avail,
+            "up_to_date": False,
+        }
+
+
+def _build_info() -> dict[str, str]:
+    return {
+        "git_sha": os.getenv("INIS_GIT_SHA") or os.getenv("GIT_COMMIT") or "unknown",
+        "built_at": os.getenv("INIS_BUILT_AT") or "unknown",
+    }
+
+
 @router.get(
     "",
     summary="Liveness and subsystem status per §32",
 )
 async def get_health() -> JSONResponse:
-    """Report the real state of every dependency plus the §41.8 breaker states."""
+    """Report the real state of every dependency plus the §41.8 breaker states and §41.14 migration info."""
     _report, payload = await _aggregate()
     checks = {
         name: payload[name]
@@ -329,6 +445,9 @@ async def get_health() -> JSONResponse:
     }
     degraded = [name for name, value in checks.items() if value["status"] != "ready"]
     overall = "ok" if not degraded else "degraded"
+    migrations_info = await _async_migrations_status()
+    build_info = _build_info()
+
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={
@@ -336,6 +455,8 @@ async def get_health() -> JSONResponse:
             "version": "0.1.0",
             "circuit_breakers": breaker_registry.states(),
             "checks": checks,
+            "migrations": migrations_info,
+            "build": build_info,
         },
     )
 
@@ -376,5 +497,7 @@ async def get_health_ready() -> JSONResponse:
             "status": overall_status,
             "checked_at": time.time(),
             "checks": payload,
+            "migrations": await _async_migrations_status(),
+            "build": _build_info(),
         },
     )
