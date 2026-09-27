@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -13,8 +14,10 @@ from app.api.v1.requests.schemas import (
     InformationRequestResponse,
 )
 from app.domain.value_objects.ulid import ULID
+from app.governance.budget.quotas import GLOBAL_USAGE
 
 router = APIRouter(prefix="/requests", tags=["requests"])
+usage_router = APIRouter(prefix="/usage", tags=["usage"])
 
 _REQUESTS_STORE: dict[str, InformationRequestResponse] = {}
 
@@ -94,3 +97,30 @@ async def get_request_events(id: str) -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get(
+    "/{id}/usage",
+    summary="Get the §41.2 consumption report of a request",
+)
+def get_request_usage(id: str) -> dict[str, Any]:
+    """Return the ``usage_report`` of one Information Request (§41.2)."""
+    if id not in _REQUESTS_STORE:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Information request '{id}' not found",
+        )
+    report = pipeline_runner.usage_report(id)
+    if report is None:
+        report = pipeline_runner.guard_for(id).report()
+    return report
+
+
+@usage_router.get(
+    "/global",
+    summary="Get the aggregated §41.2 consumption across all requests",
+)
+def get_global_usage() -> dict[str, Any]:
+    """Return the aggregated consumption of every tracked request (§41.2)."""
+    return GLOBAL_USAGE.global_report()
+

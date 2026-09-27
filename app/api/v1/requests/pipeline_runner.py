@@ -10,6 +10,13 @@ from typing import Any, AsyncGenerator
 
 from app.agents.runtime.lifecycle import GRACEFUL_EXPIRY_STATUS, RequestLifecycle
 from app.domain.value_objects.ulid import ULID
+from app.governance.budget.quotas import (
+    BUDGET_EXCEEDED_STATUS,
+    GLOBAL_USAGE,
+    Budget,
+    BudgetExceeded,
+    BudgetGuard,
+)
 from ulid import ULID as PythonUlid
 
 #: Nominal number of plan steps (§28 cycle) used for progress reporting.
@@ -27,6 +34,7 @@ class PipelineRunner:
         self._subscribers: dict[str, list[asyncio.Queue[dict[str, Any]]]] = {}
         self._running: set[str] = set()
         self._lifecycles: dict[str, RequestLifecycle] = {}
+        self._guards: dict[str, BudgetGuard] = {}
 
     def get_runs_count(self) -> int:
         """Return total count of executed pipeline runs."""
@@ -139,6 +147,66 @@ class PipelineRunner:
         })
         return payload
 
+    # -- §41.2 quotas --------------------------------------------------
+
+    def guard_for(
+        self,
+        request_id: str,
+        budget: Budget | None = None,
+    ) -> BudgetGuard:
+        """Create (or return) the budget guard of a request."""
+        guard = self._guards.get(request_id)
+        if guard is None or budget is not None:
+            guard = BudgetGuard(request_id, budget or Budget())
+            self._guards[request_id] = guard
+        return guard
+
+    def charge(self, request_id: str, unit: str, amount: float = 1.0, *, cost_usd: float = 0.0) -> None:
+        """Charge a §41.2 cost unit, recording the consumption on the guard.
+
+        Raises:
+            BudgetExceeded: when the charge crosses a configured budget.
+        """
+        guard = self.guard_for(request_id)
+        try:
+            guard.charge(unit, amount, cost_usd=cost_usd)
+        except BudgetExceeded:
+            GLOBAL_USAGE.register(guard.usage)
+            raise
+        self._publish_usage(request_id, guard)
+
+    def usage_report(self, request_id: str) -> dict[str, Any] | None:
+        """Return the §41.2 usage report of a request, or None."""
+        guard = self._guards.get(request_id)
+        return guard.report() if guard else None
+
+    def _publish_usage(self, request_id: str, guard: BudgetGuard) -> None:
+        """Register the guard usage so ``/v1/usage/global`` aggregates it."""
+        GLOBAL_USAGE.register(guard.usage)
+        state = self._run_states.get(request_id)
+        if isinstance(state, dict):
+            state["usage_report"] = guard.report()
+
+    def _meter_llm(self, request_id: str, llm_result: dict[str, Any]) -> str | None:
+        """Charge an LLM result to the request budget (§41.2).
+
+        Returns the exceeded dimension name, or ``None`` when within budget.
+        A budget breach is reported rather than raised so the pipeline can
+        still deliver what it already gathered.
+        """
+        guard = self.guard_for(request_id)
+        usage = llm_result.get("usage") or {}
+        input_tokens = int(usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0)
+        output_tokens = int(usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0)
+        cost_usd = float(usage.get("cost_usd", 0.0) or 0.0)
+        try:
+            guard.charge_llm(input_tokens, output_tokens, cost_usd=cost_usd)
+        except BudgetExceeded:
+            self._publish_usage(request_id, guard)
+            return guard.exceeded or "max_llm_tokens"
+        self._publish_usage(request_id, guard)
+        return None
+
     def _emit_event(self, request_id: str, event: dict[str, Any]) -> None:
         """Record an event and dispatch to active SSE subscriber queues."""
         if request_id not in self._event_history:
@@ -191,6 +259,15 @@ class PipelineRunner:
         constraints = getattr(payload, "constraints", None) or (
             payload.get("constraints", {}) if isinstance(payload, dict) else {}
         )
+
+        # §41.2 — install the budget guard before any metered work happens.
+        budget = getattr(payload, "budget", None)
+        if budget is not None and hasattr(budget, "to_domain"):
+            budget = budget.to_domain()
+        elif isinstance(budget, dict):
+            budget = Budget(**budget) if budget else Budget()
+        guard = self.guard_for(request_id, budget)
+        budget_exceeded: str | None = None
 
         self._emit_event(request_id, {
             "step": "started",
@@ -246,6 +323,8 @@ class PipelineRunner:
             llm_result = await task.run(prompt, max_tokens=500)
             if not llm_result.get("stub"):
                 requirements = llm_result["content"]
+            # §41.2 — meter the LLM call against the request budget.
+            budget_exceeded = self._meter_llm(request_id, llm_result)
         except ImportError:
             pass  # fallback sur parsing déterministe
         except Exception:
@@ -337,6 +416,9 @@ class PipelineRunner:
                 )
             task = PlanningTask()
             llm_result = await task.run(prompt, max_tokens=800)
+            # §41.2 — meter the planning LLM call too.
+            exceeded = self._meter_llm(request_id, llm_result)
+            budget_exceeded = budget_exceeded or exceeded
             if not llm_result.get("stub"):
                 # parser le JSON via app.llm.parsers.plan_parser.parse_plan
                 parsed_llm_plan = parse_plan(llm_result["content"])
@@ -413,6 +495,14 @@ class PipelineRunner:
                 )
 
                 try:
+                    # §41.2 — meter the web request before it leaves the process.
+                    try:
+                        self.charge(request_id, "web_requests")
+                    except BudgetExceeded as budget_err:
+                        budget_exceeded = budget_exceeded or budget_err.dimension
+                        execution_status = f"{BUDGET_EXCEEDED_STATUS}: {budget_err.dimension}"
+                        break
+
                     # ------ web_search ------------------------------------------------
                     search_results = await provider_router.search(
                         query=str(query), limit=5
@@ -422,6 +512,13 @@ class PipelineRunner:
 
                     # ------ fetch_page for top-3 results ------------------------------
                     for result in search_results[:3]:
+                        # §41.2 — meter each outbound page fetch as an API call.
+                        try:
+                            self.charge(request_id, "api_calls")
+                        except BudgetExceeded as budget_err:
+                            budget_exceeded = budget_exceeded or budget_err.dimension
+                            execution_status = f"{BUDGET_EXCEEDED_STATUS}: {budget_err.dimension}"
+                            break
                         url = result.url
                         snippet = result.snippet or result.title
 
@@ -619,6 +716,39 @@ class PipelineRunner:
             }
         ]
 
+        # -- §41.3 language metadata on every delivered unit -------------
+        try:
+            from app.knowledge.normalization.language_policy import (
+                LanguagePolicy,
+                build_translation_metadata,
+            )
+
+            language_policy = LanguagePolicy(
+                working_language=str(context.get("working_language", "en")),
+                source_languages_allowed=tuple(
+                    context.get("source_languages_allowed") or ("en", "fr", "es", "de")
+                ),
+                translation_policy=str(context.get("translation_policy", "on_demand")),
+                normalization_locale=str(context.get("normalization_locale", "en-US")),
+            )
+        except Exception:
+            language_policy = None
+
+        def _with_language(block: dict[str, Any], source_language: str) -> dict[str, Any]:
+            """Attach the §41.3 language block to one unit (best effort)."""
+            if language_policy is None:
+                return block
+            try:
+                metadata = build_translation_metadata(language_policy, source_language)
+                return {**block, **metadata.to_dict()}
+            except Exception:
+                return block
+
+        information_units = [
+            _with_language(unit, str(unit.get("language") or "en"))
+            for unit in information_units
+        ]
+
         summary = f"Synthesized research report for '{objective}'."
         # Seed findings with real web facts extracted in Stage 3 (§0.2-compliant)
         findings: list[Any] = list(web_facts)
@@ -639,6 +769,11 @@ class PipelineRunner:
             )
             if not response.stub:
                 summary = response.content
+                # §41.2 — meter the synthesis call.
+                exceeded = self._meter_llm(
+                    request_id, {"usage": getattr(response, "usage", None)}
+                )
+                budget_exceeded = budget_exceeded or exceeded
                 try:
                     import re
 
@@ -713,6 +848,19 @@ class PipelineRunner:
 
         # §1.3 — status depends on whether verified findings exist
         delivery_status = "completed" if findings else "INSUFFICIENT_EVIDENCE"
+        # §41.2 — a breached budget is reported explicitly, never silently.
+        if budget_exceeded:
+            delivery_status = BUDGET_EXCEEDED_STATUS
+
+        # §41.2 — close the usage report with the measured compute time.
+        try:
+            guard.usage.compute_seconds = max(
+                guard.usage.compute_seconds, time.monotonic() - start_time
+            )
+        except Exception:
+            pass
+        self._publish_usage(request_id, guard)
+        usage_report = guard.report()
 
         # Build limitations — always include §0.2 notice; add connector note if degraded
         base_limitations: list[str] = [
@@ -721,6 +869,10 @@ class PipelineRunner:
         if "degraded" in execution_status:
             base_limitations.append(
                 f"Web connectors non disponibles ({execution_status}) — fallback sur stub."
+            )
+        if budget_exceeded:
+            base_limitations.append(
+                f"Budget §41.2 dépassé sur '{budget_exceeded}' — exécution interrompue."
             )
 
         # Merge internal pipeline source + real web sources
@@ -750,6 +902,8 @@ class PipelineRunner:
             "limitations": base_limitations,
             "assumptions": assumptions_from_llm,
             "missing_information": [],
+            # §41.2 — every delivery carries its consumption report.
+            "usage_report": usage_report,
             "recommended_next_actions": [
                 "Review evidence package",
                 "Verify source trust ratings",
