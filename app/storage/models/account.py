@@ -56,11 +56,12 @@ class Account(Base, TimestampMixin, SoftDeleteMixin):
     )
 
 
-class Session(Base):
+class Session(Base, TimestampMixin):
     """Session model for authentication tokens.
 
-    The ``sessions`` table has no ``updated_at`` yet (added in migration 0010,
-    B4-ter-3), so ``created_at`` is declared explicitly here.
+    ``updated_at`` is provided by migration 0010 (B4-ter-3), so the
+    ``TimestampMixin`` is usable again and a revocation is timestamped
+    server-side as well as client-side.
 
     Attributes:
         session_id: Unique identifier for the session (ULID).
@@ -82,11 +83,6 @@ class Session(Base):
     )
     token_hash: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        nullable=False,
-    )
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     session_metadata: Mapped[dict] = mapped_column(JSON, default=lambda: {}, nullable=False)
 
