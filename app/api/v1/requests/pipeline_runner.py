@@ -19,6 +19,7 @@ from app.governance.budget.quotas import (
 )
 from app.llm.tracing.llm_trace_writer import LLMTraceWriter
 from app.storage.cache.cache_store import CacheStore
+from app.api.v1.requests.pipeline_persistence import persist_pipeline_delivery
 from ulid import ULID as PythonUlid
 
 #: Nominal number of plan steps (§28 cycle) used for progress reporting.
@@ -1056,6 +1057,21 @@ class PipelineRunner:
             }
         ] + web_sources
 
+        # ------------------------------------------------------------------
+        # Constat 1 (B4-bis): Persist to real PostgreSQL when configured
+        # ------------------------------------------------------------------
+        audit_record: dict[str, Any]
+        persisted, persistence_limits, audit_record = await persist_pipeline_delivery(
+            request_id=request_id,
+            objective=objective,
+            delivery_status=delivery_status,
+            sources=final_sources,
+            information_units=information_units,
+            evidence=evidence,
+            step_results=step_results,
+        )
+        base_limitations.extend(persistence_limits)
+
         delivery_response: dict[str, Any] = {
             "response_id": resp_id,
             "request_id": request_id,
@@ -1086,8 +1102,9 @@ class PipelineRunner:
                 "steps_executed": len(step_results),
             },
             "audit": {
-                "audit_id": ULID.new("AUD_"),
-                "completed_at": now_iso,
+                "audit_id": audit_record.get("audit_event_id") or ULID.new("AUD_"),
+                "completed_at": audit_record.get("timestamp") or now_iso,
+                "persisted": persisted,
             },
             "generated_by": {
                 "agent": "PipelineRunner",
