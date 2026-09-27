@@ -110,10 +110,30 @@ configs/*.local.toml
 *.pem
 *.key
 *.crt
+*.p12
+*.pfx
+*.jks
+*.keystore
 !docker/otel/certs/.gitkeep
 vault-token.txt
 vault-data/
 docker/vault/data/
+
+# Secrets de deploiement : JAMAIS versionnes (B4-ter-5).
+# Seul le fichier *.example, rempli de placeholders, doit etre committe.
+secrets.yaml
+secrets.yml
+**/secrets.yaml
+**/secrets.yml
+**/*secrets.yaml
+**/*secrets.yml
+**/*-secret.yaml
+**/*-secrets.yaml
+**/credentials.yaml
+**/credentials.json
+**/*.env
+!**/*.example
+!deploy/cloud/k8s/secrets.yaml.example
 
 # -----------------------------------------------------------------------------
 # IDE & éditeurs
