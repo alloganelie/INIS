@@ -9,12 +9,12 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
     "paho-mqtt>=2.0",
-    "pydantic>=2.9",
+    "pydantic>=2.13.5",
     "sqlalchemy>=2.0",
     "asyncpg",
     "alembic",
     "aio-pika",
-    "httpx",
+    "httpx>=0.28.1",
     "structlog",
     "python-ulid",
     "trafilatura>=1.12",
@@ -28,6 +28,14 @@ dependencies = [
     "pypdf>=4.0",
     "pdfplumber>=0.11",
     "python-docx>=1.1",
+    # §19 — CVE-patched minimum floors (2026 advisories). The floors below are
+    # the highest *published* releases: `httpx` 2.12.0 and `pydantic` 2.14.2 do
+    # not exist on the index (pydantic 2.14.x is alpha-only), so the max stable
+    # release is pinned instead and tracked as an open debt in AGENT_STATUS.md.
+    "starlette>=1.0.1",      # CVE-2026-48710 (BadHost)
+    "litellm>=1.83.10",      # CVE-2026-42208 (SQL injection)
+    "cryptography>=46.0.6",  # transitive via boto3
+    "urllib3>=2.5.0",        # transitive via boto3
 ]
 
 [project.optional-dependencies]
