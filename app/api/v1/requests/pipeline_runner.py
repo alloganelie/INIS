@@ -8,8 +8,12 @@ import json
 import time
 from typing import Any, AsyncGenerator
 
+from app.agents.runtime.lifecycle import GRACEFUL_EXPIRY_STATUS, RequestLifecycle
 from app.domain.value_objects.ulid import ULID
 from ulid import ULID as PythonUlid
+
+#: Nominal number of plan steps (§28 cycle) used for progress reporting.
+PIPELINE_STEPS_TOTAL = 22
 
 
 class PipelineRunner:
@@ -22,6 +26,7 @@ class PipelineRunner:
         self._event_history: dict[str, list[dict[str, Any]]] = {}
         self._subscribers: dict[str, list[asyncio.Queue[dict[str, Any]]]] = {}
         self._running: set[str] = set()
+        self._lifecycles: dict[str, RequestLifecycle] = {}
 
     def get_runs_count(self) -> int:
         """Return total count of executed pipeline runs."""
@@ -40,6 +45,99 @@ class PipelineRunner:
     def is_running(self, request_id: str) -> bool:
         """Check if pipeline is actively running for a request."""
         return request_id in self._running
+
+    # -- §41.1 lifecycle ------------------------------------------------
+
+    def register_lifecycle(self, request_id: str, steps_total: int = PIPELINE_STEPS_TOTAL) -> RequestLifecycle:
+        """Create (or return) the resumable lifecycle of a request."""
+        lifecycle = self._lifecycles.get(request_id)
+        if lifecycle is None:
+            lifecycle = RequestLifecycle(request_id, steps_total=steps_total)
+            self._lifecycles[request_id] = lifecycle
+        return lifecycle
+
+    def begin_attempt(self, request_id: str, steps_total: int = PIPELINE_STEPS_TOTAL) -> RequestLifecycle:
+        """Start a fresh execution attempt for *request_id* (§41.1 resume).
+
+        A resumed run is a new attempt: the previous lifecycle is replaced so
+        its TTL restarts and its checkpoint can be re-seeded from a token.
+        """
+        lifecycle = RequestLifecycle(request_id, steps_total=steps_total)
+        self._lifecycles[request_id] = lifecycle
+        self._running.add(request_id)
+        return lifecycle
+
+    def get_lifecycle(self, request_id: str) -> RequestLifecycle | None:
+        """Return the lifecycle of a request, or None when never started."""
+        return self._lifecycles.get(request_id)
+
+    def commit_step(self, request_id: str, step_id: str, result: Any = None) -> None:
+        """Commit a completed pipeline step on the request lifecycle."""
+        self.register_lifecycle(request_id).commit_step(step_id, result)
+
+    def progress(self, request_id: str) -> Any | None:
+        """Return the §41.1 progress snapshot of a request, or None."""
+        lifecycle = self._lifecycles.get(request_id)
+        return lifecycle.progress() if lifecycle else None
+
+    def resume_state(self, request_id: str) -> dict[str, Any] | None:
+        """Return the §41.1 resume projection of a request, or None."""
+        lifecycle = self._lifecycles.get(request_id)
+        return lifecycle.resume_state() if lifecycle else None
+
+    def resume(self, request_id: str, resume_token: str) -> dict[str, Any]:
+        """Resume a request from an opaque token, continuing after the last step.
+
+        Raises:
+            ValueError: propagated from the lifecycle when the token is invalid
+                or expired (the API layer maps it to HTTP 400).
+        """
+        # Validate against the issuing lifecycle first so a forged or foreign
+        # token never replaces live state.
+        issuer = self._lifecycles.get(request_id) or self.register_lifecycle(request_id)
+        issuer.verify_resume_token(resume_token)
+
+        lifecycle = self.begin_attempt(request_id, issuer.steps_total)
+        checkpoint = lifecycle.restore_from_token(resume_token)
+        state = self._run_states.get(request_id, {})
+        state.update(
+            {
+                "status": "resumed",
+                "resumed_from_step": checkpoint.step_id if checkpoint else None,
+                "resumed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        self._run_states[request_id] = state
+        self._emit_event(request_id, {
+            "step": "resumed",
+            "status": "resumed",
+            "request_id": request_id,
+            "from_step": checkpoint.step_id if checkpoint else None,
+        })
+        return {
+            "request_id": request_id,
+            "status": "resumed",
+            "last_committed_step": checkpoint.step_id if checkpoint else None,
+            "resumable": checkpoint is not None,
+            "steps_done": lifecycle.steps_done(),
+            "steps_total": lifecycle.steps_total,
+        }
+
+    def collect_expired(self, request_id: str) -> dict[str, Any] | None:
+        """Return the graceful PARTIAL_SUCCESS payload when the TTL elapsed."""
+        lifecycle = self._lifecycles.get(request_id)
+        if lifecycle is None or not lifecycle.is_expired():
+            return None
+        payload = lifecycle.expire_gracefully()
+        self._run_states[request_id] = {**self._run_states.get(request_id, {}), **payload}
+        self._running.discard(request_id)
+        self._emit_event(request_id, {
+            "step": "graceful_expiry",
+            "status": GRACEFUL_EXPIRY_STATUS,
+            "request_id": request_id,
+            "steps_done": payload["steps_done"],
+        })
+        return payload
 
     def _emit_event(self, request_id: str, event: dict[str, Any]) -> None:
         """Record an event and dispatch to active SSE subscriber queues."""
@@ -106,6 +204,8 @@ class PipelineRunner:
             "request_id": request_id,
             "started_at": start_iso,
         }
+        lifecycle = self.register_lifecycle(request_id)
+        lifecycle.set_step("UNDERSTANDING")
 
         # -------------------------------------------------------------
         # Stage 1: Understanding (with graceful degradation)
@@ -157,10 +257,12 @@ class PipelineRunner:
             "request_id": request_id,
             "requirements": requirements_list,
         })
+        lifecycle.commit_step("UNDERSTANDING", {"requirements": requirements_list})
 
         # -------------------------------------------------------------
         # Stage 2: Planning (with graceful degradation)
         # -------------------------------------------------------------
+        lifecycle.set_step("PLAN_GENERATION")
         self._emit_event(request_id, {
             "step": "planning",
             "status": "in_progress",
@@ -268,10 +370,12 @@ class PipelineRunner:
             "request_id": request_id,
             "plan_id": plan.get("plan_id") if isinstance(plan, dict) else None,
         })
+        lifecycle.commit_step("PLAN_GENERATION", {"plan_id": plan.get("plan_id") if isinstance(plan, dict) else None})
 
         # -------------------------------------------------------------
         # Stage 3: Real web-search execution per §9/§10 (graceful degradation)
         # -------------------------------------------------------------
+        lifecycle.set_step("DATA_ACQUISITION")
         self._emit_event(request_id, {
             "step": "executing",
             "status": "in_progress",
@@ -423,10 +527,12 @@ class PipelineRunner:
             "results_count": len(step_results),
             "facts_extracted": len(web_facts),
         })
+        lifecycle.commit_step("DATA_ACQUISITION", {"facts": len(web_facts), "results": len(step_results)})
 
         # -------------------------------------------------------------
         # Stage 4: Confidence Evaluation (with graceful degradation)
         # -------------------------------------------------------------
+        lifecycle.set_step("CONFIDENCE_ASSESSMENT")
         self._emit_event(request_id, {
             "step": "confidence",
             "status": "in_progress",
@@ -677,6 +783,12 @@ class PipelineRunner:
         self._total_duration += duration
         self._run_states[request_id] = delivery_response
         self._running.discard(request_id)
+
+        # §41.1 — commit the final step, record partial findings, close the lifecycle
+        for finding in findings:
+            lifecycle.add_finding(finding)
+        lifecycle.commit_step("DELIVERY", {"response_id": resp_id})
+        lifecycle.complete()
 
         # Notify observability metrics if present
         try:
