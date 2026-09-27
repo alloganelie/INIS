@@ -116,6 +116,24 @@ def get_request_usage(id: str) -> dict[str, Any]:
     return report
 
 
+@router.get(
+    "/{id}/llm-traces",
+    summary="Get the §41.12 LLM decision traces of a request",
+)
+def get_request_llm_traces(id: str) -> dict[str, Any]:
+    """Return every ``llm_decision_trace`` recorded for one Information Request.
+
+    Traces expose the sha256 digest of each prompt, never the prompt itself.
+    """
+    if id not in _REQUESTS_STORE:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Information request '{id}' not found",
+        )
+    traces = pipeline_runner.llm_traces(id)
+    return {"request_id": id, "count": len(traces), "traces": traces}
+
+
 @usage_router.get(
     "/global",
     summary="Get the aggregated §41.2 consumption across all requests",

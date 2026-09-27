@@ -9,7 +9,6 @@ with ``checkfirst`` semantics; production DDL remains owned by
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -19,6 +18,7 @@ from sqlalchemy import Column, DateTime, Float, Integer, MetaData, String, Table
 from ulid import ULID as UlidFactory
 
 from app.core.errors import ValidationError
+from app.llm.tracing.prompt_hasher import hash_prompt, is_prompt_hash
 
 _METADATA = MetaData()
 
@@ -59,11 +59,6 @@ LLM_DECISION_TRACE_TABLE = Table(
     Column("confidence_in_decision", Float, nullable=False, default=0.0),
     Column("timestamp", DateTime(timezone=True), nullable=False),
 )
-
-
-def hash_prompt(prompt: str) -> str:
-    """Return the sha256 hex digest of a prompt (never stores clear text)."""
-    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
 
 class LLMTraceWriter:
@@ -123,6 +118,10 @@ class LLMTraceWriter:
         task_type = trace["task_type"]
         if task_type not in TASK_TYPES:
             raise ValidationError(f"Invalid task_type for llm_decision_trace: {task_type}")
+        if not is_prompt_hash(trace["prompt_hash"]):
+            raise ValidationError(
+                "prompt_hash must be the sha256 hex digest of the prompt, never the prompt itself"
+            )
         confidence = trace.get("confidence_in_decision", 0.0)
         if not isinstance(confidence, (int, float)) or not 0.0 <= float(confidence) <= 1.0:
             raise ValidationError("confidence_in_decision must be a float in 0-1")

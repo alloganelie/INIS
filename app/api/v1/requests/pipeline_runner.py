@@ -17,6 +17,7 @@ from app.governance.budget.quotas import (
     BudgetExceeded,
     BudgetGuard,
 )
+from app.llm.tracing.llm_trace_writer import LLMTraceWriter
 from ulid import ULID as PythonUlid
 
 #: Nominal number of plan steps (§28 cycle) used for progress reporting.
@@ -35,6 +36,8 @@ class PipelineRunner:
         self._running: set[str] = set()
         self._lifecycles: dict[str, RequestLifecycle] = {}
         self._guards: dict[str, BudgetGuard] = {}
+        self._llm_traces: LLMTraceWriter = LLMTraceWriter()
+        self._trace_step_ids: dict[tuple[str, str], str] = {}
 
     def get_runs_count(self) -> int:
         """Return total count of executed pipeline runs."""
@@ -196,8 +199,16 @@ class PipelineRunner:
         """
         guard = self.guard_for(request_id)
         usage = llm_result.get("usage") or {}
-        input_tokens = int(usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0)
-        output_tokens = int(usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0)
+        input_tokens = int(
+            usage.get("input_tokens", usage.get("prompt_tokens"))
+            or llm_result.get("input_tokens", 0)
+            or 0
+        )
+        output_tokens = int(
+            usage.get("output_tokens", usage.get("completion_tokens"))
+            or llm_result.get("output_tokens", 0)
+            or 0
+        )
         cost_usd = float(usage.get("cost_usd", 0.0) or 0.0)
         try:
             guard.charge_llm(input_tokens, output_tokens, cost_usd=cost_usd)
@@ -206,6 +217,100 @@ class PipelineRunner:
             return guard.exceeded or "max_llm_tokens"
         self._publish_usage(request_id, guard)
         return None
+
+    # -- §41.12 LLM decision traces ------------------------------------
+
+    @property
+    def trace_writer(self) -> LLMTraceWriter:
+        """Return the shared ``llm_decision_trace`` writer."""
+        return self._llm_traces
+
+    def llm_traces(self, request_id: str) -> list[dict[str, Any]]:
+        """Return the §41.12 decision traces recorded for a request."""
+        return [
+            dict(trace)
+            for trace in self._llm_traces.list_traces()
+            if trace.get("request_id") == request_id
+        ]
+
+    def trace_steps(self, request_id: str) -> dict[str, str]:
+        """Return the ``phase -> STEP_{ULID}`` map used to trace a request."""
+        return {
+            phase: step_id
+            for (req, phase), step_id in self._trace_step_ids.items()
+            if req == request_id
+        }
+
+    def _step_id_for(self, request_id: str, phase: str) -> str:
+        """Return the stable ``STEP_{ULID}`` identifier of a traced phase (§0.3)."""
+        key = (request_id, phase)
+        step_id = self._trace_step_ids.get(key)
+        if step_id is None:
+            step_id = ULID.new("STEP_")
+            self._trace_step_ids[key] = step_id
+        return step_id
+
+    def _trace_llm(
+        self,
+        request_id: str,
+        phase: str,
+        task_type: str,
+        prompt: str,
+        llm_result: Any,
+        decision_summary: str = "",
+    ) -> dict[str, Any] | None:
+        """Record an ``llm_decision_trace`` for a significant LLM call (§41.12).
+
+        Args:
+            request_id: Information request the decision belongs to.
+            phase: Pipeline phase name (mapped to a stable ``STEP_{ULID}``).
+            task_type: One of the five §41.12 LLM task types.
+            prompt: Full prompt text — only its sha256 digest is stored.
+            llm_result: Task result dict or router response object.
+            decision_summary: Short description of the decision taken.
+
+        Tracing is best effort: a malformed result degrades to ``None`` instead
+        of breaking the delivery of an otherwise valid request.
+        """
+        try:
+            step_id = self._step_id_for(request_id, phase)
+            if isinstance(llm_result, dict):
+                result: dict[str, Any] = dict(llm_result)
+            elif llm_result is None:
+                result = {}
+            else:  # router response objects expose plain attributes
+                result = {
+                    "model": getattr(llm_result, "model", None),
+                    "input_tokens": getattr(llm_result, "input_tokens", 0),
+                    "output_tokens": getattr(llm_result, "output_tokens", 0),
+                    "latency_ms": getattr(llm_result, "latency_ms", 0),
+                    "usage": getattr(llm_result, "usage", None) or {},
+                }
+            usage = result.get("usage") or {}
+            if not isinstance(usage, dict):
+                usage = vars(usage)
+            trace = self._llm_traces.build_trace(
+                request_id=request_id,
+                step_id=step_id,
+                task_type=task_type,
+                model_used=str(result.get("model") or result.get("model_used") or "unknown"),
+                prompt=prompt,
+                input_tokens=int(
+                    usage.get("input_tokens", usage.get("prompt_tokens"))
+                    or result.get("input_tokens", 0)
+                    or 0
+                ),
+                output_tokens=int(
+                    usage.get("output_tokens", usage.get("completion_tokens"))
+                    or result.get("output_tokens", 0)
+                    or 0
+                ),
+                latency_ms=int(result.get("latency_ms", 0) or 0),
+                decision_summary=f"[{phase}] {decision_summary}".strip(),
+            )
+            return self._llm_traces.write(trace)
+        except Exception:  # noqa: BLE001 - observability must never break the run
+            return None
 
     def _emit_event(self, request_id: str, event: dict[str, Any]) -> None:
         """Record an event and dispatch to active SSE subscriber queues."""
@@ -325,6 +430,19 @@ class PipelineRunner:
                 requirements = llm_result["content"]
             # §41.2 — meter the LLM call against the request budget.
             budget_exceeded = self._meter_llm(request_id, llm_result)
+            # §41.12 — trace the reasoning decision (prompt stored hashed only).
+            self._trace_llm(
+                request_id,
+                phase="understanding",
+                task_type="understanding",
+                prompt=prompt,
+                llm_result=llm_result,
+                decision_summary=(
+                    "stubbed call; deterministic requirements kept"
+                    if llm_result.get("stub")
+                    else f"requirements parsed from LLM output ({len(requirements_list)} kept)"
+                ),
+            )
         except ImportError:
             pass  # fallback sur parsing déterministe
         except Exception:
@@ -419,6 +537,19 @@ class PipelineRunner:
             # §41.2 — meter the planning LLM call too.
             exceeded = self._meter_llm(request_id, llm_result)
             budget_exceeded = budget_exceeded or exceeded
+            # §41.12 — trace the planning decision.
+            self._trace_llm(
+                request_id,
+                phase="planning",
+                task_type="planning",
+                prompt=prompt,
+                llm_result=llm_result,
+                decision_summary=(
+                    "stubbed call; deterministic plan kept"
+                    if llm_result.get("stub")
+                    else "plan steps parsed from LLM output"
+                ),
+            )
             if not llm_result.get("stub"):
                 # parser le JSON via app.llm.parsers.plan_parser.parse_plan
                 parsed_llm_plan = parse_plan(llm_result["content"])
@@ -774,6 +905,15 @@ class PipelineRunner:
                     request_id, {"usage": getattr(response, "usage", None)}
                 )
                 budget_exceeded = budget_exceeded or exceeded
+                # §41.12 — trace the synthesis decision (§41.12 understanding task).
+                self._trace_llm(
+                    request_id,
+                    phase="synthesis",
+                    task_type="understanding",
+                    prompt=synthesis_prompt,
+                    llm_result=response,
+                    decision_summary="final answer drafted from collected findings",
+                )
                 try:
                     import re
 
