@@ -1,23 +1,38 @@
 """Security module per INIS §19."""
 
 from app.security.authn import APIKeyValidator, JWTValidator, MTLSCertValidator
-from app.security.authz import ABACEngine, PermissionChecker, PolicyEvaluator, PolicyLoader, RBACEngine
+from app.security.authz import (
+    ABACEngine,
+    PermissionChecker,
+    PolicyEvaluator,
+    PolicyLoader,
+    RBACEngine,
+)
 from app.security.pii import PIIDetector, PIIMatch, Redactor, SensitivityClassifier
-from app.security.rate_limiting import RateLimiter, RateLimitStore
+from app.security.rate_limiting import (
+    RateLimitBackend,
+    RateLimiter,
+    RateLimitStore,
+    RedisRateLimitStore,
+    create_rate_limit_store,
+)
 
 __all__ = [
-    "JWTValidator",
-    "APIKeyValidator",
-    "MTLSCertValidator",
-    "RBACEngine",
     "ABACEngine",
-    "PolicyEvaluator",
-    "PermissionChecker",
-    "PolicyLoader",
+    "APIKeyValidator",
+    "JWTValidator",
+    "MTLSCertValidator",
     "PIIDetector",
     "PIIMatch",
-    "Redactor",
-    "SensitivityClassifier",
-    "RateLimiter",
+    "PermissionChecker",
+    "PolicyEvaluator",
+    "PolicyLoader",
+    "RBACEngine",
+    "RateLimitBackend",
     "RateLimitStore",
+    "RateLimiter",
+    "Redactor",
+    "RedisRateLimitStore",
+    "SensitivityClassifier",
+    "create_rate_limit_store",
 ]

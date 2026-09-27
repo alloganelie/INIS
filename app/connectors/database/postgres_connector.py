@@ -1,8 +1,23 @@
-"""PostgreSQL connector for INIS per §9.1."""
+"""PostgreSQL connector for INIS per §9.1.
+
+Design rules:
+
+* **No fabricated data.** When the async engine cannot be built, every data
+  method raises :class:`~app.core.errors.InfrastructureError` instead of
+  returning a plausible looking :class:`RawSource`. §0.2 forbids emitting a fact
+  that carries no real ``source_id``, and the previous degraded mode returned a
+  fake SQL statement that looked like a successful retrieval.
+* **Parameterised SQL.** Only *identifiers* (table and column names) are
+  interpolated, and they must match ``^[a-zA-Z_][a-zA-Z0-9_]*$``; every value —
+  including ``LIMIT`` — travels as a bound parameter.
+* **Write support.** :meth:`PostgresConnector.write` inserts rows with bound
+  parameters inside one explicit transaction.
+"""
 
 import re
 import time
-from typing import Optional
+from collections.abc import Mapping, Sequence
+from typing import Any, ClassVar
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -15,41 +30,88 @@ from app.connectors.base import (
     SourceCandidate,
     SourceMetadata,
 )
-from app.storage.database.engine import create_engine_or_none
+from app.core.errors import InfrastructureError, ValidationError
+from app.storage.database.engine import create_engine
+
+#: PostgreSQL identifiers used without quoting must match this pattern, which is
+#: what makes the f-string interpolation of identifiers safe.
+_IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 class PostgresConnector:
     """PostgreSQL database connector using asyncpg and SQLAlchemy."""
 
     connector_id: str = "postgres-connector"
-    supported_source_types: list[str] = ["postgresql"]
+    supported_source_types: ClassVar[list[str]] = ["postgresql"]
 
-    def __init__(self, connection_string: str) -> None:
+    def __init__(self, connection_string: str, *, max_rows: int = 100) -> None:
         """Initialize the PostgreSQL connector.
 
         Args:
             connection_string: PostgreSQL connection string.
-        """
-        self._connection_string = connection_string
-        self._engine: Optional[AsyncEngine] = None
+            max_rows: Upper bound applied to every :meth:`retrieve` query.
 
-    def _validate_table_name(self, table_name: str) -> bool:
-        """Validate table name to prevent SQL injection.
+        Raises:
+            ValidationError: If the connection string is empty or *max_rows* < 1.
+        """
+        if not connection_string or not isinstance(connection_string, str):
+            raise ValidationError("connection_string must be a non-empty string")
+        if max_rows < 1:
+            raise ValidationError("max_rows must be >= 1")
+        self._connection_string = connection_string
+        self._max_rows = max_rows
+        self._engine: AsyncEngine | None = None
+
+    @staticmethod
+    def _validate_table_name(table_name: str) -> bool:
+        """Validate a PostgreSQL identifier (table or column name).
 
         Args:
-            table_name: Table name to validate.
+            table_name: Identifier to validate.
 
         Returns:
             True if valid, False otherwise.
         """
-        # PostgreSQL identifiers used without quoting must start with a letter
-        # or underscore and cannot contain a hyphen.
-        return bool(re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", table_name))
+        return bool(isinstance(table_name, str) and _IDENTIFIER_PATTERN.match(table_name))
 
-    async def _get_engine(self) -> Optional[AsyncEngine]:
-        """Get or create the async engine. Returns None in degraded mode."""
+    def _require_table_name(self, table_name: str) -> str:
+        """Return *table_name* when it is a safe identifier.
+
+        Raises:
+            ValidationError: If *table_name* cannot be interpolated safely.
+        """
+        if not self._validate_table_name(table_name):
+            raise ValidationError(f"invalid PostgreSQL identifier: {table_name!r}")
+        return table_name
+
+    @staticmethod
+    def _positive_int(value: Any, *, default: int, name: str) -> int:
+        """Coerce an optional positive integer bound (used for ``LIMIT``)."""
+        if value is None or value == "":
+            return default
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(f"{name} must be an integer") from exc
+        if parsed < 1:
+            raise ValidationError(f"{name} must be >= 1")
+        return parsed
+
+    async def _get_engine(self) -> AsyncEngine:
+        """Get or create the async engine.
+
+        Returns:
+            The configured async engine.
+
+        Raises:
+            InfrastructureError: If the connection string cannot build an engine;
+                no caller ever receives fabricated data instead (§0.2).
+        """
         if self._engine is None:
-            self._engine = create_engine_or_none(self._connection_string)
+            try:
+                self._engine = create_engine(self._connection_string)
+            except Exception as exc:
+                raise InfrastructureError(f"PostgreSQL connector unavailable: {exc}") from exc
         return self._engine
 
     async def discover(self, query: Query) -> list[SourceCandidate]:
@@ -59,32 +121,24 @@ class PostgresConnector:
             query: Query for source discovery.
 
         Returns:
-            List of source candidates.
+            The matching tables; an empty list is a legitimate "no match" answer
+            and never a fabricated candidate (§0.2).
+
+        Raises:
+            InfrastructureError: If the database engine cannot be built.
         """
         engine = await self._get_engine()
-        if engine is None:
-            # Degraded mode: return stub candidate
-            return [
-                SourceCandidate(
-                    source_id=f"postgres-{query.query_string}",
-                    location=self._connection_string,
-                    metadata={"type": "postgresql", "table": query.query_string},
-                )
-            ]
-
         candidates: list[SourceCandidate] = []
-        
+
         async with engine.connect() as conn:
-            pattern = f"%{query.query_string}%"
             result = await conn.execute(
                 text(
                     "SELECT table_name FROM information_schema.tables "
                     "WHERE table_schema = 'public' AND table_name LIKE :pattern"
                 ),
-                {"pattern": pattern},
+                {"pattern": f"%{query.query_string}%"},
             )
-            rows = result.fetchall()
-            for row in rows:
+            for row in result.fetchall():
                 candidates.append(
                     SourceCandidate(
                         source_id=f"postgres-{row[0]}",
@@ -102,42 +156,75 @@ class PostgresConnector:
 
         Returns:
             Raw source data.
-        """
-        engine = await self._get_engine()
-        table_name = candidate.metadata.get("table", "unknown")
-        
-        if engine is None:
-            # Degraded mode: return stub query string
-            return RawSource(
-                source_id=candidate.source_id,
-                data=f"SELECT * FROM {table_name} LIMIT 100",
-                content_type="text/plain",
-                metadata=candidate.metadata,
-            )
 
-        # Validate table name to prevent SQL injection
-        if not self._validate_table_name(table_name):
-            return RawSource(
-                source_id=candidate.source_id,
-                data="Invalid table name",
-                content_type="text/plain",
-                metadata=candidate.metadata,
-            )
+        Raises:
+            ValidationError: If the candidate carries no safe table name or an
+                invalid ``limit``.
+            InfrastructureError: If the database engine cannot be built.
+        """
+        table_name = self._require_table_name(str(candidate.metadata.get("table", "")))
+        limit = self._positive_int(
+            candidate.metadata.get("limit"),
+            default=self._max_rows,
+            name="limit",
+        )
+        engine = await self._get_engine()
 
         async with engine.connect() as conn:
-            result = await conn.execute(text(f"SELECT * FROM {table_name} LIMIT 100"))
+            # Only the validated identifier is interpolated; LIMIT is a bound
+            # parameter, so no external value ever reaches the SQL text.
+            result = await conn.execute(
+                text(f"SELECT * FROM {table_name} LIMIT :limit"),
+                {"limit": limit},
+            )
             rows = result.fetchall()
             columns = result.keys()
-            
-            # Convert to string representation
-            data_str = "\n".join([str(dict(zip(columns, row))) for row in rows])
-            
-            return RawSource(
-                source_id=candidate.source_id,
-                data=data_str,
-                content_type="text/plain",
-                metadata=candidate.metadata,
-            )
+
+        data_str = "\n".join([str(dict(zip(columns, row))) for row in rows])
+        return RawSource(
+            source_id=candidate.source_id,
+            data=data_str,
+            content_type="text/plain",
+            metadata=candidate.metadata,
+        )
+
+    async def write(
+        self,
+        table_name: str,
+        rows: Sequence[Mapping[str, Any]],
+    ) -> int:
+        """Insert rows into a PostgreSQL table with bound parameters.
+
+        Args:
+            table_name: Destination table (validated identifier).
+            rows: Rows to insert; every row must expose the same column names.
+
+        Returns:
+            Number of rows written.
+
+        Raises:
+            ValidationError: If the table or columns are invalid, or *rows* is empty.
+            InfrastructureError: If the database engine cannot be built.
+        """
+        self._require_table_name(table_name)
+        if not rows:
+            raise ValidationError("rows must not be empty")
+        columns = list(rows[0].keys())
+        if not columns:
+            raise ValidationError("rows must expose at least one column")
+        for column in columns:
+            self._require_table_name(column)
+        for row in rows:
+            if list(row.keys()) != columns:
+                raise ValidationError("every row must expose the same columns")
+
+        column_list = ", ".join(columns)
+        bind_list = ", ".join(f":{column}" for column in columns)
+        statement = text(f"INSERT INTO {table_name} ({column_list}) VALUES ({bind_list})")
+        engine = await self._get_engine()
+        async with engine.begin() as conn:
+            result = await conn.execute(statement, [dict(row) for row in rows])
+        return int(result.rowcount or 0)
 
     async def inspect(self, raw: RawSource) -> SourceMetadata:
         """Inspect raw PostgreSQL data to extract metadata.
@@ -148,13 +235,15 @@ class PostgresConnector:
         Returns:
             Source metadata.
         """
-        size = len(raw.data) if isinstance(raw.data, str) else len(raw.data)
-        lines = raw.data.split("\n") if isinstance(raw.data, str) else []
+        text_data = (
+            raw.data.decode("utf-8", errors="replace") if isinstance(raw.data, bytes) else raw.data
+        )
+        lines = text_data.split("\n")
         record_count = len([line for line in lines if line.strip()])
-        
+
         return SourceMetadata(
             source_id=raw.source_id,
-            size_bytes=size,
+            size_bytes=len(raw.data),
             record_count=record_count,
             schema=None,
         )
@@ -163,35 +252,27 @@ class PostgresConnector:
         """Check if the connector is healthy.
 
         Returns:
-            Health status with latency.
+            Health status with latency. An unreachable database reports
+            ``healthy=False``: the connector never claims to be healthy while it
+            cannot actually be used (§0.2).
         """
         start_time = time.perf_counter()
-        engine = await self._get_engine()
-
-        if engine is None:
-            latency_ms = (time.perf_counter() - start_time) * 1000
-            return HealthStatus(
-                healthy=True,
-                message="PostgreSQL connector healthy (degraded mode, no engine)",
-                latency_ms=latency_ms,
-            )
-
         try:
+            engine = await self._get_engine()
             async with engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
-            latency_ms = (time.perf_counter() - start_time) * 1000
-            return HealthStatus(
-                healthy=True,
-                message="PostgreSQL connector healthy",
-                latency_ms=latency_ms,
-            )
-        except Exception as e:
-            latency_ms = (time.perf_counter() - start_time) * 1000
+        except Exception as exc:  # noqa: BLE001 - health checks report, never raise
             return HealthStatus(
                 healthy=False,
-                message=f"PostgreSQL connector unhealthy: {str(e)}",
-                latency_ms=latency_ms,
+                message=f"PostgreSQL connector unhealthy: {exc}",
+                latency_ms=(time.perf_counter() - start_time) * 1000,
             )
+
+        return HealthStatus(
+            healthy=True,
+            message="PostgreSQL connector healthy",
+            latency_ms=(time.perf_counter() - start_time) * 1000,
+        )
 
     async def metadata(self) -> ConnectorMetadata:
         """Get connector metadata.

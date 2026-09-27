@@ -1,5 +1,9 @@
 """Tests for health and version endpoints."""
 
+import asyncio
+import sys
+from typing import Any
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -86,8 +90,7 @@ def test_v1_health_ready_broker_states() -> None:
 
 def test_v1_health_exposes_circuit_breaker_states() -> None:
     """§41.8: /v1/health must expose open | closed | half_open per scope."""
-    from app.connectors.resilience.circuit_breaker import CircuitBreakerConfig
-    from app.connectors.resilience.circuit_breaker import registry
+    from app.connectors.resilience.circuit_breaker import CircuitBreakerConfig, registry
 
     try:
         registry.reset(default_config=CircuitBreakerConfig(failure_threshold=1))
@@ -109,5 +112,121 @@ def test_v1_health_exposes_circuit_breaker_states() -> None:
         assert res.json()["status"] == "ready"
     finally:
         registry.reset(default_config=CircuitBreakerConfig())
+
+
+def test_v1_health_ready_reports_every_wired_subsystem() -> None:
+    """Readiness aggregates database, broker, redis and breaker checks (§32)."""
+    res = client.get("/v1/health/ready")
+
+    checks = res.json()["checks"]
+    assert res.status_code == 200
+    assert set(checks) == {"database", "broker", "redis", "circuit_breakers"}
+    assert checks["database"]["status"] == "ready"
+    assert checks["redis"]["status"] == "ready"
+    assert "latency_ms" in checks["database"]
+
+
+def test_v1_health_ready_reports_redis_state() -> None:
+    """A registered Redis client feeds the readiness report like the broker."""
+    from app.api.v1.system.health_router import set_redis_check
+
+    class DummyRedis:
+        def __init__(self, up: bool) -> None:
+            self._up = up
+
+        async def ping(self) -> bool:
+            if not self._up:
+                raise ConnectionError("redis unreachable")
+            return True
+
+    try:
+        set_redis_check(DummyRedis(up=True))
+        res = client.get("/v1/health/ready")
+        assert res.status_code == 200
+        assert res.json()["checks"]["redis"]["status"] == "ready"
+
+        set_redis_check(DummyRedis(up=False))
+        res_down = client.get("/v1/health/ready")
+        assert res_down.status_code == 503
+        assert res_down.json()["checks"]["redis"]["status"] == "not_ready"
+        assert "error" in res_down.json()["checks"]["redis"]
+    finally:
+        set_redis_check(None)
+
+
+def test_v1_health_ready_redis_url_without_client_fails_loudly(
+    monkeypatch: Any,
+) -> None:
+    """A configured REDIS_URL without the optional client is not silently ignored."""
+    from app.api.v1.system import health_router
+
+    monkeypatch.setenv("REDIS_URL", "redis://cache:6379/0")
+    monkeypatch.setitem(sys.modules, "redis", None)
+    monkeypatch.setattr(health_router, "_redis_client", None)
+    monkeypatch.setattr(health_router, "_redis_probe", None)
+
+    res = client.get("/v1/health/ready")
+
+    assert res.status_code == 503
+    assert res.json()["checks"]["redis"]["status"] == "not_ready"
+    assert "error" in res.json()["checks"]["redis"]
+
+
+def test_v1_health_ready_isolates_failing_and_slow_checks(
+    monkeypatch: Any,
+) -> None:
+    """A raising or hanging dependency degrades readiness without a 500."""
+    from app.api.v1.system import health_router
+
+    class ExplodingBroker:
+        async def health_check(self) -> dict[str, str]:
+            raise RuntimeError("broker exploded")
+
+    class SlowBroker:
+        async def health_check(self) -> dict[str, str]:
+            await asyncio.sleep(5)
+            return {"status": "up"}
+
+    try:
+        health_router.set_broker_check(ExplodingBroker())
+        res = client.get("/v1/health/ready")
+        assert res.status_code == 503
+        assert res.json()["checks"]["broker"]["status"] == "not_ready"
+        assert "error" in res.json()["checks"]["broker"]
+
+        monkeypatch.setattr(health_router, "_READINESS_TIMEOUT_SECONDS", 0.05)
+        health_router.set_broker_check(SlowBroker())
+        slow = client.get("/v1/health/ready")
+        assert slow.status_code == 503
+        assert slow.json()["checks"]["broker"]["status"] == "not_ready"
+    finally:
+        health_router.set_broker_check(None)
+
+
+def test_v1_health_ready_broker_health_check_probe() -> None:
+    """A broker exposing health_check() drives readiness through the aggregator."""
+    from app.api.v1.system.health_router import set_broker_check
+
+    class HealthyBroker:
+        async def health_check(self) -> dict[str, str]:
+            return {"status": "up", "detail": "amqp"}
+
+    class UnhealthyBroker:
+        async def health_check(self) -> dict[str, str]:
+            return {"status": "down", "detail": "no channel"}
+
+    try:
+        set_broker_check(HealthyBroker())
+        healthy = client.get("/v1/health/ready")
+        assert healthy.status_code == 200
+        assert healthy.json()["checks"]["broker"]["status"] == "ready"
+        assert healthy.json()["checks"]["broker"]["detail"] == "amqp"
+
+        set_broker_check(UnhealthyBroker())
+        unhealthy = client.get("/v1/health/ready")
+        assert unhealthy.status_code == 503
+        assert unhealthy.json()["checks"]["broker"]["status"] == "not_ready"
+    finally:
+        set_broker_check(None)
 
 
