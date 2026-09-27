@@ -41,6 +41,10 @@ ENV_ENABLED = "INIS_RATE_LIMIT_ENABLED"
 #: Bucket key used when no actor could be resolved at all.
 ANONYMOUS_KEY = "anonymous"
 
+#: Liveness/readiness probes are never metered: an orchestrator polling them
+#: must not be able to exhaust an actor budget (and vice versa).
+EXTRA_EXEMPT_PREFIXES = ("/v1/health", "/v1/status")
+
 
 def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in ("1", "true", "yes", "on")
@@ -75,7 +79,9 @@ def is_exempt_path(path: str) -> bool:
     """Return whether *path* bypasses the limiter (health, docs, login)."""
     if path in EXEMPT_EXACT_PATHS:
         return True
-    return any(path.startswith(prefix) for prefix in EXEMPT_PREFIXES)
+    if any(path.startswith(prefix) for prefix in EXEMPT_PREFIXES):
+        return True
+    return any(path.startswith(prefix) for prefix in EXTRA_EXEMPT_PREFIXES)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -167,6 +173,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 __all__ = [
     "DEFAULT_REQUESTS_PER_MINUTE",
     "RateLimitMiddleware",
+    "EXTRA_EXEMPT_PREFIXES",
     "is_exempt_path",
     "rate_limit_enabled",
     "resolve_requests_per_minute",

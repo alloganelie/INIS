@@ -65,6 +65,161 @@ Le cycle de refactoring et d'audit v1.0.0 d'INIS a atteint l'ensemble de ses obj
 
 ---
 
+## 3 bis. Lot B4-bis — Câblage des composants à la pipeline réelle
+
+> Date d'exécution : 27 septembre 2026
+> Branche : `feat/v2.0.0-spec-compliance`
+> Base : commit `f9ea50c` (875 passed, 1 skipped) → fin de lot (904 passed, 1 skipped)
+
+L'audit B4-bis a montré que l'API répondait sans jamais écrire en base, sans
+limiter le débit, sans cache et en annonçant un état de santé fictif. Les cinq
+constats sont corrigés ci-dessous, chacun dans un commit atomique.
+
+### Constat 1 — Le pipeline n'écrivait rien en DB (§0.2, §12, §20, §27)
+
+**Avant** : `pipeline_runner.py:33` stockait la livraison dans un dict
+`self._run_states`, et `audit_id` était un `ULID.new("AUD_")` fabriqué, jamais
+écrit. `AuditWriter` et `LineageTracker` n'étaient instanciés nulle part, et
+`get_session()` n'avait aucun appelant.
+
+**Après** (`app/api/v1/requests/pipeline_persistence.py`) :
+
+| Élément | Avant | Après |
+|---|---|---|
+| `audit_events` | ULID synthétisé | `AuditWriter.write(..., session=session)` dans la transaction |
+| `sources` | rien | INSERT (schéma migration 0002) |
+| `information_units` | rien | INSERT (schéma migration 0002) |
+| `evidence` | rien | INSERT (schéma migration 0007) |
+| `transformations` (§12.1) | rien | INSERT via les helpers de `LineageTracker` |
+| Transaction | aucune | `get_session()` — session unique, un seul `commit()` |
+| Sans `INIS_DATABASE_URL` | silence | `limitations += ["persistence: in-memory only (...)"]` |
+
+`AuditWriter.write()` accepte désormais un `session=` optionnel (et retourne
+l'événement stocké) : l'audit rejoint la transaction du pipeline au lieu d'en
+ouvrir une deuxième.
+
+### Constat 2 — `AccountRepository` cassé (§19.2)
+
+**Avant** : `get_account_repository()` renvoyait **la classe**, `repo.create(payload)`
+n'était ni `await`é ni compatible avec la signature réelle → `TypeError` →
+fallback in-memory **toujours** pris, y compris quand la base répondait. Le
+`SessionRepository` était du code mort.
+
+**Après** :
+- `account_repository()` / `session_repository()` (context managers dans
+  `app/storage/database/session.py`) fournissent un repository **lié à une
+  `AsyncSession` réelle** ;
+- les endpoints sont `async` et appellent la vraie signature
+  `await repo.create(account_id=..., username=..., email=..., password_hash=..., status=...)` ;
+- le fallback in-memory n'est atteint **que** si `INIS_DATABASE_URL` est absent ;
+  une base configurée mais en panne remonte une vraie erreur au lieu de mentir ;
+- `/v1/auth/login` crée une ligne `sessions` (hash SHA-256 du token, jamais le
+  token), `/v1/auth/logout` pose `revoked_at` ;
+- `app/main.py` monte enfin le router accounts sous `/v1` (il n'y était pas) ;
+- le modèle `Session` a perdu le mixin `TimestampMixin` : la table `sessions`
+  (migration 0006) n'a pas de colonne `updated_at`.
+
+### Constat 3 — `/v1/health` mentait sur l'état réel (§32, §34)
+
+**Avant** : avec aucune base et aucun broker, les deux checks répondaient `up`,
+et le LLM n'était pas vérifié du tout : `/v1/health/ready` annonçait `ready`
+alors que 100 % des appels LLM étaient des stubs silencieux.
+
+**Après** :
+
+| Situation | Avant | Après |
+|---|---|---|
+| `INIS_DATABASE_URL` absent | `up` (`in_memory`) | `not_configured` + `reason` |
+| `AMQP_URL` absent | `up` (`not_applicable`) | `not_configured` + `reason` |
+| `REDIS_URL` absent | `up` | `not_configured` + `reason` |
+| `LLM_API_KEY` absent | *non vérifié* | `not_configured` + raison « ModelRouter renvoie des stubs » |
+| `LLM_API_KEY` présent | *non vérifié* | appel réel (5 tokens) → `ready` / `not_ready` / `stub` |
+| `AMQP_URL` présent | `down` sans vérifier | vraie tentative de connexion `aio_pika` |
+| `GET /v1/health` | `{status, version, circuit_breakers}` | `{status, version, circuit_breakers, checks{database, redis, broker, llm}}` |
+| Readiness globale | `ready` | `ready` / **`degraded`** (dépendance non configurée) / `not_ready` (503) |
+
+Les probes passent toujours par `HealthAggregator` : timeout borné, exceptions
+isolées, jamais de 500.
+
+---
+
+### Constat 4 — `RateLimiter` et `CacheStore` orphelins (§19, §41.5)
+
+- `app/api/middleware/rate_limit_middleware.py` : token bucket par
+  `request.state.actor_id` (repli `X-API-Key`, puis IP), store Redis si
+  `REDIS_URL` est défini sinon in-process, `429` + `Retry-After`, exemptions
+  identiques à celles de l'auth middleware **plus** `/v1/health*` et
+  `/v1/status` (une sonde de liveness ne doit jamais être facturée).
+  Monté **avant** `AuthMiddleware` dans `main.py` : Starlette applique le
+  dernier middleware ajouté en premier, le limiteur doit donc tourner *à
+  l'intérieur* de l'auth pour lire l'`actor_id` résolu.
+  **Activation explicite** : `INIS_RATE_LIMIT_ENABLED=true` ou `RATE_LIMIT_RPM`
+  défini. Un 60 rpm actif par défaut ferait échouer la suite de tests en 429 sur
+  une clé anonyme partagée.
+- Cache L1 branché sur `ProviderRouter.search()` (clé `query + provider + limit`)
+  et `WikipediaExtractor.extract()` (clé `url`). Le seuil de fraîcheur de la
+  policy §41.5 fait partie de la clé, sinon abaisser le seuil pourrait ressusciter
+  une entrée stockée sous une policy plus stricte.
+  **Choix technique** : `CacheStore` est synchrone ; les accès passent par
+  `asyncio.to_thread` plutôt que par un second type asynchrone — le backend par
+  défaut est un dict, et un wrapper aurait doublé l'API pour rien.
+  `PipelineRunner.get_cache_stats()` expose le `cache_hit_rate` (§34).
+
+### Constat 5 — Fixtures partagées absentes (§33.2)
+
+`tests/containers.py` était un fichier de 0 octet et `tests/conftest.py` tenait
+en 14 lignes. Maintenant :
+
+| Fixture | Rôle |
+|---|---|
+| `postgres_container` / `redis_container` | images épinglées `pgvector/pgvector:pg16` et `redis:7-alpine`, scope session, skip propre sans Docker |
+| `db_url` | Postgres migré (`alembic upgrade head`), le vrai schéma §27 |
+| `redis_url` | endpoint Redis joignable |
+| `reset_pipeline_state` (autouse) | isole le singleton `PipelineRunner` entre les tests |
+| `mock_llm` | stub `ModelRouter.complete` configurable (`content`, `stub`, `calls`) |
+| `mock_web` | `httpx.MockTransport` par défaut sur tout `AsyncClient` |
+
+`test_phase_10_e2e.py` utilise désormais `mock_llm` au lieu de son propre
+`_fake_complete`.
+
+### Ce qui est câblé vs ce qui reste stub
+
+| Composant | État | Détail |
+|---|---|---|
+| Pipeline → Postgres | ✅ câblé | audit + sources + unités + preuves + lineage, via `get_session()` |
+| `AuditWriter` | ✅ câblé | écrit dans la transaction du pipeline |
+| `LineageTracker` | ✅ câblé | table `transformations` alimentée |
+| `AccountRepository` / `SessionRepository` | ✅ câblé | vrais repository sur `AsyncSession` |
+| `/v1/health` | ✅ câblé | 4 checks réels, `not_configured` honnête |
+| `RateLimiter` | ✅ câblé | middleware, Redis ou in-process, opt-in |
+| `CacheStore` (L1) | ✅ câblé | web_search + fetch_page |
+| `ModelRouter` sans `LLM_API_KEY` | ⚠️ stub assumé | le stub reste, mais il est **déclaré** par `/v1/health` |
+| `SourceRepository` (`/v1/sources`) | ⚠️ divergence | écrit le schéma `source_id/name/metadata` alors que la migration 0002 crée `id/url/source_type/reliability_score/data_stage`. Le store crée sa propre table : correct sur SQLite, divergent sur le schéma migré. **Non traité** dans B4-bis — à aligner par une migration ou un repository dédié. |
+| `accounts.role` / `accounts.scopes` | ⚠️ non persisté | aucune colonne dans la table `accounts` (migration 0006) ; la lecture DB renvoie `operator` / `[read, write]` par défaut |
+| Cache L2 / pgvector (L3) | ❌ non câblé | hors périmètre B4-bis |
+| package `redis` (optionnel) | ✅ | ajouté aux dépendances dev pour `RedisContainer` et le check Redis |
+
+### Validation B4-bis
+
+```powershell
+python scripts/check_architecture.py   # OK
+python scripts/check_contracts.py      # OK
+python -m pytest -q                    # 904 passed, 1 skipped
+```
+
+Test E2E exécuté (uvicorn réel + Postgres testcontainer) :
+
+| Critère | Résultat |
+|---|---|
+| `POST /v1/requests` → `SELECT audit_events` | ✅ 1 ligne |
+| `POST /v1/requests` → `information_units` / `evidence` / `transformations` / `sources` | ✅ 1 ligne chacun |
+| `POST /v1/accounts` → `SELECT accounts` | ✅ 1 ligne |
+| `GET /v1/health` | ✅ `{status, version, circuit_breakers, checks{database, redis, broker, llm}}` |
+| 2 `POST /v1/requests` rapides au-delàs du budget | ✅ `429` + `Retry-After` |
+| 2 `web_search` identiques | ✅ 2ᵉ servi par le cache L1 (provider non appelé) |
+
+---
+
 ## 4. Vérification et Conformité
 
 - **Scripts de vérification** :
