@@ -10,9 +10,9 @@ permissions:
 
 jobs:
   architecture:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -21,10 +21,25 @@ jobs:
 
       - run: python scripts/check_invariants.py
 
+  security:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # gitleaks is deliberately absent: it needs a token (PHASE-12 debt).
+      - run: pip install pip-audit bandit
+      - run: pip-audit --strict --desc on || true
+      - run: bandit -r app -ll -q
+
   python-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
+        # pgvector/pgvector:pg16 ships pgvector >= 0.8.6 (CVE-2026-3172).
         image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: test
@@ -52,7 +67,7 @@ jobs:
           --health-cmd="curl -f http://localhost:9000/minio/health/live"
           --health-interval=5s --health-timeout=5s --health-retries=10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -67,3 +82,4 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/test
           REDIS_URL: redis://localhost:6379/0
           MINIO_ENDPOINT: http://localhost:9000
+
