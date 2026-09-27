@@ -41,10 +41,12 @@ jobs:
           --health-cmd="redis-cli ping"
           --health-interval=5s --health-timeout=5s --health-retries=10
       minio:
-        image: quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z
+        # RustFS replaces the withdrawn quay.io/minio/minio tag (2026-09-24).
+        # Same S3 API and same /minio/health/live probe.
+        image: rustfs/rustfs:1.0.0-rc.5
         env:
-          MINIO_ROOT_USER: inis-test
-          MINIO_ROOT_PASSWORD: inis-test-secret
+          RUSTFS_ACCESS_KEY: inis-test
+          RUSTFS_SECRET_KEY: inis-test-secret
         ports: ["9000:9000"]
         options: >-
           --health-cmd="curl -f http://localhost:9000/minio/health/live"

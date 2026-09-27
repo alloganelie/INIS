@@ -142,28 +142,75 @@ def postgres_container() -> Iterator[Any]:
         started.stop()
 
 
-#: Object storage image (MinIO, S3-compatible: ``app.storage.object_storage``
-#: talks to it through boto3/aioboto3 with ``endpoint_url``).
-MINIO_IMAGE = "quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z"
+#: Object storage image (S3-compatible: ``app.storage.object_storage`` talks to
+#: it through boto3/aioboto3 with ``endpoint_url``). RustFS, not MinIO: the
+#: previously pinned ``quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z`` was
+#: withdrawn from Quay.io on 2026-09-24 and now answers "unauthorized", which
+#: only passed locally thanks to the cached layer. RustFS speaks the same S3
+#: API and implements ``/minio/health/live``, so no test change was needed.
+MINIO_IMAGE = "rustfs/rustfs:1.0.0-rc.5"
 MINIO_PORT = 9000
 MINIO_ROOT_USER = "inis-test"
 MINIO_ROOT_PASSWORD = "inis-test-secret"
 MINIO_BUCKET = "inis-test-bucket"
 
+#: Credential env vars — RustFS names them ``RUSTFS_*``, MinIO ``MINIO_*``.
+_MINIO_CREDENTIAL_ENV = (
+    ("RUSTFS_ACCESS_KEY", "RUSTFS_SECRET_KEY")
+    if "rustfs" in MINIO_IMAGE
+    else ("MINIO_ROOT_USER", "MINIO_ROOT_PASSWORD")
+)
+
+
+def minio_credentials_env() -> dict[str, str]:
+    """Return the credential environment of the configured S3 backend."""
+    user_var, password_var = _MINIO_CREDENTIAL_ENV
+    return {user_var: MINIO_ROOT_USER, password_var: MINIO_ROOT_PASSWORD}
+
+
+def _wait_for_http(endpoint: str, timeout: float = 60.0) -> None:
+    """Block until *endpoint* serves a S3 request (any HTTP status but 000).
+
+    A TCP connect alone is not enough: MinIO/RustFS bind the port before the
+    routing table is ready, and the first boto3 call would then fail with a
+    connection reset. Any HTTP answer — including ``403`` for an anonymous
+    ``GET /`` — proves the API is up.
+
+    Raises:
+        TimeoutError: If no HTTP answer is received within *timeout* seconds.
+    """
+    import time
+    import urllib.error
+    import urllib.request
+
+    deadline = time.monotonic() + timeout
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            urllib.request.urlopen(endpoint, timeout=2)  # noqa: S310 - local http
+            return
+        except urllib.error.HTTPError:
+            return  # 403/404 mean the S3 API answered
+        except Exception as exc:  # noqa: BLE001 - retried until the deadline
+            last_error = exc
+        time.sleep(0.5)
+    raise TimeoutError(f"object storage not ready at {endpoint}: {last_error}")
+
 
 def _start_minio() -> Any:
-    """Start the MinIO container or return the raised exception."""
+    """Start the S3-compatible container or return the raised exception."""
     try:
         from testcontainers.core.container import DockerContainer
-        from testcontainers.core.waiting_utils import wait_for_logs
 
         container = DockerContainer(MINIO_IMAGE)
-        container.with_env("MINIO_ROOT_USER", MINIO_ROOT_USER)
-        container.with_env("MINIO_ROOT_PASSWORD", MINIO_ROOT_PASSWORD)
+        for name, value in minio_credentials_env().items():
+            container.with_env(name, value)
         container.with_exposed_ports(MINIO_PORT)
-        container.with_command("server /data")
+        if "rustfs" not in MINIO_IMAGE:
+            # MinIO needs an explicit `server /data`; RustFS ships its own CMD.
+            container.with_command("server /data")
         container.start()
-        wait_for_logs(container, "API:", timeout=60)
+        _wait_for_http(minio_endpoint(container))
     except Exception as exc:  # noqa: BLE001 - reported as a clean skip
         return exc
     return container
