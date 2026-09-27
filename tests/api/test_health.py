@@ -16,14 +16,14 @@ def test_health_returns_ok() -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert data["version"] == "0.1.0"
+    assert data["version"] == "2.0.0"
 
 
 def test_version_returns_version() -> None:
     response = client.get("/version")
     assert response.status_code == 200
     data = response.json()
-    assert data["version"] == "0.1.0"
+    assert data["version"] == "2.0.0"
     assert "commit" in data
     assert isinstance(data["commit"], str)
     assert len(data["commit"]) > 0
@@ -291,7 +291,7 @@ def test_health_exposes_the_full_contract() -> None:
     assert "head" in body["migrations"]
     assert "git_sha" in body["build"]
     assert set(body["checks"]) == {"database", "redis", "broker", "llm"}
-    assert body["version"] == "0.1.0"
+    assert body["version"] == "2.0.0"
     assert isinstance(body["circuit_breakers"], dict)
 
 

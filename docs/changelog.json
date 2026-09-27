@@ -1,6 +1,16 @@
 {
-  "current_version": "0.1.0",
+  "current_version": "2.0.0",
   "history": [
+    {
+      "version": "2.0.0",
+      "date": "2026-09-27",
+      "highlights": [
+        "v2.0.0 spec compliance release: §0.2 invariants checker, §41.14 backward-compat gate",
+        "Agentic scenarios §33.3: 10/10 covered in tests/agentic",
+        "Full-stack E2E (PostgreSQL + Redis + S3) and CVE-patched dependency floors",
+        "Phase 8.2 real E2E, Phase 8.3 guard rails, Phase 9 release"
+      ]
+    },
     {
       "version": "0.1.0",
       "date": "2026-09-13",

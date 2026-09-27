@@ -24,8 +24,7 @@ from app.api.v1.sources.router import router as sources_router
 from app.api.v1.system.changelog_router import router as changelog_router
 from app.api.v1.system.health_router import router as health_router
 from app.api.v1.system.metrics_router import router as metrics_router
-
-API_VERSION = "0.1.0"
+from app.core.version import API_VERSION
 
 
 def _resolve_commit_sha() -> str:

@@ -9,6 +9,8 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from app.core.version import API_VERSION
+
 router = APIRouter(prefix="/changelog", tags=["system"])
 
 # Canonical path for the machine-readable changelog.
@@ -16,10 +18,10 @@ _CHANGELOG_PATH = Path(__file__).resolve().parents[5] / "docs" / "changelog.json
 
 # Fallback used when docs/changelog.json is absent or unreadable.
 _FALLBACK: dict[str, Any] = {
-    "current_version": "0.1.0",
+    "current_version": API_VERSION,
     "history": [
         {
-            "version": "0.1.0",
+            "version": API_VERSION,
             "date": "2026-09-13",
             "highlights": [
                 "PHASE-01: project bootstrap",
@@ -95,12 +97,9 @@ _V2_PHASES: list[dict[str, str]] = [
 def get_changelog() -> dict[str, Any]:
     """Return the changelog per §41.15 with both history and phase breakdown."""
     data = _load_changelog()
-    v = data.get("current_version", "2.0.0")
-    # Upgrade to 2.0.0 for v2 release
-    version = "2.0.0"
     return {
-        "version": version,
-        "current_version": version,
+        "version": API_VERSION,
+        "current_version": API_VERSION,
         "history": data.get("history", []),
         "phases": _V2_PHASES,
     }

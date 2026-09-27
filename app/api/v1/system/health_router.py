@@ -29,6 +29,8 @@ from typing import Any
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
 
+from app.core.version import API_VERSION
+
 from app.api.v1.sources.repository import get_database_engine
 from app.connectors.resilience.circuit_breaker import registry as breaker_registry
 from app.observability.health_aggregator import (
@@ -452,7 +454,7 @@ async def get_health() -> JSONResponse:
         status_code=status.HTTP_200_OK,
         content={
             "status": overall,
-            "version": "0.1.0",
+            "version": API_VERSION,
             "circuit_breakers": breaker_registry.states(),
             "checks": checks,
             "migrations": migrations_info,
