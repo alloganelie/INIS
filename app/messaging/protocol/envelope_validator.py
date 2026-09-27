@@ -1,6 +1,7 @@
 """Envelope validator for INIS messaging protocol per §5.1 and §5.2."""
 
 from app.core.errors import ValidationError
+from app.messaging.protocol.versioning import PROTOCOL_COMPATIBILITY
 
 
 VALID_MESSAGE_TYPES = frozenset(
@@ -45,10 +46,19 @@ def validate(envelope: dict) -> None:
     if not isinstance(envelope, dict):
         raise ValidationError("Envelope must be a dictionary")
 
-    # protocol_version (required, must be "1.0")
+    # protocol_version (§41.11):
+    #   - missing field → default (backward tolerance);
+    #   - same major, newer/older minor → accepted, unknown fields are
+    #     simply ignored (forward tolerance);
+    #   - incompatible major → rejected with version_supported.
     protocol_version = envelope.get("protocol_version")
-    if protocol_version != "1.0":
-        raise ValidationError(f"protocol_version must be '1.0', got: {protocol_version}")
+    if protocol_version is None:
+        protocol_version = PROTOCOL_COMPATIBILITY.preferred_version
+    elif not PROTOCOL_COMPATIBILITY.is_compatible(protocol_version):
+        raise ValidationError(
+            f"incompatible protocol_version {protocol_version!r}: "
+            f"version_supported={list(PROTOCOL_COMPATIBILITY.supported_versions)} (§41.11)"
+        )
 
     # message_id (required, must be MSG_ULID format)
     message_id = envelope.get("message_id")

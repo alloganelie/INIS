@@ -6,6 +6,7 @@ from typing import Any
 from typing import Optional
 
 from app.domain.value_objects.ulid import ULID
+from app.messaging.protocol.versioning import DEFAULT_PROTOCOL_VERSION
 
 
 VALID_MESSAGE_TYPES = frozenset(
@@ -44,7 +45,8 @@ VALID_AUTH_METHODS = frozenset({"mtls", "jwt", "api_key"})
 class EnvelopeBuilder:
     """Builds INIS protocol envelopes conforming to §5.1."""
 
-    PROTOCOL_VERSION = "1.0"
+    #: Version stamped on outgoing envelopes (§41.11 preferred version).
+    PROTOCOL_VERSION = DEFAULT_PROTOCOL_VERSION
 
     def __init__(
         self,
