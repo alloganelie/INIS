@@ -14,6 +14,20 @@ Ce fichier conserve uniquement les changements importants de gouvernance, archit
 - Migration:
 - Tests:
 
+### 2026-09-27 — Version 2.0.0 (Release)
+
+- Added:
+  - E2E full-stack réel Phase 8.2 : `tests/integration/test_v2_full_stack.py`
+    (Postgres + Redis + MinIO testcontainers, LLM + Web mockés uniquement).
+  - Garde-fous Phase 8.3 : `scripts/check_invariants.py` (§0.2 inv.8/inv.15 + ULID),
+    câblé dans la CI.
+  - CI Phase 8.3 : job `python-tests` avec services Postgres/Redis/MinIO
+    (MinIO pinné `quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z`).
+- Changed:
+  - Version projet portée à `2.0.0`.
+- Tests:
+  - `test_v2_full_stack` PASSED (20s, Docker local).
+
 ### 2026-09-27 — Version 1.0.0 (Release)
 
 - Added:

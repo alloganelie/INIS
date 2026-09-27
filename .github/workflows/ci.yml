@@ -19,8 +19,36 @@ jobs:
       - run: python scripts/check_architecture.py
       - run: python scripts/check_contracts.py
 
+      - run: python scripts/check_invariants.py
+
   python-tests:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd="pg_isready -U test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+      minio:
+        image: quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z
+        env:
+          MINIO_ROOT_USER: inis-test
+          MINIO_ROOT_PASSWORD: inis-test-secret
+        ports: ["9000:9000"]
+        options: >-
+          --health-cmd="curl -f http://localhost:9000/minio/health/live"
+          --health-interval=5s --health-timeout=5s --health-retries=10
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v5
@@ -29,4 +57,11 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]"
+      - run: alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/test
       - run: python -m pytest -q
+        env:
+          DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/test
+          REDIS_URL: redis://localhost:6379/0
+          MINIO_ENDPOINT: http://localhost:9000

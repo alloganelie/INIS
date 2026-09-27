@@ -26,7 +26,12 @@ import pytest
 from app.connectors.resilience.circuit_breaker import CircuitBreakerConfig
 from app.connectors.resilience.circuit_breaker import registry as breaker_registry
 from tests.containers import (  # noqa: F401 - fixtures re-exported for the suite
+    MINIO_BUCKET,
+    MINIO_ROOT_PASSWORD,
+    MINIO_ROOT_USER,
     docker_available,
+    minio_container,
+    minio_endpoint,
     postgres_container,
     postgres_url,
     redis_container,
@@ -76,6 +81,13 @@ def db_url(postgres_container: Any) -> Iterator[str]:
 def redis_url(redis_container: Any) -> str:
     """Provide a live Redis endpoint for the session (§19, §41.5)."""
     return _redis_url_from_container(redis_container)
+
+
+
+@pytest.fixture(scope="session")
+def minio_url(minio_container: Any) -> str:
+    """Provide a live MinIO endpoint for the session (§4.3)."""
+    return minio_endpoint(minio_container)
 
 
 class MockLLMControl:

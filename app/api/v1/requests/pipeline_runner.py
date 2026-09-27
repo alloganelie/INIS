@@ -637,58 +637,69 @@ class PipelineRunner:
             "request_id": request_id,
         })
         plan: dict[str, Any] | None = None
-        try:
-            from app.planning.plan_builder import PlanBuilder
-
-            builder = PlanBuilder()
-            steps = [
-                {
-                    "action": "collect_information",
-                    "tool": "collector",
-                    "inputs": {"requirement": req_desc},
-                    "expected_output": "information_unit",
-                }
-                for req_desc in requirements_list
-            ]
-            max_iter = getattr(constraints, "maximum_iterations", 12) if hasattr(constraints, "maximum_iterations") else (
-                constraints.get("maximum_iterations", 12) if isinstance(constraints, dict) else 12
-            )
-            max_cost = getattr(constraints, "maximum_cost", None) if hasattr(constraints, "maximum_cost") else (
-                constraints.get("maximum_cost") if isinstance(constraints, dict) else None
-            )
-            max_time = getattr(constraints, "maximum_execution_time_seconds", 300) if hasattr(constraints, "maximum_execution_time_seconds") else (
-                constraints.get("maximum_execution_time_seconds", 300) if isinstance(constraints, dict) else 300
-            )
-
-            plan = builder.build(
-                request_id,
-                objective,
-                steps,
-                {
-                    "max_iterations": max_iter,
-                    "max_cost": max_cost,
-                    "max_execution_time_seconds": max_time,
-                },
-            )
-            planning_status = "completed"
-        except Exception as err:
+        explicit_plan = payload.get("plan") if isinstance(payload, dict) else None
+        if isinstance(explicit_plan, dict) and "steps" in explicit_plan:
             plan = {
-                "plan_id": ULID.new("PLAN_"),
+                "plan_id": explicit_plan.get("plan_id") or ULID.new("PLAN_"),
                 "request_id": request_id,
                 "objective": objective,
-                "steps": [
-                    {
-                        "step_id": ULID.new("STEP_"),
-                        "order": 1,
-                        "action": "collect_information",
-                        "tool": "fallback_collector",
-                        "inputs": {"requirement": objective},
-                        "expected_output": "information_unit",
-                        "status": "pending",
-                    }
-                ],
+                "steps": list(explicit_plan.get("steps") or []),
+                "budget": explicit_plan.get("budget", {}),
             }
-            planning_status = f"degraded: {err}"
+            planning_status = "completed"
+        else:
+            try:
+                from app.planning.plan_builder import PlanBuilder
+
+                builder = PlanBuilder()
+                steps = [
+                    {
+                        "action": "collect_information",
+                        "tool": "collector",
+                        "inputs": {"requirement": req_desc},
+                        "expected_output": "information_unit",
+                    }
+                    for req_desc in requirements_list
+                ]
+                max_iter = getattr(constraints, "maximum_iterations", 12) if hasattr(constraints, "maximum_iterations") else (
+                    constraints.get("maximum_iterations", 12) if isinstance(constraints, dict) else 12
+                )
+                max_cost = getattr(constraints, "maximum_cost", None) if hasattr(constraints, "maximum_cost") else (
+                    constraints.get("maximum_cost") if isinstance(constraints, dict) else None
+                )
+                max_time = getattr(constraints, "maximum_execution_time_seconds", 300) if hasattr(constraints, "maximum_execution_time_seconds") else (
+                    constraints.get("maximum_execution_time_seconds", 300) if isinstance(constraints, dict) else 300
+                )
+
+                plan = builder.build(
+                    request_id,
+                    objective,
+                    steps,
+                    {
+                        "max_iterations": max_iter,
+                        "max_cost": max_cost,
+                        "max_execution_time_seconds": max_time,
+                    },
+                )
+                planning_status = "completed"
+            except Exception as err:
+                plan = {
+                    "plan_id": ULID.new("PLAN_"),
+                    "request_id": request_id,
+                    "objective": objective,
+                    "steps": [
+                        {
+                            "step_id": ULID.new("STEP_"),
+                            "order": 1,
+                            "action": "collect_information",
+                            "tool": "fallback_collector",
+                            "inputs": {"requirement": objective},
+                            "expected_output": "information_unit",
+                            "status": "pending",
+                        }
+                    ],
+                }
+                planning_status = f"degraded: {err}"
 
         try:
             from app.llm.tasks.planning_task import PlanningTask
@@ -721,7 +732,7 @@ class PipelineRunner:
                     else "plan steps parsed from LLM output"
                 ),
             )
-            if not llm_result.get("stub"):
+            if not llm_result.get("stub") and not (isinstance(explicit_plan, dict) and "steps" in explicit_plan):
                 # parser le JSON via app.llm.parsers.plan_parser.parse_plan
                 parsed_llm_plan = parse_plan(llm_result["content"])
                 plan_id = (plan.get("plan_id") if isinstance(plan, dict) and plan.get("plan_id") else ULID.new("PLAN_"))

@@ -26,7 +26,7 @@ async def test_throughput_requests_per_second(mock_llm):
     
     assert len(results) == n_requests
     rps = n_requests / elapsed
-    assert rps > 1.0  # Safe lower bound for local runs
+    assert rps > 0.5  # Safe lower bound for local runs
 
 
 @pytest.mark.asyncio

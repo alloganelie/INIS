@@ -1,15 +1,14 @@
-"""Tests for S3Client per §4.3 (object storage)."""
+"""Tests for S3Client per §4.3 (object storage).
 
-import sys
+``boto3``/``botocore`` sont de vraies dépendances (``pyproject.toml``) :
+pas de ``sys.modules`` mock ici — seul le client HTTP interne est stubbé
+via ``patch.object``. Le E2E réel vit dans
+``tests/integration/test_v2_full_stack.py`` (MinIO testcontainer).
+"""
+
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-# Mock boto3 and botocore to avoid dependency issues
-sys.modules["boto3"] = MagicMock()
-sys.modules["botocore"] = MagicMock()
-sys.modules["botocore.exceptions"] = MagicMock()
-sys.modules["botocore.client"] = MagicMock()
 
 from app.storage.object_storage.s3_client import S3Client
 

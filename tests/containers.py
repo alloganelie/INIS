@@ -142,6 +142,54 @@ def postgres_container() -> Iterator[Any]:
         started.stop()
 
 
+#: Object storage image (MinIO, S3-compatible: ``app.storage.object_storage``
+#: talks to it through boto3/aioboto3 with ``endpoint_url``).
+MINIO_IMAGE = "quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z"
+MINIO_PORT = 9000
+MINIO_ROOT_USER = "inis-test"
+MINIO_ROOT_PASSWORD = "inis-test-secret"
+MINIO_BUCKET = "inis-test-bucket"
+
+
+def _start_minio() -> Any:
+    """Start the MinIO container or return the raised exception."""
+    try:
+        from testcontainers.core.container import DockerContainer
+        from testcontainers.core.waiting_utils import wait_for_logs
+
+        container = DockerContainer(MINIO_IMAGE)
+        container.with_env("MINIO_ROOT_USER", MINIO_ROOT_USER)
+        container.with_env("MINIO_ROOT_PASSWORD", MINIO_ROOT_PASSWORD)
+        container.with_exposed_ports(MINIO_PORT)
+        container.with_command("server /data")
+        container.start()
+        wait_for_logs(container, "API:", timeout=60)
+    except Exception as exc:  # noqa: BLE001 - reported as a clean skip
+        return exc
+    return container
+
+
+def minio_endpoint(container: Any) -> str:
+    """Return the ``http://host:port`` endpoint of a running MinIO container."""
+    host = container.get_container_host_ip()
+    port = container.get_exposed_port(MINIO_PORT)
+    return f"http://{host}:{port}"
+
+
+@pytest.fixture(scope="session")
+def minio_container() -> Iterator[Any]:
+    """Start a MinIO container for the §4.3 object-storage tests."""
+    if not docker_available():
+        pytest.skip("Docker not available")
+    started = _start_minio()
+    if isinstance(started, Exception):
+        pytest.skip(f"Docker/testcontainers/minio not available: {started}")
+    try:
+        yield started
+    finally:
+        started.stop()
+
+
 @pytest.fixture(scope="session")
 def redis_container() -> Iterator[Any]:
     """Start a Redis container for the §19/§41.5 shared-state tests."""
