@@ -18,10 +18,15 @@ from app.governance.budget.quotas import (
     BudgetGuard,
 )
 from app.llm.tracing.llm_trace_writer import LLMTraceWriter
+from app.storage.cache.cache_store import CacheStore
 from ulid import ULID as PythonUlid
 
 #: Nominal number of plan steps (§28 cycle) used for progress reporting.
 PIPELINE_STEPS_TOTAL = 22
+
+#: §41.5 L1 cache namespaces used by the web acquisition stage.
+CACHE_NS_WEB_SEARCH = "web_search"
+CACHE_NS_PAGE_FETCH = "page_fetch"
 
 
 class PipelineRunner:
@@ -38,10 +43,36 @@ class PipelineRunner:
         self._guards: dict[str, BudgetGuard] = {}
         self._llm_traces: LLMTraceWriter = LLMTraceWriter()
         self._trace_step_ids: dict[tuple[str, str], str] = {}
+        #: §41.5 — L1 cache backing web_search / fetch_page reuse.
+        self._cache: CacheStore = CacheStore()
 
     def get_runs_count(self) -> int:
         """Return total count of executed pipeline runs."""
         return self._runs_count
+
+    def reset_state(self) -> None:
+        """Drop every per-run store of this runner (§33.2 test isolation).
+
+        The runner is a module-level singleton, so its mutable stores leak
+        across test files unless they are reset: run states, event history,
+        SSE subscribers, lifecycles, budget guards, LLM trace step ids and the
+        cumulative metrics counters. The cache is reset too because a cached
+        web result from one test must never satisfy the next one.
+        """
+        self._runs_count = 0
+        self._total_duration = 0.0
+        self._run_states.clear()
+        self._event_history.clear()
+        self._subscribers.clear()
+        self._running.clear()
+        self._lifecycles.clear()
+        self._guards.clear()
+        self._trace_step_ids.clear()
+        if self._cache is not None:
+            self._cache.clear()
+            self._cache.hits = 0
+            self._cache.misses = 0
+            self._cache.stale_rejections = 0
 
     def get_avg_duration(self) -> float:
         """Return average duration in seconds across all executed runs."""
