@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.api.v1.sources.repository import get_database_engine
+from app.connectors.resilience.circuit_breaker import registry as breaker_registry
 
 router = APIRouter(prefix="/health", tags=["system"])
 
@@ -26,9 +27,17 @@ def set_broker_check(broker: Any | None) -> None:
     "",
     summary="Basic liveness check per §32",
 )
-def get_health() -> dict[str, str]:
-    """Basic health check returning operational status."""
-    return {"status": "ok", "version": "0.1.0"}
+def get_health() -> dict[str, Any]:
+    """Basic health check returning operational status.
+
+    Also exposes the per-scope circuit breaker states ``open | closed |
+    half_open`` required by §41.8.
+    """
+    return {
+        "status": "ok",
+        "version": "0.1.0",
+        "circuit_breakers": breaker_registry.states(),
+    }
 
 
 @router.get(
@@ -108,6 +117,14 @@ async def get_health_ready() -> JSONResponse:
             is_ready = False
     else:
         checks["broker"] = {"status": "ready", "detail": "not_applicable"}
+
+    # 3. Circuit breaker states (§41.8) — exposed, never gate readiness:
+    #    an open breaker means a dependency is isolated, not that INIS is down.
+    cb_states = breaker_registry.states()
+    checks["circuit_breakers"] = {
+        "status": "degraded" if "open" in cb_states.values() else "ready",
+        "states": cb_states,
+    }
 
     overall_status = "ready" if is_ready else "not_ready"
     http_status = (

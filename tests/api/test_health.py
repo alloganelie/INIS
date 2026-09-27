@@ -83,3 +83,31 @@ def test_v1_health_ready_broker_states() -> None:
     finally:
         set_broker_check(None)
 
+
+def test_v1_health_exposes_circuit_breaker_states() -> None:
+    """§41.8: /v1/health must expose open | closed | half_open per scope."""
+    from app.connectors.resilience.circuit_breaker import CircuitBreakerConfig
+    from app.connectors.resilience.circuit_breaker import registry
+
+    try:
+        registry.reset(default_config=CircuitBreakerConfig(failure_threshold=1))
+        breaker = registry.get("provider:serper")
+        breaker.record_failure()
+
+        # Basic health carries the raw state map.
+        basic = client.get("/v1/health")
+        assert basic.status_code == 200
+        assert basic.json()["circuit_breakers"] == {"provider:serper": "open"}
+
+        # Readiness reports it too, as a degraded (non-gating) check.
+        res = client.get("/v1/health/ready")
+        cb = res.json()["checks"]["circuit_breakers"]
+        assert cb["states"] == {"provider:serper": "open"}
+        assert cb["status"] == "degraded"
+        # An open breaker isolates a dependency; INIS itself stays ready.
+        assert res.status_code == 200
+        assert res.json()["status"] == "ready"
+    finally:
+        registry.reset(default_config=CircuitBreakerConfig())
+
+
