@@ -14,9 +14,18 @@ middleware mounts it on the ASGI app:
   middleware exemptions;
 * an over-limit request gets ``429`` plus a ``Retry-After`` header.
 
-Activation is explicit: the middleware is inert unless ``INIS_RATE_LIMIT_ENABLED``
-is truthy or ``RATE_LIMIT_RPM`` is set. A default-on 60 rpm bucket would make
-the development and test suites fail with 429s on shared anonymous keys.
+Activation is fail-safe (B4-ter-1):
+
+* ``INIS_RATE_LIMIT_ENABLED`` set explicitly always wins, in either direction;
+* otherwise the limiter defaults to **on** when ``INIS_AUTH_ENABLED`` is truthy,
+  so a production deployment that turns on authentication can never end up
+  unmetered by omission;
+* with authentication off (dev, CI, local) it stays off, because a default-on
+  60 rpm bucket would make the test suite fail with 429s on shared anonymous
+  keys.
+
+``RATE_LIMIT_RPM`` set explicitly also enables the limiter: an explicit budget
+is an explicit intent to enforce it.
 """
 
 from __future__ import annotations
@@ -37,6 +46,7 @@ DEFAULT_REQUESTS_PER_MINUTE = 60
 
 ENV_REQUESTS_PER_MINUTE = "RATE_LIMIT_RPM"
 ENV_ENABLED = "INIS_RATE_LIMIT_ENABLED"
+ENV_AUTH_ENABLED = "INIS_AUTH_ENABLED"
 
 #: Bucket key used when no actor could be resolved at all.
 ANONYMOUS_KEY = "anonymous"
@@ -50,14 +60,31 @@ def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def auth_enabled() -> bool:
+    """Return whether the auth middleware is active for this process (§19).
+
+    Mirrors :func:`app.api.middleware.auth_middleware.is_auth_enabled` but
+    reads the environment only: the rate limiter must not depend on the
+    test-only override, otherwise tests could silently disable metering.
+    """
+    return _truthy(os.getenv(ENV_AUTH_ENABLED))
+
+
 def rate_limit_enabled() -> bool:
     """Return whether the rate limiter must actually meter requests.
 
-    Enabled when ``INIS_RATE_LIMIT_ENABLED`` is truthy, or as soon as
-    ``RATE_LIMIT_RPM`` is explicitly configured (an explicit budget is an
-    explicit intent to enforce it).
+    Fail-safe precedence (B4-ter-1):
+
+    1. ``INIS_RATE_LIMIT_ENABLED`` set explicitly -> its own truthiness;
+    2. otherwise ``INIS_AUTH_ENABLED`` truthy -> enabled, so enabling
+       authentication can never leave the API unmetered by omission;
+    3. otherwise ``RATE_LIMIT_RPM`` configured -> enabled (explicit budget);
+    4. otherwise disabled (dev / CI, where auth is off).
     """
-    if _truthy(os.getenv(ENV_ENABLED)):
+    explicit = os.getenv(ENV_ENABLED)
+    if explicit is not None and explicit.strip() != "":
+        return _truthy(explicit)
+    if auth_enabled():
         return True
     return bool(os.getenv(ENV_REQUESTS_PER_MINUTE))
 
@@ -172,6 +199,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 __all__ = [
     "DEFAULT_REQUESTS_PER_MINUTE",
+    "auth_enabled",
     "RateLimitMiddleware",
     "EXTRA_EXEMPT_PREFIXES",
     "is_exempt_path",

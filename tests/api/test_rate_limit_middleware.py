@@ -14,7 +14,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.middleware.rate_limit_middleware import RateLimitMiddleware
+from app.api.middleware.rate_limit_middleware import (
+    RateLimitMiddleware,
+    rate_limit_enabled,
+)
 from app.security.rate_limiting.rate_limiter import RateLimiter
 from app.security.rate_limiting.rate_limit_store import RateLimitStore
 
@@ -132,3 +135,75 @@ def test_rate_limit_middleware_is_wired_on_the_app() -> None:
     assert RateLimitMiddleware in mounted
     # Auth must be outer (earlier index) so the limiter sees request.state.actor_id.
     assert mounted.index(AuthMiddleware) < mounted.index(RateLimitMiddleware)
+
+
+# ---------------------------------------------------------------------------
+# B4-ter-1 — fail-safe activation
+# ---------------------------------------------------------------------------
+
+
+def test_rate_limit_enabled_by_default_when_auth_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auth on + no explicit rate-limit setting => the limiter is active."""
+    monkeypatch.setenv("INIS_AUTH_ENABLED", "true")
+    monkeypatch.delenv("INIS_RATE_LIMIT_ENABLED", raising=False)
+    monkeypatch.delenv("RATE_LIMIT_RPM", raising=False)
+
+    assert rate_limit_enabled() is True
+
+
+def test_rate_limit_disabled_by_default_when_auth_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auth off (dev / CI) => the limiter stays inert."""
+    monkeypatch.setenv("INIS_AUTH_ENABLED", "false")
+    monkeypatch.delenv("INIS_RATE_LIMIT_ENABLED", raising=False)
+    monkeypatch.delenv("RATE_LIMIT_RPM", raising=False)
+
+    assert rate_limit_enabled() is False
+
+
+def test_rate_limit_explicit_opt_out_wins_over_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit INIS_RATE_LIMIT_ENABLED=false disables it even with auth on."""
+    monkeypatch.setenv("INIS_AUTH_ENABLED", "true")
+    monkeypatch.setenv("INIS_RATE_LIMIT_ENABLED", "false")
+
+    assert rate_limit_enabled() is False
+
+
+def test_rate_limit_explicit_opt_in_wins_over_disabled_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit INIS_RATE_LIMIT_ENABLED=true enables it even with auth off."""
+    monkeypatch.setenv("INIS_AUTH_ENABLED", "false")
+    monkeypatch.setenv("INIS_RATE_LIMIT_ENABLED", "true")
+
+    assert rate_limit_enabled() is True
+
+
+def test_rate_limit_active_with_auth_enabled_and_no_explicit_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: with auth on and no explicit setting, requests get metered."""
+    monkeypatch.setenv("INIS_AUTH_ENABLED", "true")
+    monkeypatch.delenv("INIS_RATE_LIMIT_ENABLED", raising=False)
+    monkeypatch.delenv("RATE_LIMIT_RPM", raising=False)
+
+    app = FastAPI()
+    app.add_middleware(
+        RateLimitMiddleware, requests_per_minute=1, limiter=_fresh_limiter()
+    )
+
+    @app.get("/v1/ping")
+    def ping() -> dict[str, str]:
+        return {"pong": "ok"}
+
+    client = TestClient(app)
+
+    assert client.get("/v1/ping").status_code == 200
+    limited = client.get("/v1/ping")
+    assert limited.status_code == 429
+    assert limited.json()["detail"] == "Rate limit exceeded"
