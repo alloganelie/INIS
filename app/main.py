@@ -57,7 +57,12 @@ app = FastAPI(
 
 try:
     from app.api.middleware.auth_middleware import AuthMiddleware
+    from app.api.middleware.rate_limit_middleware import RateLimitMiddleware
 
+    # Starlette applies the LAST added middleware first (outermost first), so the
+    # rate limiter is added BEFORE auth: it must run INSIDE AuthMiddleware to
+    # read the resolved request.state.actor_id and key its bucket on it.
+    app.add_middleware(RateLimitMiddleware)
     app.add_middleware(AuthMiddleware)
 except ImportError:
     pass

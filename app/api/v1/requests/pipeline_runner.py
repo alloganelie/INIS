@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 import json
 import time
 from typing import Any, AsyncGenerator
@@ -46,6 +46,75 @@ class PipelineRunner:
         self._trace_step_ids: dict[tuple[str, str], str] = {}
         #: §41.5 — L1 cache backing web_search / fetch_page reuse.
         self._cache: CacheStore = CacheStore()
+
+    # -- §41.5 L1 cache --------------------------------------------------
+
+    async def _cache_get(self, namespace: str, *parts: Any) -> Any:
+        """Read the L1 cache without blocking the event loop.
+
+        ``CacheStore`` is deliberately synchronous (§41.5), so every cache
+        access is off-loaded to a worker thread with :func:`asyncio.to_thread`.
+        The alternative — an async wrapper type — would force a second cache
+        API for a store that is, in the default configuration, a plain dict.
+        """
+        return await asyncio.to_thread(self._cache.get, namespace, *parts)
+
+    async def _cache_set(
+        self,
+        namespace: str,
+        parts: tuple[Any, ...],
+        value: Any,
+        *,
+        source_id: str | None = None,
+    ) -> None:
+        """Write to the L1 cache, stamping the §41.5 source freshness."""
+        await asyncio.to_thread(
+            self._cache.set,
+            namespace,
+            *parts,
+            value=value,
+            source_freshness=datetime.now(UTC),
+            source_id=source_id,
+        )
+
+    def _cache_parts(self, *parts: Any) -> tuple[Any, ...]:
+        """Return the key parts of *parts* plus the policy freshness threshold.
+
+        §41.5 forbids reusing an entry whose source freshness is below the
+        threshold of the *current* request, so the threshold belongs to the
+        cache key: lowering it must not resurrect an entry stored under a
+        stricter policy.
+        """
+        return (*parts, self._cache.policy.freshness_threshold_hours)
+
+    async def _search_with_cache(
+        self, provider_router: Any, query: str, limit: int
+    ) -> list[Any]:
+        """Run ``ProviderRouter.search`` behind the §41.5 L1 cache."""
+        provider_id = getattr(provider_router, "_default_provider_id", None) or "default"
+        parts = self._cache_parts(query, provider_id, limit)
+        cached = await self._cache_get(CACHE_NS_WEB_SEARCH, *parts)
+        if cached is not None:
+            return cached
+        results = await provider_router.search(query=query, limit=limit)
+        await self._cache_set(CACHE_NS_WEB_SEARCH, parts, results)
+        return results
+
+    async def _extract_with_cache(self, extractor: Any, url: str) -> dict[str, Any]:
+        """Run ``WikipediaExtractor.extract`` behind the §41.5 L1 cache."""
+        parts = self._cache_parts(url)
+        cached = await self._cache_get(CACHE_NS_PAGE_FETCH, *parts)
+        if cached is not None:
+            return cached
+        page = await extractor.extract(url)
+        await self._cache_set(
+            CACHE_NS_PAGE_FETCH, parts, page, source_id=f"URL:{url}"[:64]
+        )
+        return page
+
+    def get_cache_stats(self) -> dict[str, Any]:
+        """Return the §41.5 cache counters (feeds the §34 ``cache_hit_rate``)."""
+        return self._cache.stats()
 
     def get_runs_count(self) -> int:
         """Return total count of executed pipeline runs."""
@@ -666,9 +735,10 @@ class PipelineRunner:
                         execution_status = f"{BUDGET_EXCEEDED_STATUS}: {budget_err.dimension}"
                         break
 
-                    # ------ web_search ------------------------------------------------
-                    search_results = await provider_router.search(
-                        query=str(query), limit=5
+                    # ------ web_search ---------------------------------------
+                    # §41.5: the L1 cache short-circuits identical queries.
+                    search_results = await self._search_with_cache(
+                        provider_router, str(query), 5
                     )
 
                     step_output_snippets: list[str] = []
@@ -687,7 +757,7 @@ class PipelineRunner:
 
                         # Extract full page text
                         try:
-                            page = await wiki_extractor.extract(url)
+                            page = await self._extract_with_cache(wiki_extractor, url)
                             page_text = page.get("text", "")
                         except Exception:
                             page_text = ""
