@@ -20,6 +20,15 @@ class AccountRepository:
         """
         self._session = session
 
+    @property
+    def session(self) -> AsyncSession:
+        """The session every write of this repository goes through.
+
+        Exposed so callers (routers) can commit or roll back the unit of work
+        without reaching into the private attribute.
+        """
+        return self._session
+
     async def create(
         self,
         account_id: str,

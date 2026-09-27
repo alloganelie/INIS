@@ -1,8 +1,13 @@
-"""Router for Account management per §19 and §32."""
+﻿"""Router for Account management per §19 and §32.
+
+Persistence rule (B4-bis constat 2): when ``INIS_DATABASE_URL`` is set the
+``accounts`` table is the single source of truth and a database failure is a
+real error (HTTP 503), never a silent in-memory fallback. The in-memory store
+is used **only** when no database is configured at all.
+"""
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,24 +21,12 @@ from app.api.v1.accounts.schemas import (
     AccountUpdateRequest,
     ChangePasswordRequest,
 )
+from app.storage.database.session import account_repository, database_configured
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
-# In-memory store for account entities: id -> account dict
+# In-memory store used ONLY when INIS_DATABASE_URL is absent.
 _ACCOUNTS_STORE: dict[str, dict[str, Any]] = {}
-
-
-def get_account_repository() -> Any | None:
-    """Return AccountRepository instance if INIS_DATABASE_URL is set and repository exists."""
-    db_url = os.getenv("INIS_DATABASE_URL")
-    if not db_url:
-        return None
-    try:
-        from app.storage.repositories.account_repository import AccountRepository
-
-        return AccountRepository
-    except ImportError:
-        return None
 
 
 def reset_accounts_store() -> None:
@@ -41,17 +34,62 @@ def reset_accounts_store() -> None:
     _ACCOUNTS_STORE.clear()
 
 
-def find_account(username_or_email: str) -> dict[str, Any] | None:
+def get_account_repository() -> Any | None:
+    """Return the ``AccountRepository`` class when a database is configured.
+
+    Kept for backward compatibility. Prefer the ``account_repository()``
+    context manager, which binds a real :class:`AsyncSession` — returning the
+    class here is exactly the B4-bis defect (it used to be called as if it were
+    an instance, so every call raised and silently fell back to memory).
+    """
+    if not database_configured():
+        return None
+    from app.storage.repositories.account_repository import AccountRepository
+
+    return AccountRepository
+
+
+def _db_account_to_dict(account: Any) -> dict[str, Any]:
+    """Project an ``Account`` ORM row onto the API response shape."""
+    return {
+        "id": account.account_id,
+        "username": account.username,
+        "email": account.email,
+        "hashed_password": account.password_hash,
+        "role": "operator",
+        "scopes": ["read", "write"],
+        "is_active": account.status != "deleted",
+        "status": account.status,
+        "created_at": account.created_at.isoformat() if account.created_at else None,
+        "updated_at": account.updated_at.isoformat() if account.updated_at else None,
+    }
+
+
+async def find_account(username_or_email: str) -> dict[str, Any] | None:
     """Find an active or registered account by username or email."""
     target = username_or_email.lower().strip()
-    for acc in _ACCOUNTS_STORE.values():
-        if acc["username"].lower().strip() == target or acc["email"].lower().strip() == target:
-            return acc
+    if database_configured():
+        async with account_repository() as repo:
+            found = await repo.get_by_username(target)
+            if found is None:
+                found = await repo.get_by_email(target)
+            return _db_account_to_dict(found) if found else None
+
+    for account in _ACCOUNTS_STORE.values():
+        if (
+            account["username"].lower().strip() == target
+            or account["email"].lower().strip() == target
+        ):
+            return account
     return None
 
 
-def get_account_by_id(account_id: str) -> dict[str, Any] | None:
+async def get_account_by_id(account_id: str) -> dict[str, Any] | None:
     """Find account by unique ID."""
+    if database_configured():
+        async with account_repository() as repo:
+            found = await repo.get_by_id(account_id)
+            return _db_account_to_dict(found) if found else None
     return _ACCOUNTS_STORE.get(account_id)
 
 
@@ -61,28 +99,45 @@ def get_account_by_id(account_id: str) -> dict[str, Any] | None:
     status_code=status.HTTP_201_CREATED,
     summary="Register a new user account per §19.2",
 )
-def create_account(payload: AccountCreateRequest) -> AccountResponse:
+async def create_account(payload: AccountCreateRequest) -> AccountResponse:
     """Create a new account with hashed password and unique identifier."""
-    # Check for duplicates
-    for acc in _ACCOUNTS_STORE.values():
-        if acc["username"].lower() == payload.username.lower():
+    if database_configured():
+        async with account_repository() as repo:
+            if await repo.get_by_username(payload.username):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Account with username '{payload.username}' already exists",
+                )
+            if await repo.get_by_email(payload.email):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Account with email '{payload.email}' already exists",
+                )
+            account_id = f"ACC_{PythonUlid()}"
+            created = await repo.create(
+                account_id=account_id,
+                username=payload.username,
+                email=payload.email,
+                password_hash=PasswordHasher.hash(payload.password),
+                status="active",
+            )
+            await repo.session.commit()
+            data = _db_account_to_dict(created)
+            data["role"] = payload.role
+            data["scopes"] = payload.scopes
+            return AccountResponse(**data)
+
+    for account in _ACCOUNTS_STORE.values():
+        if account["username"].lower() == payload.username.lower():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Account with username '{payload.username}' already exists",
             )
-        if acc["email"].lower() == payload.email.lower():
+        if account["email"].lower() == payload.email.lower():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Account with email '{payload.email}' already exists",
             )
-
-    repo = get_account_repository()
-    if repo is not None and hasattr(repo, "create"):
-        try:
-            created = repo.create(payload)
-            return AccountResponse(**created)
-        except Exception:
-            pass  # Fall back to in-memory store
 
     account_id = f"ACC_{PythonUlid()}"
     now = datetime.now(timezone.utc).isoformat()
@@ -107,16 +162,17 @@ def create_account(payload: AccountCreateRequest) -> AccountResponse:
     response_model=AccountResponse,
     summary="Get account details by ID per §19.2",
 )
-def get_account(account_id: str) -> AccountResponse:
+async def get_account(account_id: str) -> AccountResponse:
     """Retrieve account details by ID."""
-    repo = get_account_repository()
-    if repo is not None and hasattr(repo, "get"):
-        try:
-            account = repo.get(account_id)
-            if account:
-                return AccountResponse(**account)
-        except Exception:
-            pass
+    if database_configured():
+        async with account_repository() as repo:
+            found = await repo.get_by_id(account_id)
+            if found is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Account '{account_id}' not found",
+                )
+            return AccountResponse(**_db_account_to_dict(found))
 
     account = _ACCOUNTS_STORE.get(account_id)
     if not account:
@@ -132,16 +188,39 @@ def get_account(account_id: str) -> AccountResponse:
     response_model=AccountResponse,
     summary="Update account properties per §19.2",
 )
-def update_account(account_id: str, payload: AccountUpdateRequest) -> AccountResponse:
+async def update_account(account_id: str, payload: AccountUpdateRequest) -> AccountResponse:
     """Update email, password, role, scopes or active status."""
-    repo = get_account_repository()
-    if repo is not None and hasattr(repo, "update"):
-        try:
-            updated = repo.update(account_id, payload)
-            if updated:
-                return AccountResponse(**updated)
-        except Exception:
-            pass
+    if database_configured():
+        async with account_repository() as repo:
+            found = await repo.get_by_id(account_id)
+            if found is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Account '{account_id}' not found",
+                )
+            if payload.email is not None and payload.email.lower() != found.email.lower():
+                clash = await repo.get_by_email(payload.email)
+                if clash is not None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Account with email '{payload.email}' already exists",
+                    )
+                found.email = payload.email
+            if payload.password is not None:
+                await repo.update_password_hash(
+                    account_id, PasswordHasher.hash(payload.password)
+                )
+            if payload.is_active is not None:
+                await repo.update_status(
+                    account_id, "active" if payload.is_active else "deleted"
+                )
+            await repo.session.commit()
+            data = _db_account_to_dict(await repo.get_by_id(account_id))
+            if payload.role is not None:
+                data["role"] = payload.role
+            if payload.scopes is not None:
+                data["scopes"] = payload.scopes
+            return AccountResponse(**data)
 
     account = _ACCOUNTS_STORE.get(account_id)
     if not account:
@@ -151,8 +230,8 @@ def update_account(account_id: str, payload: AccountUpdateRequest) -> AccountRes
         )
 
     if payload.email is not None and payload.email.lower() != account["email"].lower():
-        for other_id, other_acc in _ACCOUNTS_STORE.items():
-            if other_id != account_id and other_acc["email"].lower() == payload.email.lower():
+        for other_id, other in _ACCOUNTS_STORE.items():
+            if other_id != account_id and other["email"].lower() == payload.email.lower():
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Account with email '{payload.email}' already exists",
@@ -161,13 +240,10 @@ def update_account(account_id: str, payload: AccountUpdateRequest) -> AccountRes
 
     if payload.password is not None:
         account["hashed_password"] = PasswordHasher.hash(payload.password)
-
     if payload.role is not None:
         account["role"] = payload.role
-
     if payload.scopes is not None:
         account["scopes"] = payload.scopes
-
     if payload.is_active is not None:
         account["is_active"] = payload.is_active
         account["status"] = "active" if payload.is_active else "deleted"
@@ -181,15 +257,19 @@ def update_account(account_id: str, payload: AccountUpdateRequest) -> AccountRes
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Soft delete an account per §0.2 and §19.2",
 )
-def delete_account(account_id: str) -> Response:
+async def delete_account(account_id: str) -> Response:
     """Soft delete account by marking status as deleted and is_active as False."""
-    repo = get_account_repository()
-    if repo is not None and hasattr(repo, "delete"):
-        try:
-            repo.delete(account_id)
+    if database_configured():
+        async with account_repository() as repo:
+            found = await repo.get_by_id(account_id)
+            if found is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Account '{account_id}' not found",
+                )
+            await repo.delete(account_id)
+            await repo.session.commit()
             return Response(status_code=status.HTTP_204_NO_CONTENT)
-        except Exception:
-            pass
 
     account = _ACCOUNTS_STORE.get(account_id)
     if not account:
@@ -197,7 +277,6 @@ def delete_account(account_id: str) -> Response:
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Account '{account_id}' not found",
         )
-
     account["is_active"] = False
     account["status"] = "deleted"
     account["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -208,21 +287,38 @@ def delete_account(account_id: str) -> Response:
     "/{account_id}/change-password",
     summary="Change account password per §19.2",
 )
-def change_password(account_id: str, payload: ChangePasswordRequest) -> dict[str, str]:
+async def change_password(account_id: str, payload: ChangePasswordRequest) -> dict[str, str]:
     """Verify old password and update to new password."""
+    if database_configured():
+        async with account_repository() as repo:
+            found = await repo.get_by_id(account_id)
+            if found is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Account '{account_id}' not found",
+                )
+            if not PasswordHasher.verify(payload.old_password, found.password_hash):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Incorrect current password",
+                )
+            await repo.update_password_hash(
+                account_id, PasswordHasher.hash(payload.new_password)
+            )
+            await repo.session.commit()
+            return {"status": "success", "message": "Password changed successfully"}
+
     account = _ACCOUNTS_STORE.get(account_id)
     if not account:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Account '{account_id}' not found",
         )
-
     if not PasswordHasher.verify(payload.old_password, account["hashed_password"]):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Incorrect current password",
         )
-
     account["hashed_password"] = PasswordHasher.hash(payload.new_password)
     account["updated_at"] = datetime.now(timezone.utc).isoformat()
     return {"status": "success", "message": "Password changed successfully"}

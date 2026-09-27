@@ -20,6 +20,11 @@ class SessionRepository:
         """
         self._session = session
 
+    @property
+    def session(self) -> AsyncSession:
+        """The session every write of this repository goes through."""
+        return self._session
+
     async def create(
         self,
         session_id: str,

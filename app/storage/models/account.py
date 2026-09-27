@@ -37,8 +37,14 @@ class Account(Base, TimestampMixin, SoftDeleteMixin):
     )
 
 
-class Session(Base, TimestampMixin):
+class Session(Base):
     """Session model for authentication tokens.
+
+    The ``sessions`` table created by migration 0006 carries ``created_at`` but
+    no ``updated_at``: a session row is immutable apart from ``revoked_at``.
+    This model therefore declares ``created_at`` explicitly instead of mixing
+    in :class:`~app.storage.models.base.TimestampMixin`, so the ORM mapping and
+    the migrated schema stay identical.
 
     Attributes:
         session_id: Unique identifier for the session (ULID).
@@ -60,6 +66,11 @@ class Session(Base, TimestampMixin):
     )
     token_hash: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     session_metadata: Mapped[dict] = mapped_column(JSON, default=lambda: {}, nullable=False)
 

@@ -9,6 +9,7 @@ from fastapi import FastAPI
 
 # Individual sub-router imports — mounted directly for FastAPI 0.141+ compatibility.
 # app/api/v1/router.py is kept intact but no longer used by main.py.
+from app.api.v1.accounts.router import router as accounts_router
 from app.api.v1.agents.router import router as agents_router
 from app.api.v1.auth.router import router as auth_router
 from app.api.v1.confidence.router import router as confidence_router
@@ -83,6 +84,7 @@ def get_v1_status() -> dict[str, str]:
 # Mount each sub-router individually with prefix="/v1".
 # Each router already carries its own internal prefix (e.g. /auth, /sources),
 # so the final paths become /v1/auth/*, /v1/sources/*, etc.
+app.include_router(accounts_router, prefix="/v1")
 app.include_router(auth_router, prefix="/v1")
 app.include_router(requests_router, prefix="/v1")
 app.include_router(progress_router, prefix="/v1")
