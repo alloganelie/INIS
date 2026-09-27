@@ -116,3 +116,27 @@ def test_migrations_head_is_backward_compatible():
     violations = checker.check_directory("migrations/versions")
     errors = [v for v in violations if v.severity == "error"]
     assert errors == [], f"Breaking migration violations detected: {errors}"
+
+
+def test_cli_returns_zero_on_production_migrations():
+    """`scripts/check_backward_compat.py migrations/versions/` exits 0 (§41.14)."""
+    from scripts.check_backward_compat import main
+
+    assert main(["migrations/versions"]) == 0
+
+
+def test_cli_returns_one_on_breaking_migration(tmp_path: Path, capsys):
+    """The CLI exits 1 and names the rule when a migration is breaking."""
+    from scripts.check_backward_compat import main
+
+    (tmp_path / "0009_breaking.py").write_text(
+        "from alembic import op\n\n"
+        "def upgrade():\n"
+        "    op.drop_table('obsolete')\n",
+        encoding="utf-8",
+    )
+
+    assert main([str(tmp_path)]) == 1
+    out = capsys.readouterr().out
+    assert BackwardCompatChecker.ERROR_DROP_TABLE in out
+    assert "FAIL" in out

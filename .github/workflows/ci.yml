@@ -20,6 +20,7 @@ jobs:
       - run: python scripts/check_contracts.py
 
       - run: python scripts/check_invariants.py
+      - run: python scripts/check_backward_compat.py migrations/versions/
 
   security:
     runs-on: ubuntu-24.04
