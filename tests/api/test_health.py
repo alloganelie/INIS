@@ -4,11 +4,48 @@ import asyncio
 import sys
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_health_env(monkeypatch: Any) -> Any:
+    """Isolate readiness from ambient CI env (REDIS_URL, broker, DB, LLM).
+
+    CI sets REDIS_URL to a live service; without isolation the "unconfigured"
+    tests really ping Redis (timeout -> 503) instead of reporting
+    not_configured (200). Clear optional-dep env vars and module-level probe
+    caches before AND after each test so no state leaks between tests.
+    Tests that need a var/probe set it explicitly in their body (runs after
+    this fixture), so they still exercise the configured path.
+    """
+    for var in (
+        "INIS_DATABASE_URL",
+        "REDIS_URL",
+        "AMQP_URL",
+        "INIS_BROKER_URL",
+        "LLM_API_KEY",
+        "LLM_BASE_URL",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    from app.api.v1.system import health_router
+    from app.api.v1.sources import repository as sources_repository
+
+    health_router._redis_probe = None
+    health_router._redis_client = None
+    health_router._broker_probe = None
+    sources_repository._DATABASE_ENGINE = None
+    sources_repository._CACHED_URL = None
+    yield
+    health_router._redis_probe = None
+    health_router._redis_client = None
+    health_router._broker_probe = None
+    sources_repository._DATABASE_ENGINE = None
+    sources_repository._CACHED_URL = None
 
 
 def test_health_returns_ok() -> None:
@@ -29,8 +66,10 @@ def test_version_returns_version() -> None:
     assert len(data["commit"]) > 0
 
 
-def test_v1_health_ready_default() -> None:
+def test_v1_health_ready_default(monkeypatch: Any) -> None:
     """With nothing configured, readiness is degraded - never a false 'ready'."""
+    # Hermetic via _hermetic_health_env: no INIS_DATABASE_URL / REDIS_URL /
+    # broker / LLM key, so every optional dep reports not_configured -> 200.
     res = client.get("/v1/health/ready")
     assert res.status_code == 200
     data = res.json()
@@ -272,8 +311,8 @@ def test_health_reports_broker_not_configured_without_url(monkeypatch: Any) -> N
 
 def test_health_ready_degraded_when_llm_stub(monkeypatch: Any) -> None:
     """The pipeline depends on the LLM, so a stub-only LLM means degraded."""
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
-
+    # Hermetic via _hermetic_health_env (no LLM_API_KEY): LLM check reports
+    # not_configured -> global degraded (200), never not_ready (503).
     res = client.get("/v1/health/ready")
 
     assert res.status_code == 200
