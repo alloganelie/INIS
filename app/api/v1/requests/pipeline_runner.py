@@ -11,6 +11,8 @@ from typing import Any, AsyncGenerator
 from app.agents.runtime.lifecycle import GRACEFUL_EXPIRY_STATUS, RequestLifecycle
 from app.domain.value_objects.ulid import ULID
 from app.core.statuses import resolve_delivery_status
+from app.core.logging import get_logger
+from app.core.version import API_VERSION
 from app.planning.limits import (
     PLANNING_LIMIT_EXCEEDED_STATUS,
     ConcurrencyLimiter,
@@ -34,6 +36,9 @@ from ulid import ULID as PythonUlid
 #: carries no ``cost_usd``. Documented estimate, not a billing figure.
 _LLM_COST_PER_INPUT_TOKEN = 1.5e-6
 _LLM_COST_PER_OUTPUT_TOKEN = 6.0e-6
+
+#: Delivery logger — synthesis fallbacks (stub/error) are stated, never hidden.
+logger = get_logger(__name__)
 
 #: Nominal number of plan steps (§28 cycle) used for progress reporting.
 PIPELINE_STEPS_TOTAL = 22
@@ -1118,7 +1123,11 @@ class PipelineRunner:
                 summary = response.content
                 # §41.2 — meter the synthesis call.
                 exceeded = self._meter_llm(
-                    request_id, {"usage": getattr(response, "usage", None)}
+                    request_id,
+                    {
+                        "input_tokens": response.input_tokens,
+                        "output_tokens": response.output_tokens,
+                    },
                 )
                 budget_exceeded = budget_exceeded or exceeded
                 # §41.12 — trace the synthesis decision (§41.12 understanding task).
@@ -1156,10 +1165,30 @@ class PipelineRunner:
                             findings = parsed_synthesis["findings"]
                 except Exception:
                     summary = response.content
+            else:
+                # §41.12 — a stub call is still a traced decision: register the
+                # synthesis step and keep the deterministic default summary.
+                logger.warning(
+                    "LLM synthesis returned a stub; keeping the default summary",
+                    request_id=request_id,
+                    model=response.model,
+                )
+                self._trace_llm(
+                    request_id,
+                    phase="synthesis",
+                    task_type="understanding",
+                    prompt=synthesis_prompt,
+                    llm_result=response,
+                    decision_summary="stubbed call; deterministic default summary kept",
+                )
         except ImportError:
             pass  # fallback sur stub actuel
-        except Exception:
-            pass
+        except Exception as err:
+            logger.warning(
+                "LLM synthesis call failed; keeping the default summary",
+                request_id=request_id,
+                error=str(err),
+            )
 
         # ------------------------------------------------------------------
         # §0.2 invariant 8 — separate verified findings from unsourced claims
@@ -1307,14 +1336,22 @@ class PipelineRunner:
             },
             "generated_by": {
                 "agent": "PipelineRunner",
-                "version": "1.0.0",
+                "version": API_VERSION,
             },
             "timestamps": {
                 "started_at": start_iso,
                 "completed_at": now_iso,
             },
             "trace": {
-                "steps": [s.get("step_id") for s in (plan.get("steps", []) if isinstance(plan, dict) else [])],
+                # §24.1 — plan step ids followed by the traced LLM phases
+                # (§41.12): understanding, planning, synthesis.
+                "steps": [
+                    *(
+                        s.get("step_id")
+                        for s in (plan.get("steps", []) if isinstance(plan, dict) else [])
+                    ),
+                    *self.trace_steps(request_id),
+                ],
             },
         }
 
