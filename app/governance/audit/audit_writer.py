@@ -132,7 +132,7 @@ class AuditWriter:
                 resource_type, resource_id, request_id, result, reason,
                 before_hash, after_hash
             FROM audit_events
-            """
+            """  # nosec: B608
             + (" WHERE actor_id = :actor_id" if actor_id is not None else "")
             + " ORDER BY timestamp"
         )

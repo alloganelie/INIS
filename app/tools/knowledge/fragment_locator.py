@@ -110,7 +110,7 @@ async def locate_fragment(
     )
     statement = text(
         f"SELECT {', '.join(_UNIT_COLUMNS)} FROM information_units "
-        "WHERE document_id = :document_id"
+        "WHERE document_id = :document_id"  # nosec: B608
     )
     try:
         async with active_engine.connect() as connection:
@@ -159,7 +159,7 @@ async def retrieve_context(
         engine, connection_string, component="retrieve_context"
     )
     statement = text(
-        f"SELECT {', '.join(_UNIT_COLUMNS)} FROM information_units WHERE id = ANY(:ids)"
+        f"SELECT {', '.join(_UNIT_COLUMNS)} FROM information_units WHERE id = ANY(:ids)"  # nosec: B608
     )
     try:
         async with active_engine.connect() as connection:

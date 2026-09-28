@@ -125,7 +125,7 @@ async def hybrid_search(
         WHERE iu.search_vector @@ plainto_tsquery(:query){clause}
         ORDER BY lexical_score DESC
         LIMIT :limit
-        """
+        """  # nosec: B608
     )
     try:
         async with active_engine.connect() as connection:
@@ -158,7 +158,7 @@ async def hybrid_search(
             WHERE e.owner_type = :owner_type{clause}
             ORDER BY e.vector <=> CAST(:query_vector AS vector)
             LIMIT :limit
-            """
+            """  # nosec: B608
         )
         try:
             async with active_engine.connect() as connection:

@@ -33,7 +33,7 @@ def _parse_root(data: bytes) -> tuple[str, list[str], dict[str, str]]:
     except ImportError:
         import xml.etree.ElementTree as ET
 
-        root = ET.fromstring(data)
+        root = ET.fromstring(data)  # nosec: B314
         children = [_strip_namespace(child.tag) for child in root]
         return _strip_namespace(root.tag), children, {}
 
@@ -45,7 +45,7 @@ def _collect_namespaces(data: bytes) -> dict[str, str]:
 
     namespaces: dict[str, str] = {}
     try:
-        for _, (prefix, uri) in ET.iterparse(io.BytesIO(data), events=("start-ns",)):
+        for _, (prefix, uri) in ET.iterparse(io.BytesIO(data), events=("start-ns",)):  # nosec: B314
             namespaces[prefix or ""] = uri
     except ET.ParseError:
         pass

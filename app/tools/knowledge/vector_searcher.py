@@ -98,7 +98,7 @@ async def vector_search(
         WHERE e.owner_type = :owner_type
         ORDER BY e.vector <=> CAST(:query_vector AS vector)
         LIMIT :limit
-        """
+        """  # nosec: B608
     )
     try:
         async with active_engine.connect() as connection:

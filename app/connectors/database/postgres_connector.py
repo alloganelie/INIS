@@ -174,7 +174,7 @@ class PostgresConnector:
             # Only the validated identifier is interpolated; LIMIT is a bound
             # parameter, so no external value ever reaches the SQL text.
             result = await conn.execute(
-                text(f"SELECT * FROM {table_name} LIMIT :limit"),
+                text(f"SELECT * FROM {table_name} LIMIT :limit"),  # nosec: B608
                 {"limit": limit},
             )
             rows = result.fetchall()
@@ -220,7 +220,7 @@ class PostgresConnector:
 
         column_list = ", ".join(columns)
         bind_list = ", ".join(f":{column}" for column in columns)
-        statement = text(f"INSERT INTO {table_name} ({column_list}) VALUES ({bind_list})")
+        statement = text(f"INSERT INTO {table_name} ({column_list}) VALUES ({bind_list})")  # nosec: B608
         engine = await self._get_engine()
         async with engine.begin() as conn:
             result = await conn.execute(statement, [dict(row) for row in rows])
