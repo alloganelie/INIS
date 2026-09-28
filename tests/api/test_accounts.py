@@ -3,13 +3,10 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.v1.accounts.router import reset_accounts_store, router as accounts_router
+from app.api.v1.accounts.router import reset_accounts_store
 from app.main import app
 
-# Ensure accounts_router is mounted on app with prefix="/v1"
-if not any(getattr(r, "path", "").startswith("/v1/accounts") for r in app.routes):
-    app.include_router(accounts_router, prefix="/v1")
-
+# app/main.py mounts the accounts router under /v1 (B4-bis constat 2).
 client = TestClient(app)
 
 

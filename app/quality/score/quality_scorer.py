@@ -1,6 +1,5 @@
 """Quality scoring per INIS §13.3."""
 
-from typing import Any
 
 
 DEFAULT_WEIGHTS: dict[str, float] = {

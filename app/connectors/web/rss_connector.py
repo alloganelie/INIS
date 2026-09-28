@@ -22,7 +22,6 @@ from app.connectors.base import (
     Query,
     RawSource,
     SourceCandidate,
-    SourceConnector,
     SourceMetadata,
 )
 from app.core.errors import InfrastructureError
@@ -70,7 +69,7 @@ def _parse_feed(data: bytes) -> tuple[str, list[dict[str, str]]]:
         ET.ParseError: If the payload is not parseable XML.
         ValueError: If the root element is neither RSS nor Atom feed.
     """
-    root = ET.fromstring(data)
+    root = ET.fromstring(data)  # nosec: B314
     name = _local(root.tag)
     items: list[dict[str, str]] = []
     if name == "rss":

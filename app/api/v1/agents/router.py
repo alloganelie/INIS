@@ -54,3 +54,58 @@ def get_agent(id: str) -> AgentIdentity:
             detail=f"Agent '{id}' not found",
         )
     return _AGENTS_STORE[id]
+
+
+@router.get(
+    "/{agent_id}/schema",
+    summary="Get JSON Schema specification for an agent per §41.15",
+)
+def get_agent_schema(agent_id: str) -> dict[str, Any]:
+    """Return input and output JSON schemas for the registered agent."""
+    agent = _AGENTS_STORE.get(agent_id)
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent '{agent_id}' not found in registry",
+        )
+
+    # If schemas are empty on the registered agent, provide default JSON Schemas per §41.15
+    input_schemas = agent.input_schemas
+    if not input_schemas:
+        input_schemas = [
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "title": f"{agent.name}Input",
+                "type": "object",
+                "properties": {
+                    "request_id": {"type": "string"},
+                    "task": {"type": "string"},
+                    "parameters": {"type": "object"},
+                },
+                "required": ["request_id", "task"],
+            }
+        ]
+
+    output_schemas = agent.output_schemas
+    if not output_schemas:
+        output_schemas = [
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "title": f"{agent.name}Output",
+                "type": "object",
+                "properties": {
+                    "request_id": {"type": "string"},
+                    "status": {"type": "string", "enum": ["completed", "failed", "degraded"]},
+                    "result": {"type": "object"},
+                },
+                "required": ["request_id", "status"],
+            }
+        ]
+
+    return {
+        "agent_id": agent.agent_id,
+        "name": agent.name,
+        "version": agent.version,
+        "input_schemas": input_schemas,
+        "output_schemas": output_schemas,
+    }

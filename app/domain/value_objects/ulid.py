@@ -5,7 +5,9 @@ from ulid import ULID as PythonUlid
 from app.core.constants import ULID_PREFIXES as CORE_ULID_PREFIXES
 
 
-ULID_PREFIXES = CORE_ULID_PREFIXES | frozenset({"PLAN_", "STEP_", "ITER_"})
+ULID_PREFIXES = CORE_ULID_PREFIXES | frozenset({"PLAN_", "STEP_", "ITER_", "VER_"})
+#: ``VER_`` — §18.1 record version ids (extension of the §0.3 registry,
+#: following the ``PLAN_``/``STEP_``/``ITER_`` planning-zone precedent).
 
 
 class ULID:

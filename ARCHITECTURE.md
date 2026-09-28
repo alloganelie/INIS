@@ -103,6 +103,7 @@ app/domain/value_objects/
 ├── semver.py                      # Version sémantique avec comparaison
 ├── storage_ref.py                 # s3://bucket/path avec validation format
 ├── sha256_hash.py                 # Hash immuable avec vérification intégrité
+├── request_constraints.py         # RequestConstraints et RequiredOutput (§7 canonical)
 ├── bcp47_language.py              # Code langue BCP-47 validé
 └── money.py                       # Montant + devise pour budgets et coûts
 ```
@@ -422,7 +423,9 @@ app/quality/
     ├── __init__.py
     ├── synthetic_detector.py      # Détecte contenu généré par IA
     ├── mirror_detector.py         # Détecte sites miroirs ou copies
-    └── bias_assessor.py           # Évalue le biais éditorial systématique d'une source
+    ├── bias_assessor.py           # Évalue le biais éditorial systématique d'une source
+    ├── freshness_detector.py      # Détecte la fraîcheur artificielle (re-dating)
+    └── assessor.py                # Compose source_suspicion §41.7 + règles d'avertissement
 ```
 
 ---

@@ -1,6 +1,5 @@
 """Async object downloader with multipart support per §4.3 (object storage)."""
 
-from typing import Optional
 
 import aioboto3
 

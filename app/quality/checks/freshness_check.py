@@ -23,4 +23,12 @@ class FreshnessCheck:
         except ValueError:
             return quality_result(0.0, {"updated_at": timestamp}, ["updated_at is invalid"])
         age = datetime.now(UTC) - parsed.astimezone(UTC)
-        return quality_result(1.0 if age <= self._max_age else 0.0, {"age_days": age.days}, [] if age <= self._max_age else ["data is stale"])
+        stale = age > self._max_age
+        # §34 — every freshness decision feeds the stale_data_rate gauge.
+        try:
+            from app.observability.metrics import record_outcome
+
+            record_outcome("stale_data_rate", failure=stale)
+        except Exception:  # noqa: BLE001 - observability never breaks quality
+            pass
+        return quality_result(1.0 if not stale else 0.0, {"age_days": age.days}, ["data is stale"] if stale else [])

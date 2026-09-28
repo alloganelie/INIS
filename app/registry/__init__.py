@@ -8,6 +8,9 @@ from app.registry.agent_registry import (
     VALID_STATUSES,
 )
 from app.registry.capability_index import CapabilityIndex
+from app.registry.delegation_graph import DelegationGraph
+from app.registry.trust_graph import TrustGraph
+from app.registry.trust_graph import can_delegate
 
 __all__ = [
     "AgentIdentity",
@@ -16,4 +19,7 @@ __all__ = [
     "AgentRegistry",
     "VALID_STATUSES",
     "CapabilityIndex",
+    "DelegationGraph",
+    "TrustGraph",
+    "can_delegate",
 ]

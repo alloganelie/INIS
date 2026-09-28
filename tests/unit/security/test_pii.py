@@ -1,6 +1,5 @@
 """Tests for PII detection and redaction per INIS §19.4."""
 
-import pytest
 
 from app.security.pii import PIIDetector, Redactor, SensitivityClassifier
 

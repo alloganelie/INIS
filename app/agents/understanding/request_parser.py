@@ -1,36 +1,26 @@
-"""Parse a free-text request into the INIS section 7 request contract."""
+"""Parse a free-text request into the INIS section 7 request contract.
+
+The §7 value objects (``RequestConstraints``, ``RequiredOutput``,
+``RequestType``) live in :mod:`app.domain.value_objects.request_constraints`
+and are re-exported here for backward compatibility.
+"""
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 from app.core.errors import ValidationError
+from app.domain.value_objects.request_constraints import RequestConstraints
+from app.domain.value_objects.request_constraints import RequestType
+from app.domain.value_objects.request_constraints import RequiredOutput
 from app.domain.value_objects.ulid import ULID
 
-
-RequestType = Literal["research", "source", "evidence", "data", "artifact"]
-
-
-@dataclass(frozen=True)
-class RequestConstraints:
-    """Execution limits carried by an information request."""
-
-    date_range: dict[str, Any] | None = None
-    source_preferences: tuple[str, ...] = ()
-    minimum_confidence: float = 0.8
-    maximum_cost: float | None = None
-    maximum_execution_time_seconds: int = 300
-    maximum_iterations: int = 12
-    maximum_web_depth: int = 3
-
-
-@dataclass(frozen=True)
-class RequiredOutput:
-    """Requested delivery format and optional fields."""
-
-    format: Literal["evidence_package", "json", "csv", "xlsx", "pdf", "xml"] = (
-        "evidence_package"
-    )
-    fields: tuple[str, ...] = ()
+__all__ = [
+    "InformationRequest",
+    "RequestConstraints",
+    "RequestParser",
+    "RequestType",
+    "RequiredOutput",
+]
 
 
 @dataclass(frozen=True)

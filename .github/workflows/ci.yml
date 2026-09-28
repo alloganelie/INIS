@@ -10,23 +10,77 @@ permissions:
 
 jobs:
   architecture:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: python scripts/check_architecture.py
       - run: python scripts/check_contracts.py
 
-  python-tests:
-    runs-on: ubuntu-latest
+      - run: python scripts/check_invariants.py
+      - run: python scripts/check_backward_compat.py migrations/versions/
+
+  security:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # gitleaks is deliberately absent: it needs a token (PHASE-12 debt).
+      - run: pip install pip-audit bandit
+      - run: pip-audit --strict --desc on || true
+      - run: bandit -r app -ll -q
+
+  python-tests:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        # pgvector/pgvector:pg16 ships pgvector >= 0.8.6 (CVE-2026-3172).
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd="pg_isready -U test"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+      minio:
+        # RustFS replaces the withdrawn quay.io/minio/minio tag (2026-09-24).
+        # Same S3 API and same /minio/health/live probe.
+        image: rustfs/rustfs:1.0.0-rc.5
+        env:
+          RUSTFS_ACCESS_KEY: inis-test
+          RUSTFS_SECRET_KEY: inis-test-secret
+        ports: ["9000:9000"]
+        options: >-
+          --health-cmd="curl -f http://localhost:9000/minio/health/live"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]"
+      - run: alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/test
       - run: python -m pytest -q
+        env:
+          DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/test
+          REDIS_URL: redis://localhost:6379/0
+          MINIO_ENDPOINT: http://localhost:9000
+

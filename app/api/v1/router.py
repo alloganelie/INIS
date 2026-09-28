@@ -14,6 +14,7 @@ from app.api.v1.information.router import router as information_router
 from app.api.v1.quality.router import router as quality_router
 from app.api.v1.requests.progress_handler import router as progress_router
 from app.api.v1.requests.router import router as requests_router
+from app.api.v1.requests.router import usage_router
 from app.api.v1.sources.router import router as sources_router
 from app.api.v1.system.changelog_router import router as changelog_router
 from app.api.v1.system.health_router import router as health_router
@@ -32,6 +33,7 @@ router.include_router(accounts_router)
 router.include_router(auth_router)
 router.include_router(requests_router)
 router.include_router(progress_router)
+router.include_router(usage_router)
 router.include_router(agents_router)
 router.include_router(sources_router)
 router.include_router(information_router)

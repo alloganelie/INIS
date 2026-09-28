@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
 from pydantic import BaseModel, Field
 
 
@@ -43,22 +42,6 @@ class AccountUpdateRequest(BaseModel):
     is_active: bool | None = Field(default=None, description="Active status")
 
 
-class LoginRequest(BaseModel):
-    """Credentials required to authenticate."""
-
-    username: str = Field(..., description="Username or email address")
-    password: str = Field(..., description="Plain text password")
-
-
-class LoginResponse(BaseModel):
-    """JWT response after successful authentication."""
-
-    access_token: str = Field(..., description="JWT access token")
-    token_type: str = Field(default="Bearer", description="Token type")
-    expires_in: int = Field(default=3600, description="Access token expiration in seconds")
-    refresh_token: str | None = Field(default=None, description="Refresh token")
-
-
 class ChangePasswordRequest(BaseModel):
     """Payload to update an account's password."""
 
@@ -71,6 +54,4 @@ __all__ = [
     "AccountResponse",
     "AccountUpdateRequest",
     "ChangePasswordRequest",
-    "LoginRequest",
-    "LoginResponse",
 ]

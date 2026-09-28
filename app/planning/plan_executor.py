@@ -2,7 +2,6 @@
 
 from typing import Any, Callable
 
-from app.core.errors import InisError
 from app.planning.dependency_resolver import DependencyResolver
 from app.planning.step_selector import StepSelector
 
@@ -59,8 +58,8 @@ class PlanExecutor:
         retry_counts: dict[str, int] = {}
 
         try:
-            # Validate dependencies
-            execution_order = self.dependency_resolver.resolve(steps)
+            # Validate dependencies (raises ValueError on a dependency cycle)
+            self.dependency_resolver.resolve(steps)
         except ValueError as e:
             return ExecutionResult(
                 success=False,

@@ -7,7 +7,6 @@ from app.registry.agent_registry import (
     AgentRegistry,
     AgentNotFoundError,
     AgentAlreadyRegisteredError,
-    VALID_STATUSES,
 )
 
 
@@ -119,7 +118,7 @@ class TestAgentRegistry:
 
     def test_update_heartbeat(self) -> None:
         """Test updating agent heartbeat."""
-        from datetime import datetime, timedelta
+        from datetime import UTC, datetime, timedelta
 
         registry = AgentRegistry()
         identity = create_test_identity("agent_1")
@@ -128,7 +127,7 @@ class TestAgentRegistry:
         original_last_seen = identity.last_seen_at
 
         # Use a later time for the heartbeat
-        later_time = datetime.utcnow() + timedelta(seconds=1)
+        later_time = datetime.now(UTC) + timedelta(seconds=1)
         registry.update_heartbeat("agent_1", {"latency_ms_p95": 100}, now=later_time)
 
         agent = registry.get("agent_1")
@@ -137,15 +136,17 @@ class TestAgentRegistry:
 
     def test_get_stale_agents(self) -> None:
         """Test getting stale agents."""
-        from datetime import datetime, timedelta
+        from datetime import UTC, datetime, timedelta
 
         registry = AgentRegistry()
         identity = create_test_identity("agent_1")
 
         registry.register("agent_1", identity)
         # Manually set last_seen_at to old time
-        old_time = datetime.utcnow() - timedelta(seconds=120)
-        identity.last_seen_at = old_time.isoformat(timespec="microseconds") + "Z"
+        old_time = datetime.now(UTC) - timedelta(seconds=120)
+        identity.last_seen_at = old_time.isoformat(timespec="microseconds").replace(
+            "+00:00", "Z"
+        )
 
         stale = registry.get_stale_agents(ttl_seconds=90)
 

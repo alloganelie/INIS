@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock
 
-from app.planning.plan_executor import PlanExecutor, ExecutionResult
+from app.planning.plan_executor import PlanExecutor
 
 
 @pytest.fixture

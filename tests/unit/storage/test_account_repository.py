@@ -1,12 +1,10 @@
 """Tests for AccountRepository per §19.2 (authentication)."""
 
-from datetime import datetime, timezone, timedelta
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.storage.models.account import Account
 from app.storage.models.base import Base
 from app.storage.repositories.account_repository import AccountRepository
 

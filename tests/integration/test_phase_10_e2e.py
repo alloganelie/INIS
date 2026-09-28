@@ -179,22 +179,11 @@ async def test_pipeline_web_search_e2e() -> None:
         assert result.provider == "serper"
 
 
-def _fake_complete(content: str):
-    """Fabrique un `ModelRouter.complete` async retournant *content* (stub=False)."""
-    from app.llm.router.model_router import LLMResponse
-
-    async def _complete(self, task, prompt, **kwargs):
-        return LLMResponse(content=content, model="fake-test", stub=False)
-
-    return _complete
-
-
-async def test_pipeline_marks_real_findings(monkeypatch) -> None:
+async def test_pipeline_marks_real_findings(mock_llm) -> None:
     """Seuls les findings avec source_id SRC_ restent vérifiés (skip si absent)."""
     module_name = "app.api.v1.requests.pipeline_runner"
     module = _import_or_skip(module_name)
     runner_cls = _symbol_or_skip(module, module_name, "PipelineRunner")
-    router_module = _import_or_skip("app.llm.router.model_router")
 
     content = json.dumps(
         {
@@ -209,9 +198,7 @@ async def test_pipeline_marks_real_findings(monkeypatch) -> None:
             ],
         }
     )
-    monkeypatch.setattr(
-        router_module.ModelRouter, "complete", _fake_complete(content)
-    )
+    mock_llm.configure(content)
     out = await runner_cls().run("REQ_TEST10", {"objective": "test findings"})
     assert len(out["findings"]) == 1
     assert out["findings"][0]["source_id"] == "SRC_WIKIPEDIA_01"
@@ -220,12 +207,11 @@ async def test_pipeline_marks_real_findings(monkeypatch) -> None:
     assert any("ciel est bleu" in s for s in dropped)
 
 
-async def test_pipeline_does_not_use_llm_as_source(monkeypatch) -> None:
+async def test_pipeline_does_not_use_llm_as_source(mock_llm) -> None:
     """§0.2 inv.8 : le LLM n'est jamais source unique d'un fait (skip si absent)."""
     module_name = "app.api.v1.requests.pipeline_runner"
     module = _import_or_skip(module_name)
     runner_cls = _symbol_or_skip(module, module_name, "PipelineRunner")
-    router_module = _import_or_skip("app.llm.router.model_router")
 
     content = json.dumps(
         {
@@ -237,9 +223,7 @@ async def test_pipeline_does_not_use_llm_as_source(monkeypatch) -> None:
             ],
         }
     )
-    monkeypatch.setattr(
-        router_module.ModelRouter, "complete", _fake_complete(content)
-    )
+    mock_llm.configure(content)
     out = await runner_cls().run("REQ_TEST10B", {"objective": "test §0.2"})
     assert out["findings"] == []
     assert out["status"] == "INSUFFICIENT_EVIDENCE"

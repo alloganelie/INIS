@@ -8,7 +8,6 @@ from app.connectors.base import (
     Query,
     RawSource,
     SourceCandidate,
-    SourceConnector,
     SourceMetadata,
 )
 

@@ -60,7 +60,7 @@ class TestEnvelopeValidator:
 
         envelope["protocol_version"] = "2.0"
 
-        with pytest.raises(ValidationError, match="protocol_version must be '1.0'"):
+        with pytest.raises(ValidationError, match="version_supported"):
             validate(envelope)
 
     def test_validate_rejects_missing_message_id(self) -> None:

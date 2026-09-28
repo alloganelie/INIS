@@ -217,7 +217,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     keys = {"admin": DEFAULT_API_KEY}
                     if api_key_header.startswith("inis_"):
                         keys[api_key_header] = api_key_header
-                    key_id = APIKeyValidator(valid_keys=keys).validate(api_key_header)
+                    # Validate the key (raises on invalid input); the actor id
+                    # stays generic for API-key authentication per §19.
+                    APIKeyValidator(valid_keys=keys).validate(api_key_header)
                     valid = True
                     actor_id = "api_key_actor"
                 except Exception:

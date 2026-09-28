@@ -1,6 +1,5 @@
 """Tests for authentication middleware and endpoints per §19 and §32."""
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.api.middleware.auth_middleware import set_security_validator, set_strict_auth_mode

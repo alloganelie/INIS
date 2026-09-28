@@ -6,7 +6,6 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.storage.models.account import Account, Session
 from app.storage.models.base import Base
 from app.storage.repositories.account_repository import AccountRepository
 from app.storage.repositories.session_repository import SessionRepository

@@ -129,12 +129,11 @@ def test_llm_trace_writer_imports() -> None:
 def test_pipeline_runner_imports() -> None:
     """Runner pipeline dédié (skip si module absent).
 
-    Constaté : aucun `*Runner` dans `app/` (`app.workers.request_worker`
-    est vide) ; le rôle est tenu par `PipelineCoordinator`.
+    Le runner canonique est `app.api.v1.requests.pipeline_runner.PipelineRunner`
+    (§24) ; le worker d'exécution est `app.workers.request_worker.RequestWorker`.
     """
     candidates = [
-        ("app.planning.pipeline_runner", "PipelineRunner"),
-        ("app.agents.pipeline.pipeline_runner", "PipelineRunner"),
+        ("app.api.v1.requests.pipeline_runner", "PipelineRunner"),
         ("app.workers.request_worker", "RequestWorker"),
     ]
     if not any(_has_symbol(module, symbol) for module, symbol in candidates):

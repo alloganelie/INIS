@@ -1,10 +1,12 @@
 """Envelope builder for INIS messaging protocol per §5.1."""
 
-from datetime import datetime
+import secrets
+from datetime import UTC, datetime
 from typing import Any
 from typing import Optional
 
 from app.domain.value_objects.ulid import ULID
+from app.messaging.protocol.versioning import DEFAULT_PROTOCOL_VERSION
 
 
 VALID_MESSAGE_TYPES = frozenset(
@@ -43,7 +45,8 @@ VALID_AUTH_METHODS = frozenset({"mtls", "jwt", "api_key"})
 class EnvelopeBuilder:
     """Builds INIS protocol envelopes conforming to §5.1."""
 
-    PROTOCOL_VERSION = "1.0"
+    #: Version stamped on outgoing envelopes (§41.11 preferred version).
+    PROTOCOL_VERSION = DEFAULT_PROTOCOL_VERSION
 
     def __init__(
         self,
@@ -92,17 +95,15 @@ class EnvelopeBuilder:
         message_id = ULID.new("MSG_")
         corr_id = correlation_id or ULID.new("CORR_")
 
-        now_utc = datetime.utcnow().isoformat(timespec="microseconds") + "Z"
+        now_utc = datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
         sender_id = sender_agent_id or self._default_sender_agent_id
         sender_version = sender_agent_version or self._default_sender_agent_version
         sender_instance_id = sender_agent_instance_id or self._default_sender_agent_instance_id
 
         if trace_id is None:
-            import secrets
             trace_id = secrets.token_hex(16)
         if span_id is None:
-            import secrets
             span_id = secrets.token_hex(8)
 
         envelope: dict[str, Any] = {

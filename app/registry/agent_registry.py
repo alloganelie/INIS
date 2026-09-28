@@ -1,9 +1,29 @@
 """In-memory agent registry per §6."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from app.core.errors import DomainError
+
+
+def utc_now() -> datetime:
+    """Return the current timezone-aware UTC timestamp.
+
+    Centralises the UTC clock used by registry timestamps so that no
+    deprecated naive-UTC helper remains in the code base.
+    """
+    return datetime.now(UTC)
+
+
+def to_utc_iso_z(value: datetime) -> str:
+    """Serialise *value* as an ISO-8601 UTC string with a trailing ``Z``.
+
+    Naive datetimes are assumed to be UTC (legacy callers passed naive UTC
+    values), which keeps existing timestamp strings stable.
+    """
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 class AgentNotFoundError(DomainError):
@@ -58,7 +78,7 @@ class AgentIdentity:
         self.health = health
         self.performance_profile = performance_profile
         self.learning_profile = learning_profile
-        self.registered_at = datetime.utcnow().isoformat(timespec="microseconds") + "Z"
+        self.registered_at = to_utc_iso_z(utc_now())
         self.last_seen_at = self.registered_at
 
     def to_dict(self) -> dict[str, Any]:
@@ -142,7 +162,7 @@ class AgentRegistry:
             raise ValueError(f"Invalid status: {status}. Must be one of {VALID_STATUSES}")
         agent = self.get(agent_id)
         agent.status = status
-        agent.last_seen_at = datetime.utcnow().isoformat(timespec="microseconds") + "Z"
+        agent.last_seen_at = to_utc_iso_z(utc_now())
 
     def update_heartbeat(
         self, agent_id: str, health: dict[str, Any] | None = None, now: datetime | None = None
@@ -150,21 +170,24 @@ class AgentRegistry:
         """Update agent last_seen_at and optionally health info."""
         agent = self.get(agent_id)
         if now is None:
-            now = datetime.utcnow()
-        agent.last_seen_at = now.isoformat(timespec="microseconds") + "Z"
+            now = utc_now()
+        agent.last_seen_at = to_utc_iso_z(now)
         if health is not None:
             agent.health.update(health)
 
     def get_stale_agents(self, ttl_seconds: int = 90, now: datetime | None = None) -> list[str]:
         """Return list of agent_ids that have not sent heartbeat within TTL."""
         if now is None:
-            now = datetime.utcnow().replace(tzinfo=None)
-        else:
-            now = now.replace(tzinfo=None)
+            now = utc_now()
+        elif now.tzinfo is None:
+            now = now.replace(tzinfo=UTC)
+        now = now.astimezone(UTC)
         stale = []
         for agent_id, agent in self._agents.items():
             last_seen_str = agent.last_seen_at.replace("Z", "+00:00")
-            last_seen = datetime.fromisoformat(last_seen_str).replace(tzinfo=None)
-            if (now - last_seen).total_seconds() > ttl_seconds:
+            last_seen = datetime.fromisoformat(last_seen_str)
+            if last_seen.tzinfo is None:
+                last_seen = last_seen.replace(tzinfo=UTC)
+            if (now - last_seen.astimezone(UTC)).total_seconds() > ttl_seconds:
                 stale.append(agent_id)
         return stale

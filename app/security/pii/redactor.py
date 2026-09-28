@@ -2,7 +2,7 @@
 
 from typing import List
 
-from app.security.pii.pii_detector import PIIDetector, PIIMatch
+from app.security.pii.pii_detector import PIIDetector
 
 
 class Redactor:

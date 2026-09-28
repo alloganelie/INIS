@@ -1,7 +1,6 @@
 """Capability index for agent discovery per §6."""
 
 from collections import defaultdict
-from typing import Any
 
 
 class CapabilityIndex:
