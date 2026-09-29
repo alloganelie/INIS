@@ -1,4 +1,11 @@
-"""Plan parser: turn an LLM planning response into a structured plan."""
+"""Plan parser: turn an LLM planning response into a structured plan.
+
+The parser is deliberately *structural*: it says what the LLM wrote, and nothing
+more. In particular a step's ``action`` is reported only when the answer declared
+one — the free-text ``description`` never becomes an action (§8.4): the plan
+validator (``app.planning.plan_builder``) refuses a step with an unknown or
+missing action, and no substitute action is ever invented.
+"""
 
 from __future__ import annotations
 
@@ -52,14 +59,21 @@ def parse_plan(content: str) -> dict[str, Any]:
         description = raw_step.get("description") or raw_step.get("action")
         if not description:
             raise ValidationError(f"plan_parser: step {order} needs a description")
-        steps.append(
-            {
-                "order": int(raw_step.get("order", order)),
-                "tool": str(raw_step.get("tool", "")),
-                "description": str(description),
-                "expected_output": str(raw_step.get("expected_output", "")),
-            }
-        )
+        step: dict[str, Any] = {
+            "order": int(raw_step.get("order", order)),
+            "tool": str(raw_step.get("tool", "")),
+            "description": str(description),
+            "expected_output": str(raw_step.get("expected_output", "")),
+        }
+        # §8.4 — the *declared* action is kept as an action, and only when the
+        # LLM really declared one. It is never derived from ``description``:
+        # promoting prose to the rank of plan action is what let a sentence
+        # decide what the pipeline would execute. A step with no declared action
+        # carries no ``action`` key, and the plan validator refuses it upstream.
+        declared_action = raw_step.get("action")
+        if declared_action:
+            step["action"] = str(declared_action)
+        steps.append(step)
     if not steps:
         raise ValidationError("plan_parser: plan must contain at least one step")
     return {"steps": steps}

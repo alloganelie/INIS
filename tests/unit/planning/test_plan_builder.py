@@ -10,14 +10,15 @@ def build_plan() -> dict:
         objective="Verify a source",
         steps=[
             {
-                "action": "search",
+                # §8.4 — the vocabulary is closed: a step names one of its actions.
+                "action": "collect_information",
                 "tool": "web_search",
                 "inputs": {"query": "INIS"},
                 "expected_output": "sources",
             },
             {
-                "action": "verify",
-                "tool": "evidence_checker",
+                "action": "fetch_page",
+                "tool": "open_url",
                 "expected_output": "evidence",
                 "depends_on": ["STEP_01H00000000000000000000000"],
             },

@@ -166,7 +166,15 @@ class TestPipelineRunnerLimitsWiring:
         large_plan = {
             "plan_id": "PLAN_OVERSIZED",
             "steps": [
-                {"step_id": f"STEP_{i}", "action": "web_search", "inputs": {}}
+                {
+                    "step_id": f"STEP_{i}",
+                    # §8.4 — the plan is valid: this test is about §41.13, and an
+                    # invalid action would be refused before the step count is read.
+                    "action": "collect_information",
+                    "tool": "collector",
+                    "expected_output": "information_unit",
+                    "inputs": {},
+                }
                 for i in range(5)
             ],
         }
@@ -197,7 +205,9 @@ class TestPipelineRunnerLimitsWiring:
             "steps": [
                 {
                     "step_id": "STEP_1",
-                    "action": "web_search",
+                    "action": "collect_information",
+                    "tool": "collector",
+                    "expected_output": "information_unit",
                     "inputs": {"query": "safe query"},
                 }
             ],

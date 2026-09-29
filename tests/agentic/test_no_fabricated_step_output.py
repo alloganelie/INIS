@@ -171,14 +171,58 @@ async def test_an_unknown_action_is_refused_by_name(
     captured_steps: list[dict[str, Any]],
     mock_llm: Any,
 ) -> None:
-    """An action outside the closed vocabulary is named, not silently ignored."""
+    """§8.4 — an action outside the closed vocabulary refuses the whole plan."""
     mock_llm.configure('{"summary": "Rien à livrer.", "findings": []}')
 
     delivery, _ = await _run("bricoler_quelque_chose")
 
-    assert captured_steps[0]["status"] == "degraded"
-    assert "bricoler_quelque_chose" in captured_steps[0]["error"]
+    assert all(
+        step.get("action") != "bricoler_quelque_chose" for step in captured_steps
+    ), "a refused plan must not be executed"
+    assert all(step.get("step_id") != "STEP_TEST" for step in captured_steps)
     assert any("bricoler_quelque_chose" in text for text in delivery["limitations"])
+    assert any("hors du vocabulaire fermé" in text for text in delivery["limitations"])
+
+
+@pytest.mark.asyncio
+async def test_an_llm_action_outside_the_vocabulary_refuses_the_llm_plan(
+    web_doubles: dict[str, AsyncMock],
+    captured_steps: list[dict[str, Any]],
+    mock_llm: Any,
+) -> None:
+    """§8.4 — the LLM plan is validated too; the deterministic plan runs instead."""
+    mock_llm.configure(
+        '{"steps": [{"order": 1, "action": "bricoler", "tool": "x", '
+        '"description": "faire un truc", "expected_output": "y"}]}'
+    )
+
+    runner = PipelineRunner()
+    delivery = await runner.run(ULID.new("REQ_"), {"objective": OBJECTIVE})
+
+    assert all(step.get("action") != "bricoler" for step in captured_steps)
+    assert any(step.get("action") == "collect_information" for step in captured_steps), (
+        "the validated plan must still run"
+    )
+    assert any("bricoler" in text for text in delivery["limitations"])
+
+
+@pytest.mark.asyncio
+async def test_an_llm_description_never_becomes_an_action(
+    web_doubles: dict[str, AsyncMock],
+    captured_steps: list[dict[str, Any]],
+    mock_llm: Any,
+) -> None:
+    """§0.2 — a sentence is not an action: the LLM plan is refused, not repaired."""
+    sentence = "Ingere le fichier puis calcule la moyenne des ventes"
+    mock_llm.configure(f'{{"steps": [{{"description": "{sentence}"}}]}}')
+
+    runner = PipelineRunner()
+    delivery = await runner.run(ULID.new("REQ_"), {"objective": OBJECTIVE})
+
+    serialised = json.dumps(captured_steps, default=str)
+    assert sentence not in serialised, "prose must never decide what runs"
+    assert any(step.get("action") == "collect_information" for step in captured_steps)
+    assert any("'<absente>'" in text for text in delivery["limitations"])
 
 
 @pytest.mark.asyncio

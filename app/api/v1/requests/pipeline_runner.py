@@ -37,6 +37,7 @@ from app.planning.limits import (
     max_parallel_tool_calls,
     max_plan_steps,
 )
+from app.planning.plan_builder import InvalidPlanAction, PlanBuilder, closed_actions
 from app.quality.conflict.conflict_status import conflict_payload
 from app.storage.cache.cache_store import CacheStore
 from app.storage.database.session import database_configured
@@ -78,6 +79,45 @@ def _fact_confidence(fact: dict[str, Any], full_text: bool) -> float:
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         return _FULL_TEXT_CONFIDENCE if full_text else _SNIPPET_CONFIDENCE
     return max(0.0, min(1.0, float(raw)))
+
+def _llm_plan_steps(
+    parsed_plan: dict[str, Any], objective: str
+) -> list[dict[str, Any]]:
+    """Map the steps of a parsed LLM plan onto §8.2 plan steps.
+
+    §8.4 — only the ``action`` the LLM **declared** is kept as an action; its
+    free-text ``description`` becomes the step input, never the action. A step
+    that declares none is passed through with an empty action, so the plan
+    validator refuses the whole plan instead of guessing what was meant.
+    """
+    return [
+        {
+            "action": str(step.get("action") or ""),
+            "tool": str(step.get("tool") or "collector"),
+            "inputs": {"requirement": str(step.get("description") or objective)},
+            "expected_output": str(step.get("expected_output") or "information_unit"),
+        }
+        for step in parsed_plan.get("steps", [])
+        if isinstance(step, dict)
+    ]
+
+
+def _plan_budget(plan: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the §41.2 budget of *plan*, completed with the pipeline defaults.
+
+    A plan rebuilt from an LLM answer must carry the same budget as the plan it
+    replaces; a plan that carries none (the degraded fallback) falls back to the
+    documented defaults instead of failing on a missing key.
+    """
+    raw = plan.get("budget") if isinstance(plan, dict) else None
+    raw = raw if isinstance(raw, dict) else {}
+    return {
+        "max_iterations": raw.get("max_iterations", 12),
+        "max_cost": raw.get("max_cost"),
+        "max_execution_time_seconds": raw.get("max_execution_time_seconds", 300),
+    }
+
+
 
 
 class PipelineRunner:
@@ -684,7 +724,6 @@ class PipelineRunner:
             requirements_list = [objective] if objective else ["general_inquiry"]
             understanding_status = f"degraded: {err}"
 
-        requirements: Any = requirements_list
         try:
             from app.llm.prompts.understanding_prompt import build as build_understanding_prompt
             from app.llm.tasks.understanding_task import UnderstandingTask
@@ -692,8 +731,6 @@ class PipelineRunner:
             prompt = build_understanding_prompt(objective=objective)
             task = UnderstandingTask()
             llm_result = await task.run(prompt, max_tokens=500)
-            if not llm_result.get("stub"):
-                requirements = llm_result["content"]
             # §41.2 — meter the LLM call against the request budget.
             budget_exceeded = self._meter_llm(request_id, llm_result)
             # §41.12 — trace the reasoning decision (prompt stored hashed only).
@@ -732,21 +769,37 @@ class PipelineRunner:
             "request_id": request_id,
         })
         plan: dict[str, Any] | None = None
+        #: §8.4 — a plan refused by the closed vocabulary; stated in limitations.
+        plan_rejection: str | None = None
+        #: One validator for both plans a run can receive: the submitted one and
+        #: the LLM one.
+        builder = PlanBuilder()
         explicit_plan = payload.get("plan") if isinstance(payload, dict) else None
-        if isinstance(explicit_plan, dict) and "steps" in explicit_plan:
-            plan = {
-                "plan_id": explicit_plan.get("plan_id") or ULID.new("PLAN_"),
-                "request_id": request_id,
-                "objective": objective,
-                "steps": list(explicit_plan.get("steps") or []),
-                "budget": explicit_plan.get("budget", {}),
-            }
-            planning_status = "completed"
-        else:
+        explicit_steps = (
+            list(explicit_plan.get("steps") or [])
+            if isinstance(explicit_plan, dict) and "steps" in explicit_plan
+            else []
+        )
+        if explicit_steps:
             try:
-                from app.planning.plan_builder import PlanBuilder
+                # §8.4 — a submitted plan is data coming from outside the process:
+                # it is checked like an LLM answer, never trusted, and refused as
+                # a whole as soon as one of its steps names an unknown action.
+                PlanBuilder.validate_steps(explicit_steps)
+            except InvalidPlanAction as refusal:
+                plan_rejection = str(refusal)
+            else:
+                plan = {
+                    "plan_id": explicit_plan.get("plan_id") or ULID.new("PLAN_"),
+                    "request_id": request_id,
+                    "objective": objective,
+                    "steps": explicit_steps,
+                    "budget": explicit_plan.get("budget", {}),
+                }
+                planning_status = "completed"
 
-                builder = PlanBuilder()
+        if plan is None:
+            try:
                 steps = [
                     {
                         "action": "collect_information",
@@ -776,7 +829,11 @@ class PipelineRunner:
                         "max_execution_time_seconds": max_time,
                     },
                 )
-                planning_status = "completed"
+                # §8.4 — when a submitted plan was refused, the deterministic
+                # plan runs instead and the refusal stays stated in the delivery.
+                planning_status = (
+                    "completed" if plan_rejection is None else f"degraded: {plan_rejection}"
+                )
             except Exception as err:
                 plan = {
                     "plan_id": ULID.new("PLAN_"),
@@ -801,14 +858,14 @@ class PipelineRunner:
             from app.llm.prompts.planning_prompt import build as build_planning_prompt
             from app.llm.tasks.planning_task import PlanningTask
 
-            try:
-                prompt = build_planning_prompt(objective=objective, requirements=requirements)
-            except TypeError:
-                tools = ["collector", "web_search", "vector_search"]
-                prompt = build_planning_prompt(
-                    objective=f"{objective} (Requirements: {requirements})" if requirements else objective,
-                    available_tools=tools,
-                )
+            prompt = build_planning_prompt(
+                objective=objective,
+                available_tools=["collector", "web_search", "vector_search"],
+                # §8.4 — the planner is told the closed vocabulary, so a plan
+                # naming anything else is a mistake it can avoid.
+                available_actions=sorted(closed_actions()),
+                requirements=requirements_list,
+            )
             task = PlanningTask()
             llm_result = await task.run(prompt, max_tokens=800)
             # §41.2 — meter the planning LLM call too.
@@ -827,28 +884,29 @@ class PipelineRunner:
                     else "plan steps parsed from LLM output"
                 ),
             )
-            if not llm_result.get("stub") and not (isinstance(explicit_plan, dict) and "steps" in explicit_plan):
-                # parser le JSON via app.llm.parsers.plan_parser.parse_plan
+            if not llm_result.get("stub") and not (explicit_steps and plan_rejection is None):
                 parsed_llm_plan = parse_plan(llm_result["content"])
-                plan_id = (plan.get("plan_id") if isinstance(plan, dict) and plan.get("plan_id") else ULID.new("PLAN_"))
-                plan = {
-                    "plan_id": plan_id,
-                    "request_id": request_id,
-                    "objective": objective,
-                    "steps": [
-                        {
-                            "step_id": step.get("step_id") or ULID.new("STEP_"),
-                            "order": step.get("order", idx),
-                            "action": step.get("description") or step.get("action", "collect_information"),
-                            "tool": step.get("tool", "collector"),
-                            "inputs": step.get("inputs", {"requirement": step.get("description", objective)}),
-                            "expected_output": step.get("expected_output", "information_unit"),
-                            "status": step.get("status", "pending"),
-                        }
-                        for idx, step in enumerate(parsed_llm_plan.get("steps", []), start=1)
-                    ],
-                }
-                planning_status = "completed"
+                proposed_steps = _llm_plan_steps(parsed_llm_plan, objective)
+                try:
+                    # §8.4 — the LLM plan is validated as a whole: a single
+                    # unknown (or missing) action refuses it entirely, and the
+                    # validated plan already in hand keeps running. The LLM
+                    # answer is never "repaired" into something executable.
+                    rebuilt = builder.build(
+                        request_id, objective, proposed_steps, _plan_budget(plan)
+                    )
+                except InvalidPlanAction as refusal:
+                    plan_rejection = plan_rejection or str(refusal)
+                    planning_status = f"degraded: {plan_rejection}"
+                else:
+                    if isinstance(plan, dict) and plan.get("plan_id"):
+                        rebuilt["plan_id"] = plan["plan_id"]
+                    plan = rebuilt
+                    planning_status = (
+                        "completed"
+                        if plan_rejection is None
+                        else f"degraded: {plan_rejection}"
+                    )
         except ImportError:
             pass
         except Exception:
@@ -1530,6 +1588,15 @@ class PipelineRunner:
                 f"Exécution incomplète ({execution_status}) : les étapes non exécutables sont "
                 "signalées dans leur champ `error`, aucun contenu de résultat n'est produit "
                 "(§25.2, §37)."
+            )
+        if plan_rejection:
+            # §8.4/§22.3 — a refused plan is not executed and not hidden: the
+            # delivery names the action that was refused and states that the
+            # deterministic plan ran in its place.
+            base_limitations.append(
+                "Plan refusé en amont (§8.4/§22.3) : "
+                + plan_rejection
+                + " Le plan déterministe a été exécuté à la place."
             )
         if degraded_actions:
             base_limitations.append(
