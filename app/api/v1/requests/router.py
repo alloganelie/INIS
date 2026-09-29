@@ -14,6 +14,7 @@ from app.api.v1.requests.schemas import (
     InformationRequestResponse,
 )
 from app.domain.value_objects.ulid import ULID
+from app.core.statuses import CANCELLED_STATUS
 from app.governance.budget.quotas import GLOBAL_USAGE
 
 router = APIRouter(prefix="/requests", tags=["requests"])
@@ -74,6 +75,30 @@ def get_request(id: str) -> InformationRequestResponse:
     if state:
         item.status = state.get("status", item.status)
         item.pipeline_state = state
+    return item
+
+
+@router.post(
+    "/{id}/cancel",
+    response_model=InformationRequestResponse,
+    summary="Cancel an Information Request (§32)",
+)
+def cancel_request(id: str) -> InformationRequestResponse:
+    """Cancel a request and return its updated state (§1.3 ``CANCELLED``).
+
+    Cancellation is idempotent: cancelling an already-cancelled request returns
+    the same state instead of failing, so a client retry after a timeout is
+    safe. An unknown request is a 404, never a silent success.
+    """
+    if id not in _REQUESTS_STORE:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Information request '{id}' not found",
+        )
+    item = _REQUESTS_STORE[id]
+    state = pipeline_runner.cancel(id)
+    item.status = str(state.get("status") or CANCELLED_STATUS)
+    item.pipeline_state = state
     return item
 
 

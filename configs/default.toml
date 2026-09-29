@@ -1,0 +1,60 @@
+# INIS — configuration de référence (§41.2 « [CONFIG] »).
+#
+# Ce fichier *documente et fige* les valeurs par défaut du runtime. La
+# résolution effective reste, dans l'ordre : variable d'environnement → valeur
+# de ce fichier (via le profil chargé) → valeur codée. `tests/unit/core/test_config.py`
+# vérifie que les quatre profils exposent les mêmes clés et que les valeurs
+# correspondent aux constantes du code ; un écart fait échouer la suite.
+
+[environment]
+name = "default"
+
+# ── §41.2 : budgets par requête ────────────────────────────────────────────
+# Tout plafond est *non borné* par défaut (``Budget`` utilise ``None``). Une
+# demande fixe ses limites dans `POST /v1/requests` → `budget` ; les valeurs
+# ci-dessous, commentées, sont des exemples de bornage.
+[budgets]
+# max_llm_tokens = 200000
+# max_web_requests = 20
+# max_api_calls = 40
+# max_storage_bytes = 104857600
+# max_compute_seconds = 300
+# max_total_cost_usd = 0.50
+
+# ── §7 : contraintes par défaut d'une demande ──────────────────────────────
+[request_defaults]
+minimum_confidence = 0.8
+maximum_execution_time_seconds = 300
+maximum_iterations = 12
+maximum_web_depth = 3
+required_output_format = "evidence_package"
+ttl_seconds = 900
+
+# ── §41.13 : garde-fous d'exécution (app/planning/limits.py) ───────────────
+[limits]
+max_plan_steps = 50
+max_parallel_tool_calls = 10
+
+# ── §41.5 : cache ──────────────────────────────────────────────────────────
+[cache]
+l1_enabled = true
+redis_ttl_seconds = 300
+redis_prefix = "inis"
+
+[llm]  # §22 — sans clé, le routeur répond un stub explicitement marqué
+provider = "openrouter"
+default_model = "openai/gpt-4"
+probe_max_tokens = 16
+# §41.8 — tentatives totales par modèle, première comprise.
+retry_attempts = 3
+# §22.2 — chaîne de repli ordonnée, du modèle le plus intéressant au moins.
+# Aucune liste n'est codée en dur : le déploiement la fixe via
+# LLM_MODEL_FALLBACKS (cf. `.env.example`, liste `:free` vérifiée + commande de
+# rafraîchissement du catalogue). Vide = le premier échec remonte tel quel.
+fallback_models = []
+
+[web]  # §9 — sans clé Serper, le provider Wikipedia assure la dégradation
+provider = "serper"
+fallback_provider = "wikipedia"
+results_per_query = 5
+

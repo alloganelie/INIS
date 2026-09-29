@@ -1,0 +1,70 @@
+# Valeurs par défaut pour le déploiement Helm INIS (§4).
+
+replicaCount: 2
+
+image:
+  repository: inis-registry.example.com/inis/api
+  pullPolicy: IfNotPresent
+  tag: "2.0.0"
+
+serviceAccount:
+  create: true
+  name: "inis-sa"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  fsGroup: 10001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 8000
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "64m"
+  hosts:
+    - host: inis.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: inis-tls-cert
+      hosts:
+        - inis.example.com
+
+resources:
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 75
+  targetMemoryUtilizationPercentage: 80
+
+config:
+  environment: "development"
+  logLevel: "INFO"
+  corsOrigins: "https://inis.example.com"
+  s3Bucket: "inis-artifacts"
+  s3Region: "eu-west-3"
+  s3UseSsl: "true"
+  authStrictMode: "false"
+  accessTokenExpireMinutes: "60"
+

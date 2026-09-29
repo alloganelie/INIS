@@ -1,5 +1,17 @@
 # Agent status
 
+## Plan de conformité spec — source de vérité de l'avancement
+
+L'audit exécuté le 2026-09-29 (spec ⇄ code, pas seulement lecture de docs) a montré que
+l'ingestion de fichiers, l'interrogation PostgreSQL, la mémoire §16/§17, les transformations
+et la livraison d'artefacts §24.2/§24.3 existent en **code + tests unitaires** mais ne sont
+**pas branchés au pipeline** ni **exposés au client**. Le plan cochaable correspondant, avec
+gates et pièges vérifiés, est dans **`docs/SPEC_CONFORMANCE_PLAN.md`**.
+
+Conséquence de méthode : `docs/SPEC_COVERAGE.md` mesure « classe + test unitaire » et non
+« capacité branchée et exposée » — la section §0 du plan définit les niveaux **N0/N1/N2** à
+utiliser pour toute nouvelle ligne de couverture.
+
 ## PHASE-05.4 — Temporary ownership exception
 
 Codex audited and repaired the Devin-owned `migrations/`,
@@ -73,4 +85,63 @@ v2.0.0** et planifiés PHASE-12 ; aucun ne bloque la release.
 Note : la tag `v1.0.0` a été créée sur `fce8c43` (`chore(release): add v1.0.0
 refactoring report (C)`), commit de release retrouvé dans l'historique —
 `git log v1.0.0..HEAD` fonctionne.
+
+---
+
+## Remédiation `fix/pipeline-llm-synthesis` — 2026-09-28
+
+Branche : `fix/pipeline-llm-synthesis` (base `3ac6c73`).
+
+**État final : 1 592 tests verts, 2 skips d'environnement** (`INIS_RABBITMQ_URL`
+absent → broker AMQP ; `SERPER_API_KEY` absent → recherche réelle). Les quatre
+checkers (`architecture`, `contracts`, `invariants`, `backward_compat`) sont
+verts. Le harnais E2E externe (conteneurs PostgreSQL/pgvector + Redis réels,
+uvicorn, clés réelles) est à **63/63 PASS, 0 FAIL**.
+
+### Défauts produit corrigés (pas seulement des tests)
+
+| # | Défaut | § | Correctif |
+|---|---|---|---|
+| 1 | Les unités synthétisées par le pipeline partaient **sans `provenance`** : un client pouvait recevoir des affirmations non traçables | §0.2, §11 | `pipeline_runner` pose `source_id`/`method`/`derived_from` + schéma unité complet |
+| 2 | Aucun composant ne pouvait reconstruire un colis §24.1 depuis les lignes persistées : une livraison persistée n'était pas re-livrable | §1, §24.1 | `InformationPackageRepository.assemble()` ; refuse un colis sans unité (donc sans provenance) |
+| 3 | `audit_events.result` contenait le statut brut de livraison (`completed`) au lieu de `success`/`failure` | §20 | `pipeline_persistence` normalise |
+| 4 | `CapabilityIndex` projetait ses `set` dans l'ordre du hash : `to_dict()` changeait à chaque processus (routage §6 et échanges §5.3 non reproductibles) | §5.3, §6 | projections triées ; test de stabilité |
+| 5 | `object_uploader`/`object_downloader` importaient `aioboto3` au chargement du module : dépendance optionnelle transformée en import obligatoire | §4 | import paresseux → `InfrastructureError` |
+| 6 | `app/domain/entities/memory_result.py` et `app/planning/memory_checker.py` manquaient (modules référencés, absents) | §7, §8 | implémentés |
+| 7 | La route `POST /v1/requests/{id}/cancel` (§32) n'était couverte par **aucun** test | §32, §1.3 | `tests/api/test_request_cancel.py` (statut `CANCELLED`, idempotence, 404, drapeau runner, conservation du matériel déjà obtenu) |
+
+### Suites de tests remplies (lacune n°12 ci-dessus, partiellement soldée)
+
+- `tests/performance/**` : plus vide — débit/latence séquentiels et queue,
+  agents concurrents (identité des requêtes, unicité des ids, registre
+  thread-safe), latence recherche vectorielle + hybride pgvector (§41.13).
+- Tests d'intégration neufs : connecteurs PDF (pypdf, dégradation gracieuse sur
+  fichier corrompu §25.1), Excel (openpyxl, `record_count` honnêtement à `None`),
+  web (`mock` transport + providers live), Redis (cache L1 partagé, TTL délégué,
+  fraîcheur §41.5), MinIO/S3, versioning, registre d'agents, broker AMQP.
+- 15 factories `tests/factories/**` (identifiants toujours via `ULID`, §0.2/§0.3).
+- Tests unitaires : `transformation`, `artifact`, `memory_checker`, `config`.
+
+### Reste ouvert après cette remédiation
+
+- **BC005 (27 warnings, non bloquants)** : tous les `op.create_index` signalés
+  indexent une table créée dans **le même `upgrade()`**. §41.14 ne s'applique pas
+  (table neuve, aucune écriture concurrente) et `CREATE INDEX CONCURRENTLY` est
+  **interdit dans une transaction** — l'activer casserait la migration. Aucun
+  changement ; à re-vérifier dès qu'un index est ajouté à une table préexistante.
+- **Dette n°12 (partie non soldée)** : `app/artifacts/**` + `app/api/v1/artifacts/`
+  restent vides (§24.2, §24.3), `app/knowledge/embedding/` (§16) et
+  `app/knowledge/enrichment/` (§12) restent absents.
+- **Dette n°6** : cache L2 (PostgreSQL) et L3 (pgvector) toujours non câblés ;
+  le L1 est désormais testé contre Redis réel.
+- **Secrets** : `start.bat` contient une clé `SERPER_API_KEY` et une clé OpenRouter
+  en clair — **rotation à faire** (le fichier est ignoré par git).
+- **Python local 3.11.9** alors que `pyproject.toml` cible `py312` : la CI fait foi.
+
+### Comportement à connaître (documenté par les tests)
+
+`POST /v1/requests` planifie l'exécution du pipeline en tâche de fond (§28) : créer
+une requête déclenche donc un run réel, ce qui explique que le `pipeline_state`
+d'une requête « vide » porte déjà du matériel.
+
 

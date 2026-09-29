@@ -1,0 +1,204 @@
+# INIS — stack de développement local (§4 « Stack technique »).
+#
+#   docker compose up -d
+#
+# Démarre PostgreSQL+pgvector, Redis, RabbitMQ, Mosquitto (MQTT), le stockage
+# objet S3-compatible, le collecteur OTel, Prometheus, Grafana et l'API.
+# Les identifiants par défaut sont des valeurs de *développement* : pour la
+# production, utilisez `docker-compose.prod.yml` et un `.env` renseigné.
+name: inis
+
+x-postgres-credentials: &postgres-credentials
+  POSTGRES_USER: ${POSTGRES_USER:-inis}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-inis_dev_password}
+  POSTGRES_DB: ${POSTGRES_DB:-inis_db}
+
+x-api-environment: &api-environment
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  PORT: "8000"
+  # §4.2 — asyncpg pour l'API et pour Alembic (env.py utilise un moteur async ;
+  #          `postgresql+asyncpg` évite d'embarquer psycopg/psycopg2 dans l'image).
+  INIS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-inis}:${POSTGRES_PASSWORD:-inis_dev_password}@postgres:5432/${POSTGRES_DB:-inis_db}
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-inis}:${POSTGRES_PASSWORD:-inis_dev_password}@postgres:5432/${POSTGRES_DB:-inis_db}
+  REDIS_URL: redis://redis:6379/0
+  # §4.4 — l'API accepte `AMQP_URL` ou `INIS_BROKER_URL`.
+  AMQP_URL: amqp://${RABBITMQ_USER:-inis}:${RABBITMQ_PASSWORD:-inis_dev_password}@rabbitmq:5672//
+  INIS_BROKER_URL: amqp://${RABBITMQ_USER:-inis}:${RABBITMQ_PASSWORD:-inis_dev_password}@rabbitmq:5672//
+  # §4.3 — stockage objet S3-compatible (RustFS/MinIO).
+  S3_ENDPOINT: http://object-storage:9000
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-inis_dev_access}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-inis_dev_secret}
+  S3_BUCKET: ${S3_BUCKET:-inis-artifacts}
+  S3_REGION: ${S3_REGION:-eu-west-3}
+  S3_USE_SSL: "false"
+  # §19 — authentification et secrets.
+  JWT_SECRET: ${JWT_SECRET:-dev_only_change_me}
+  INIS_AUTH_ENABLED: ${INIS_AUTH_ENABLED:-false}
+  INIS_RATE_LIMIT_ENABLED: ${INIS_RATE_LIMIT_ENABLED:-false}
+  INIS_RESUME_SECRET: ${INIS_RESUME_SECRET:-dev_only_resume_secret}
+  # §9/§22 — recherche web et LLM : laisser vide active les modes dégradés
+  # (provider Wikipedia, LLM stub) honnêtement remontés par /v1/health.
+  SERPER_API_KEY: ${SERPER_API_KEY:-}
+  LLM_API_KEY: ${LLM_API_KEY:-}
+  LLM_BASE_URL: ${LLM_BASE_URL:-}
+  LLM_MODEL_DEFAULT: ${LLM_MODEL_DEFAULT:-}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: inis-postgres
+    environment:
+      <<: *postgres-credentials
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # §16.1 — extensions `vector` et `pg_trgm` créées au premier démarrage.
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/00-inis-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-inis} -d ${POSTGRES_DB:-inis_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: inis-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: inis-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-inis}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-inis_dev_password}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./docker/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: inis-mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./docker/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -t '$$SYS/broker/version' -C 1 -W 3 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # §4.3 — l'image MinIO historique a été retirée de Quay.io ; RustFS expose la
+  # même API S3 (le module de tests pin déjà cette image).
+  object-storage:
+    image: rustfs/rustfs:1.0.0-rc.5
+    container_name: inis-object-storage
+    environment:
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:-inis_dev_access}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:-inis_dev_secret}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - object_storage_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    container_name: inis-otel-collector
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./docker/otel/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    depends_on:
+      prometheus:
+        condition: service_started
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: inis-prometheus
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: inis-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      # Le tableau de bord §34 est monté tel quel ; Grafana ne l'importe pas
+      # automatiquement (aucun dossier de provisioning dans le dépôt).
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    container_name: inis-api
+    environment:
+      <<: *api-environment
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    # §41.14 — le schéma est migré avant d'accepter du trafic.
+    command: ["sh", "-c", "python -m alembic upgrade head && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  mosquitto_data:
+  object_storage_data:
+  prometheus_data:
+  grafana_data:
+

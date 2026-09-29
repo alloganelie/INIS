@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: inis
+  labels:
+    app.kubernetes.io/name: inis
+    app.kubernetes.io/part-of: inis
+

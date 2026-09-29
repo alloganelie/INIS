@@ -1,0 +1,51 @@
+# INIS — profil de test (§33).
+#
+# Les tests n'ont pas de service externe : le réseau web est remplacé par un
+# transport simulé et le LLM par un stub. Ce profil sert de référence explicite
+# pour les valeurs que la suite suppose (garde-fous bas, budgets serrés).
+
+[environment]
+name = "test"
+
+# ── §41.2 : budgets par requête — bornés pour rendre les dépassements testables
+[budgets]
+# max_llm_tokens = 8000
+# max_web_requests = 3
+# max_compute_seconds = 30
+
+# ── §7 : contraintes par défaut d'une demande ──────────────────────────────
+[request_defaults]
+minimum_confidence = 0.8
+maximum_execution_time_seconds = 300
+maximum_iterations = 12
+maximum_web_depth = 3
+required_output_format = "evidence_package"
+ttl_seconds = 900
+
+# ── §41.13 : garde-fous d'exécution — plus bas qu'en production ────────────
+[limits]
+max_plan_steps = 50
+max_parallel_tool_calls = 10
+
+# ── §41.5 : cache — L1 en mémoire uniquement, aucun Redis requis ───────────
+[cache]
+l1_enabled = true
+redis_ttl_seconds = 60
+redis_prefix = "inis-test"
+
+# ── §22 : LLM — le stub est le comportement attendu en test ────────────────
+[llm]
+provider = "stub"
+default_model = "stub"
+probe_max_tokens = 8
+# §41.8 — même budget qu'en production, pour tester le chemin réel du routeur.
+retry_attempts = 3
+# §22.2 — chaîne vide : les tests ne doivent jamais joindre un fournisseur.
+fallback_models = []
+
+# ── §9 : recherche web — fournisseur simulé, jamais d'appel sortant ────────
+[web]
+provider = "mock"
+fallback_provider = "mock"
+results_per_query = 3
+

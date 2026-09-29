@@ -145,8 +145,17 @@ async def _insert_units(session: Any, information_units: list[dict[str, Any]], n
         await session.execute(
             text(
                 """
-                INSERT INTO information_units (id, type, content, source_id, document_id, data_stage, created_at)
-                VALUES (:id, :type, CAST(:content AS JSONB), :source_id, NULL, :data_stage, :created_at)
+                INSERT INTO information_units (
+                    id, type, content, source_id, document_id, data_stage,
+                    raw_reference, context, language, epistemic_status, provenance,
+                    created_at, updated_at
+                )
+                VALUES (
+                    :id, :type, CAST(:content AS JSONB), :source_id, NULL, :data_stage,
+                    CAST(:raw_reference AS JSONB), CAST(:context AS JSONB), :language,
+                    :epistemic_status, CAST(:provenance AS JSONB),
+                    :created_at, :updated_at
+                )
                 ON CONFLICT (id) DO NOTHING
                 """
             ),
@@ -156,7 +165,16 @@ async def _insert_units(session: Any, information_units: list[dict[str, Any]], n
                 "content": content_payload,
                 "source_id": unit_source_id,
                 "data_stage": unit.get("data_stage", "derived"),
+                # §11 — the persisted row mirrors the delivered unit, so the
+                # provenance survives a restart and /v1/information/{id} can
+                # still explain where the information came from.
+                "raw_reference": json.dumps(unit.get("raw_reference") or {}),
+                "context": json.dumps(unit.get("context") or {}),
+                "language": unit.get("language"),
+                "epistemic_status": unit.get("epistemic_status") or "factual",
+                "provenance": json.dumps(unit.get("provenance") or {}),
                 "created_at": now_dt,
+                "updated_at": now_dt,
             },
         )
     return inf_ids
@@ -173,8 +191,15 @@ async def _insert_evidence(session: Any, evidence: list[dict[str, Any]], now_dt:
         await session.execute(
             text(
                 """
-                INSERT INTO evidence (evidence_id, information_id, source_id, document_id, quote, confidence, created_at)
-                VALUES (:evidence_id, :information_id, :source_id, NULL, :quote, :confidence, :created_at)
+                INSERT INTO evidence (
+                    evidence_id, information_id, source_id, document_id, quote,
+                    confidence, strength, epistemic_status, provenance, created_at
+                )
+                VALUES (
+                    :evidence_id, :information_id, :source_id, NULL, :quote,
+                    :confidence, :strength, :epistemic_status,
+                    CAST(:provenance AS JSONB), :created_at
+                )
                 ON CONFLICT (evidence_id) DO NOTHING
                 """
             ),
@@ -184,6 +209,12 @@ async def _insert_evidence(session: Any, evidence: list[dict[str, Any]], now_dt:
                 "source_id": ev.get("source_id"),
                 "quote": ev.get("excerpt") or ev.get("quote"),
                 "confidence": conf_val,
+                # §14.2 — strength is the evidence's own signal; it used to be
+                # omitted, so every persisted evidence came back with the
+                # neutral default instead of what the run measured.
+                "strength": conf_val,
+                "epistemic_status": ev.get("epistemic_status") or "fact",
+                "provenance": json.dumps(ev.get("provenance") or {}),
                 "created_at": now_dt,
             },
         )
@@ -225,7 +256,7 @@ async def _insert_lineage(
             "tool_version": "1.0.0",
             "parameters": json.dumps({"steps_executed": len(step_results)}),
             "timestamp": now_dt,
-            "result": delivery_status,
+            "result": "success" if delivery_status == "completed" else "failure",
             "justification": f"Synthesized research for {request_id}",
         },
     )

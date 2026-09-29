@@ -120,7 +120,7 @@ class EvidenceRepository(TableRepository):
         """Insert one evidence record and return its §14.2 representation."""
         await cls.ensure_table(engine)
         item = dict(data)
-        evidence_id = str(item.get("evidence_id") or ULID.new("EVI_"))
+        evidence_id = str(item.get("evidence_id") or ULID.new("EVID_"))
         now = datetime.now(timezone.utc)
         conf = item.get("confidence")
         conf_score = None

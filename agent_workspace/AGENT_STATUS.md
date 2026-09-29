@@ -58,6 +58,30 @@ main @ `21ce2d9` : **517 passed, 2 skipped** (Docker migration 0006 + SERPER_API
 
 **Aucune bloquante.**
 
+### Découverte 2026-09-28 — faux vert E2E et défaut LLM (branche `fix/pipeline-llm-synthesis`)
+
+- **Faux vert E2E** : le harnais annonçait `63/63 PASS` alors que 100 % des appels de
+  synthèse échouaient (`LLM_MODEL_DEFAULT=nex-agi/nex-n2.5-mini:free`, identifiant
+  inexistant → HTTP 404 ; variante payante → `402 Payment Required`). Le pipeline
+  dégradait silencieusement vers son résumé déterministe (§25).
+- **Défaut produit corrigé** : `ModelRouter.complete()` traitait une réponse HTTP 200
+  portant `{"error": {"code": 503, ...}}` (provider amont surchargé, OpenRouter) comme
+  un succès → `KeyError: 'choices'`, cause réelle perdue, aucun retry (§41.8).
+  Désormais : enveloppe détectée, retry borné (3 tentatives par défaut), erreur
+  explicite et repli en cascade sur la chaîne configurée (§22.2).
+- **Configuration locale** : `LLM_MODEL_DEFAULT` = `nvidia/nemotron-3-super-120b-a12b:free`
+  (joignable, coût 0, vérifié par appel direct) ; la chaîne de repli gratuite
+  `LLM_MODEL_FALLBACKS` est définie et documentée (catalogue vérifié le 2026-09-28).
+- **Décisions prises (28/09)** : budget de retry par défaut = 3
+  (`DEFAULT_RETRY_ATTEMPTS`, surchargeable `LLM_RETRY_ATTEMPTS`) ; cascade `:free`
+  du plus intéressant au moins (ultra → super → inkling → qwen → gemma → lightning) ;
+  garde E2E portée en CI (`tests/api/test_llm_synthesis_guard.py`) + live opt-in
+  (`tests/integration/test_llm_live_provider.py`, `INIS_LIVE_LLM=1`) ; secrets
+  sortis de `start.bat` vers `.env` gitignoré (non-fuite vérifiée : `git grep`
+  + `git log -S`). Le modèle monnayé retenu pour un déploiement stable reste à
+  choisir — voir CR.
+
+
 ### Observations mineures (PHASE-11 V2+)
 1. **2 skips** : Docker (migration 0006 non testée en CI), SERPER_API_KEY (recherche réelle non exécutée en CI)
 2. **mTLS validator stub** — validation de certificat reportée

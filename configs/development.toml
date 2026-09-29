@@ -1,0 +1,51 @@
+# INIS — profil de développement (chargé par défaut en local).
+#
+# Même structure que `configs/default.toml` ; seules les valeurs de confort
+# local diffèrent. Aucun secret ici : les identifiants viennent de `.env`.
+
+[environment]
+name = "development"
+
+# ── §41.2 : budgets par requête — non bornés, une demande fixe les siens ────
+[budgets]
+# max_llm_tokens = 200000
+# max_web_requests = 20
+# max_api_calls = 40
+
+# ── §7 : contraintes par défaut d'une demande ──────────────────────────────
+[request_defaults]
+minimum_confidence = 0.8
+maximum_execution_time_seconds = 300
+maximum_iterations = 12
+maximum_web_depth = 3
+required_output_format = "evidence_package"
+ttl_seconds = 900
+
+# ── §41.13 : garde-fous d'exécution ────────────────────────────────────────
+[limits]
+max_plan_steps = 50
+max_parallel_tool_calls = 10
+
+# ── §41.5 : cache ──────────────────────────────────────────────────────────
+[cache]
+l1_enabled = true
+redis_ttl_seconds = 300
+redis_prefix = "inis"
+
+# ── §22 : LLM — sans clé, réponses stub explicitement marquées ─────────────
+[llm]
+provider = "openrouter"
+default_model = "openai/gpt-4"
+probe_max_tokens = 16
+# §41.8 — tentatives totales par modèle, première comprise.
+retry_attempts = 3
+# §22.2 — chaîne de repli ordonnée (préféré → moins préféré), définie par le
+# déploiement via LLM_MODEL_FALLBACKS ; vide par défaut dans le code.
+fallback_models = []
+
+# ── §9 : recherche web — Wikipedia assure la dégradation sans clé Serper ────
+[web]
+provider = "serper"
+fallback_provider = "wikipedia"
+results_per_query = 5
+

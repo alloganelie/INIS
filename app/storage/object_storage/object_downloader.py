@@ -1,7 +1,25 @@
-"""Async object downloader with multipart support per §4.3 (object storage)."""
+"""Async object downloader with multipart support per §4.3 (object storage).
+
+Like the uploader next to it, ``aioboto3`` is an optional package: the import is
+deferred so importing this module never fails, and asking for the async path
+without the dependency raises an explicit ``InfrastructureError``.
+"""
+
+from typing import Any
+
+from app.core.errors import InfrastructureError
 
 
-import aioboto3
+def _aioboto3() -> Any:
+    """Return the optional ``aioboto3`` module or fail explicitly (§4.3)."""
+    try:
+        import aioboto3
+    except ImportError as exc:  # pragma: no cover - depends on the environment
+        raise InfrastructureError(
+            "aioboto3 is required by the async object downloader (§4.3); "
+            "install 'aioboto3' or use app.storage.object_storage.S3Client"
+        ) from exc
+    return aioboto3
 
 
 class ObjectDownloader:
@@ -30,7 +48,7 @@ class ObjectDownloader:
             secure: Use HTTPS (default: True).
         """
         self._bucket_name = bucket_name
-        self._session = aioboto3.Session(
+        self._session = _aioboto3().Session(
             aws_access_key_id=access_key,
             aws_secret_access_key=secret_key,
             region_name=region,

@@ -1,8 +1,27 @@
-"""Async object uploader with multipart support per §4.3 (object storage)."""
+"""Async object uploader with multipart support per §4.3 (object storage).
 
-from typing import Optional
+``aioboto3`` is not part of the declared INIS dependencies — the synchronous
+``S3Client`` covers the §4.3 contract and is what the application uses. The
+import is therefore deferred to construction time so this module stays
+importable, and a caller that asks for the async path without the package
+installed gets an explicit ``InfrastructureError`` instead of an ImportError.
+"""
 
-import aioboto3
+from typing import Any, Optional
+
+from app.core.errors import InfrastructureError
+
+
+def _aioboto3() -> Any:
+    """Return the optional ``aioboto3`` module or fail explicitly (§4.3)."""
+    try:
+        import aioboto3
+    except ImportError as exc:  # pragma: no cover - depends on the environment
+        raise InfrastructureError(
+            "aioboto3 is required by the async object uploader (§4.3); "
+            "install 'aioboto3' or use app.storage.object_storage.S3Client"
+        ) from exc
+    return aioboto3
 
 
 class ObjectUploader:
@@ -31,7 +50,7 @@ class ObjectUploader:
             secure: Use HTTPS (default: True).
         """
         self._bucket_name = bucket_name
-        self._session = aioboto3.Session(
+        self._session = _aioboto3().Session(
             aws_access_key_id=access_key,
             aws_secret_access_key=secret_key,
             region_name=region,

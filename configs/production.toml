@@ -1,0 +1,56 @@
+# INIS — profil de production (§19, §41.2).
+#
+# Aucun secret dans ce fichier : `JWT_SECRET`, `POSTGRES_PASSWORD`, clés LLM et
+# Serper sont fournis par l'environnement (`.env`, secrets k8s/Vault). Les
+# budgets y sont *bornés* : un agent ne peut plus consommer sans plafond.
+
+[environment]
+name = "production"
+
+# ── §41.2 : budgets par requête — bornage par défaut en production ──────────
+[budgets]
+# max_llm_tokens = 200000
+# max_web_requests = 20
+# max_api_calls = 40
+# max_compute_seconds = 300
+# max_total_cost_usd = 0.50
+# À recopier dans la `budget` de la requête : ces valeurs ne sont pas injectées
+# implicitement, une demande reste maîtresse de ses propres limites.
+
+# ── §7 : contraintes par défaut d'une demande ──────────────────────────────
+[request_defaults]
+minimum_confidence = 0.8
+maximum_execution_time_seconds = 300
+maximum_iterations = 12
+maximum_web_depth = 3
+required_output_format = "evidence_package"
+ttl_seconds = 900
+
+# ── §41.13 : garde-fous d'exécution ────────────────────────────────────────
+[limits]
+max_plan_steps = 50
+max_parallel_tool_calls = 10
+
+# ── §41.5 : cache — partagé via Redis (L1 processuel toujours actif) ───────
+[cache]
+l1_enabled = true
+redis_ttl_seconds = 300
+redis_prefix = "inis"
+
+# ── §22 : LLM — modèle par défaut, surchargeable par LLM_MODEL_DEFAULT ─────
+[llm]
+provider = "openrouter"
+default_model = "openai/gpt-4"
+probe_max_tokens = 16
+# §41.8 — tentatives totales par modèle, première comprise.
+retry_attempts = 3
+# §22.2 — chaîne de repli ordonnée : renseigner explicitement les modèles
+# gratuits validés pour la production (aucune valeur par défaut dans le code).
+fallback_models = []
+
+# ── §9 : recherche web — Serper avec repli Wikipedia ───────────────────────
+[web]
+provider = "serper"
+fallback_provider = "wikipedia"
+results_per_query = 5
+

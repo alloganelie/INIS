@@ -3,23 +3,20 @@
   "history": [
     {
       "version": "2.0.0",
-      "date": "2026-09-27",
+      "date": "2026-09-28",
       "highlights": [
-        "v2.0.0 spec compliance release: §0.2 invariants checker, §41.14 backward-compat gate",
-        "Agentic scenarios §33.3: 10/10 covered in tests/agentic",
-        "Full-stack E2E (PostgreSQL + Redis + S3) and CVE-patched dependency floors",
-        "Phase 8.2 real E2E, Phase 8.3 guard rails, Phase 9 release"
-      ]
-    },
-    {
-      "version": "0.1.0",
-      "date": "2026-09-13",
-      "highlights": [
-        "PHASE-01: project bootstrap, FastAPI entrypoint, /health, /version",
-        "PHASE-02: domain model, entities, value objects, enums, InformationPackage",
-        "PHASE-03: messaging layer AMQP/MQTT transport per §4.4 and §5.2",
-        "PHASE-04 LOT-1: /v1/requests, /v1/agents, /v1/sources, /v1/information endpoints per §32",
-        "PHASE-04.3 LOT-1: /v1/requests/{id}/progress per §41.1, /v1/changelog per §41.15"
+        "0001: Create PostgreSQL extensions for INIS.",
+        "0002: Create core tables for INIS per §27.",
+        "0003: Create embeddings table and add full-text search per §16.",
+        "0004: Create transformations table for INIS provenance per section 12.1.",
+        "0005: Create remaining core tables required for PHASE-05.5 Lot A.",
+        "0006: Create accounts and sessions tables per §19.2 (authentication).",
+        "0007: Create the missing §27 mandatory tables for INIS v2.0.0.",
+        "0008: Add the §41.5 L2 cache table and the §41.4/§41.7 support tables.",
+        "0009: Persist authorization attributes on ``accounts`` (B4-ter-2, §19.2).",
+        "0010: Add ``updated_at`` to ``sessions`` (B4-ter-3, §19.2).",
+        "0011: Align the §27 tables with the columns the API persistence declares.",
+        "0012: Maintain ``information_units.search_vector`` on write (§16.1)."
       ]
     }
   ]
