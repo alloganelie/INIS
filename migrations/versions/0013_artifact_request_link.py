@@ -22,6 +22,14 @@ and would have re-used identifiers after a deletion.
 Both added columns are nullable, so the migration is non-breaking (§41.14):
 ``created_at`` is written by the application (never back-filled with a guessed
 timestamp) and rows written before this revision stay valid.
+
+``ix_artifacts_request_id`` indexes ``artifacts`` — a table created by revision
+``0005``, not by this one — so it is the one place here where the §41.14 advice
+about ``CREATE INDEX CONCURRENTLY`` (checker BC005) actually applies. It is
+deliberately *not* used: Alembic runs this migration inside a transaction, and
+PostgreSQL forbids ``CREATE INDEX CONCURRENTLY`` there. The table holds no row
+before this feature ships (no writer existed), so the write lock is momentary;
+the choice must be revisited if an index is later added to a large table.
 """
 
 from collections.abc import Sequence

@@ -12,6 +12,19 @@ Conséquence de méthode : `docs/SPEC_COVERAGE.md` mesure « classe + test unita
 « capacité branchée et exposée » — la section §0 du plan définit les niveaux **N0/N1/N2** à
 utiliser pour toute nouvelle ligne de couverture.
 
+## Avancement — L0/L1 terminés le 2026-09-29 (`feat/conformance-v1`)
+
+| Lot | Commit | Résultat mesuré |
+|---|---|---|
+| L0 — propreté, baseline, branche | `5c3c60f` | WIP pré-existant committé tel quel (114 fichiers) ; `pytest -q` → **1615 passed / 4 skipped** |
+| L1 — artefacts §24.2/§24.3 de bout en bout | `7c1bba2` | `pytest -q` → **1687 passed / 4 skipped** ; 3 checkers + BC (0 breaking) OK ; `ruff` clean sur le lot ; `tsc --noEmit` OK |
+
+L1 est **N2 sur le chemin nominal** : `required_output.format="xlsx"` produit un fichier réellement
+stocké dans le conteneur S3, listé par `GET /v1/artifacts?request_id=`, et téléchargé avec un
+`sha256` recalculé identique (`tests/integration/test_artifacts_object_storage.py`).
+Détail des cases, preuves, décisions et du reste à faire : `docs/SPEC_CONFORMANCE_PLAN.md` §4 (encadré L1)
+et §6 (journal). **Prochain lot : L2 (ingestion de fichiers et de bases, C1–C4).**
+
 ## PHASE-05.4 — Temporary ownership exception
 
 Codex audited and repaired the Devin-owned `migrations/`,
@@ -109,6 +122,7 @@ uvicorn, clés réelles) est à **63/63 PASS, 0 FAIL**.
 | 5 | `object_uploader`/`object_downloader` importaient `aioboto3` au chargement du module : dépendance optionnelle transformée en import obligatoire | §4 | import paresseux → `InfrastructureError` |
 | 6 | `app/domain/entities/memory_result.py` et `app/planning/memory_checker.py` manquaient (modules référencés, absents) | §7, §8 | implémentés |
 | 7 | La route `POST /v1/requests/{id}/cancel` (§32) n'était couverte par **aucun** test | §32, §1.3 | `tests/api/test_request_cancel.py` (statut `CANCELLED`, idempotence, 404, drapeau runner, conservation du matériel déjà obtenu) |
+| 8 | Une livraison annonçait `"artifacts": []` **en dur** (`pipeline_runner`) et aucun endpoint ne pouvait lister ou télécharger un fichier : le §24.2 n'était jamais construit, et `GET /v1/artifacts` n'existait pas alors que le frontend l'appelait | §24.1, §24.2, §24.3, §32 | L1 (`7c1bba2`) : générateurs CSV/JSON/XML/XLSX + refus PDF explicite, séquence `ART_{YYYY}_{SEQ6}` en base, migration `0013` (`request_id`, `created_at`, `artifact_id_sequences`), `ArtifactRepository`, `GET /v1/artifacts{,?request_id=,/{id},/{id}/download}`, câblage pipeline selon `required_output.format` |
 
 ### Suites de tests remplies (lacune n°12 ci-dessus, partiellement soldée)
 
@@ -124,14 +138,17 @@ uvicorn, clés réelles) est à **63/63 PASS, 0 FAIL**.
 
 ### Reste ouvert après cette remédiation
 
-- **BC005 (27 warnings, non bloquants)** : tous les `op.create_index` signalés
-  indexent une table créée dans **le même `upgrade()`**. §41.14 ne s'applique pas
-  (table neuve, aucune écriture concurrente) et `CREATE INDEX CONCURRENTLY` est
-  **interdit dans une transaction** — l'activer casserait la migration. Aucun
-  changement ; à re-vérifier dès qu'un index est ajouté à une table préexistante.
-- **Dette n°12 (partie non soldée)** : `app/artifacts/**` + `app/api/v1/artifacts/`
-  restent vides (§24.2, §24.3), `app/knowledge/embedding/` (§16) et
-  `app/knowledge/enrichment/` (§12) restent absents.
+- **BC005 (28 warnings, non bloquants)** : `0013` ajoute `ix_artifacts_request_id` sur une table
+  **préexistante** (`artifacts`, revision `0005`) — le seul cas où §41.14 s'applique réellement.
+  `CREATE INDEX CONCURRENTLY` est **interdit dans une transaction** et Alembic exécute les
+  migrations en transactionnel (`INFO [alembic.runtime.migration] Will assume transactional DDL`) :
+  l'activer casserait la migration. La table est vide avant la livraison de la fonctionnalité
+  (aucun writer n'existait), donc le verrou est sans effet ; à réévaluer si un index est ajouté
+  plus tard sur une table volumineuse. Les 27 autres warnings indexent une table créée dans le
+  **même `upgrade()`** : §41.14 ne s'y applique pas.
+- **Dette n°12 (partie non soldée)** : `app/artifacts/**` + `app/api/v1/artifacts/` sont désormais
+  **implémentés et branchés** (§24.2/§24.3, L1, commit `7c1bba2`) ; `app/knowledge/embedding/` (§16)
+  et `app/knowledge/enrichment/` (§12) restent absents.
 - **Dette n°6** : cache L2 (PostgreSQL) et L3 (pgvector) toujours non câblés ;
   le L1 est désormais testé contre Redis réel.
 - **Secrets** : `start.bat` contient une clé `SERPER_API_KEY` et une clé OpenRouter
