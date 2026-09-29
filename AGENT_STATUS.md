@@ -20,16 +20,17 @@ utiliser pour toute nouvelle ligne de couverture.
 | L1 — artefacts §24.2/§24.3 de bout en bout | `7c1bba2` | `pytest -q` → **1687 passed / 4 skipped** ; 3 checkers + BC (0 breaking) OK ; `ruff` clean sur le lot ; `tsc --noEmit` OK |
 | L2.1 — ingestion d'un fichier (upload multipart, MIME par contenu, S3, migration `0014`, PII §19.4) | `640cebd` | `pytest -q` → **1730 passed / 4 skipped** ; 4 checkers OK (0 breaking) ; `ruff` clean sur le lot ; `0014` up/down vérifiée ; image rebuild + routes montées dans un conteneur jetable |
 | L2.2 — dispatch réel des outils §21, fin des fabrications de step (C5/C6) | `066ac1b` | `pytest -q` → **1755 passed / 4 skipped** ; 3 checkers OK ; `ruff` clean sur le lot (et `pipeline_runner.py` : 35 erreurs préexistantes → 34) |
+| L2.3 — un document ingéré devient des unités §11 localisées + un `Dataset` persisté | `a6921ab` | `pytest -q` → **1772 passed / 4 skipped** ; 3 checkers OK ; BC 0 breaking ; `ruff` clean ; `0015` up/down vérifiée |
 
 L1 est **N2 sur le chemin nominal** : `required_output.format="xlsx"` produit un fichier réellement
 stocké dans le conteneur S3, listé par `GET /v1/artifacts?request_id=`, et téléchargé avec un
 `sha256` recalculé identique (`tests/integration/test_artifacts_object_storage.py`).
 Détail des cases, preuves, décisions et du reste à faire : `docs/SPEC_CONFORMANCE_PLAN.md` §4 (encadrés L1,
-L2.1 et L2.2) et §6 (journal). **Prochain lot : L2.3** — unités §11 extraites d'un document ingéré (le
-champ `information_units` de la réponse d'upload est **déjà** au contrat, vide), `Dataset` persisté et
-`Transformation` par étape. C'est aussi ce qui débloque les items L2.2 restants : validation du plan par
-le vocabulaire fermé en amont, et `request_type` réellement opérant (C4) — router `data`/`source` vers
-`file_ingest` suppose que le planificateur voie les documents téléversés de la requête.
+L2.1, L2.2 et L2.3) et §6 (journal). **Prochain lot : fin de L2 puis L3** — dans l'ordre de valeur :
+(1) `Transformation` **par étape réelle** (§12.1, C11) et `artifact_lineage` (maintenant que les datasets
+existent) ; (2) `ChunkedDatasetProcessor` (ADR 007) ; (3) items L2.2 restants (validation du plan par le
+vocabulaire fermé, `request_type` opérant) ; (4) **L3** — cycle de vie RAW→DERIVED et embeddings (§12, §16,
+C12 : la table `embeddings` est vide).
 
 ## PHASE-05.4 — Temporary ownership exception
 
@@ -134,6 +135,8 @@ uvicorn, clés réelles) est à **63/63 PASS, 0 FAIL**.
 | 11 | Le pipeline **fabriquait** le résultat d'une étape impossible (`"Extracted intelligence payload for <objectif>"`, puis `"Fallback execution output for <objectif>"`) : une livraison vide passait pour un succès et ces textes partaient en persistance | §0.2, §22.3, §37 | L2.2 (`066ac1b`) : étapes `degraded` avec `output` vide + raison dans `error` ; `tests/agentic/test_no_fabricated_step_output.py` |
 | 12 | Toute action du plan déclenchait une **recherche web**, y compris `file_ingest` — et la requête était le **nom de l'action** (`"file_ingest"`) | §8.4, §21 | L2.2 (`066ac1b`) : seul un action web atteint l'étage d'acquisition ; une action non-web est dégradée avec ses outils §21 requis (`tool_dispatch.ACTIONS`) |
 | 13 | `ToolRegistry` n'était **jamais peuplé** : les 35 outils §21 existaient mais aucun plan ne pouvait les atteindre (C5) | §21, §8.4 | L2.2 (`066ac1b`) : `app/agents/pipeline/tool_dispatch.py` enregistre les 35 (0 indisponible), avec vocabulaire d'actions fermé et `executable`/raison par action |
+| 14 | Un fichier téléversé **n'était jamais lu** : la réponse annonçait `information_units: []` et le contenu restait un blob dans S3 (§36.6 restait à moitié satisfait) | §9.1, §11, §36.7 | L2.3 (`a6921ab`) : `document_ingestor.py` produit une unité §11 par enregistrement ou par section, chacune localisée (`kind=row`/`kind=section`), plus le `Dataset` correspondant ; persistées et lisibles via `GET /v1/information/{id}` |
+| 15 | Le `Dataset` d'un fichier pointait sur un chemin `file://` **temporaire** (mort dès la fin de la lecture) et `information_units` n'avait **ni `dataset_id` ni `location`** | §11, §18.1, §27 | L2.3 (`a6921ab`) : migration `0015` (`datasets.storage_ref`, `datasets.request_id`, `information_units.dataset_id`, `information_units.location`) ; le dataset est reconstruit avec la référence objet |
 
 ### Suites de tests remplies (lacune n°12 ci-dessus, partiellement soldée)
 

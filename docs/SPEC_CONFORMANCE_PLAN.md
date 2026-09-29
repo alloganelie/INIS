@@ -456,14 +456,48 @@ est identique, et dont le `storage_ref` existe dans S3.
 
 #### L2.3 — Datasets réels et traçabilité (§11, §12, §27)
 
-- [ ] À partir d'un document ingéré, produire un `Dataset`
+> ### ⚙️ État d'avancement L2.3 au 2026-09-29 — ingestion des unités et du dataset faite ; reste le découpage et les transformations
+>
+> **Fait et prouvé** (commit `a6921ab`) :
+>
+> | Sous-lot | Preuve |
+> |---|---|
+> | Une unité §11 **par enregistrement** (CSV/JSON/XML/XLSX) ou **par section** (TXT/MD/PDF/DOCX), validée par l'entité §11 | `tests/unit/knowledge/test_document_ingestor.py` (17 cas) |
+> | Localisation de **chaque** unité (`kind=row` + n° de ligne + colonnes ; `kind=section` + décalage de caractères) dans `location` **et** `raw_reference` | `tests/unit/knowledge/test_document_ingestor.py::TestTabularIngestion::test_each_unit_is_locatable` |
+> | `Dataset` (`DATA_`) avec schéma, `row_count` et `storage_ref` **S3** (pas le `file://` temporaire) | `tests/integration/test_document_upload_s3.py::test_the_dataset_and_its_units_are_persisted` |
+> | Persistance des unités + dataset et lecture via `GET /v1/information/{id}` | idem |
+> | Migration `0015` (`datasets.storage_ref`/`request_id`, `information_units.dataset_id`/`location`) | up/down vérifiés sur la base docker + `check_backward_compat` (0 breaking) |
+> | Charge illisible ⇒ **zéro unité** + une limitation nommant la cause | `tests/unit/knowledge/test_document_ingestor.py::TestUnreadablePayloads` |
+>
+> **Décisions prises en L2.3**
+>
+> 1. Les unités sont construites **via l'entité `InformationUnit`** (`.validate()`), donc un défaut §11
+>    fait échouer l'ingestion au lieu de produire une unité douteuse.
+> 2. Le `Dataset` est **reconstruit** avec `storage_ref` = la référence objet : les lecteurs §21
+>    rapportent un `file://` qui meurt avec la copie temporaire (§18.1).
+> 3. Aucun score de confiance inventé : `confidence = {"score": None, "not_a_probability": True}`.
+> 4. PDF/DOCX : localisation par **section + décalage**, jamais un numéro de page supposé.
+> 5. Le vocabulaire `type` de §11 dans ce dépôt est `text|number|table|record|image_region|document_fragment`
+>    (≠ `table_row`/`document_section` du plan) : les unités de fichier sont donc `record` et
+>    `document_fragment`.
+>
+> **Reste ouvert dans L2.3**
+>
+> - [ ] `ChunkedDatasetProcessor` (ADR 007) non branché : l'ingestion lit le document entier.
+> - [ ] `Transformation` **par étape réelle** (§12.1, C11) : `pipeline_persistence.py` écrit encore une
+>   seule `TRF_` générique par run ; l'ingestion ne produit aucune transformation.
+> - [ ] Granularité page/feuille pour PDF/Excel (aujourd'hui : section du document, ou feuille unique du classeur).
+> - [ ] `artifact_lineage` / `artifact_delivery_events` (L1) restent vides — maintenant que les datasets
+>   existent, la lignée d'un artefact `dataset_export` peut être remplie (§24.2).
+
+- [x] À partir d'un document ingéré, produire un `Dataset`
   (`app/domain/entities/dataset.py` : `dataset_id` `DATA_`, `source_id`, `dataset_schema`,
   `row_count`, `storage_ref`) et le persister dans la table `datasets` (migration `0007`).
   *preuve : `tests/unit/knowledge/test_dataset_from_csv.py` + `tests/integration/test_dataset_persistence.py`*
 - [ ] Réutiliser `app/knowledge/normalization/chunked_dataset.py` (déjà écrit, C18) au-delà
   du seuil documenté par l'ADR `007_chunked_processing_threshold.md`.
   *preuve : `tests/integration/test_chunked_ingestion.py`*
-- [ ] Unités d'information issues du fichier : **une unité par enregistrement/fragment utile**,
+- [x] Unités d'information issues du fichier : **une unité par enregistrement/fragment utile**,
   `type` ∈ {`text`,`table_row`,`document_section`…} selon §11, avec `raw_reference` pointant
   sur `document_id` + `location` (page/feuille/ligne/colonne) — jamais de contenu sans localisation.
   *preuve : `tests/agentic/test_file_unit_traceability.py` (chaque unité est localisable dans le fichier source)*
@@ -737,6 +771,7 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 2026-09-29 | Cline (act) | **L2.1** | Ingestion d'un fichier : endpoint multipart, détection MIME par contenu, quota §41.2, stockage S3, migration `0014`, `GET /v1/documents`, classification §19.4 | `640cebd` | `python -m pytest -q` → **1730 passed / 4 skipped** (150,73 s) ; 4 checkers OK (**0 breaking**, 29 warnings BC005) ; `ruff` clean sur les 22 fichiers ; `0014` appliquée **et** annulée sur la base docker ; image reconstruite et `FastAPI.openapi()` généré dans un conteneur jetable (`multipart 0.0.32`, 3 routes `/v1/documents…` montées) | ✅ **N2** — 43 nouveaux tests. ⚠️ défaut trouvé par un test pendant le lot : la classification PII portait sur le nom **assaini** (donc l'email du nom disparaissait avant d'être signalé) → corrigé, verrouillé par `tests/security/test_upload_pii_classification.py` |
 | 2026-09-29 | Cline (act) | **L2.2** | Dispatch réel : `tool_dispatch.py` (35 outils §21 enregistrés, vocabulaire d'actions fermé), suppression des **deux** fabrications de step (C6/P1), `StepExecutor` dégradé/échoué, plus de recherche web pour une action non-web | `066ac1b` | `python -m pytest -q` → **1755 passed / 4 skipped** (163,24 s) ; 3 checkers OK ; `ruff` clean sur les 5 fichiers (et erreurs préexistantes de `pipeline_runner.py` : 35 → 34) | ✅ **C5 et C6 fermés**. 25 nouveaux tests. ⚠️ preuve invalide découverte : le plan citait `test_non_hallucination.py::test_no_fabricated_step_output`, **ce test n'existe pas** — la case §36/19 est désormais prouvée par le fichier réellement créé |
 | 2026-09-29 | Cline (act) | L2.2 | Deux défauts trouvés en lisant le vrai chemin d'exécution : toute action déclenchait une recherche web (avec le **nom de l'action** comme requête) et la seconde fabrication (`Fallback execution output`) jetait l'erreur réelle | `066ac1b` | `tests/agentic/test_no_fabricated_step_output.py::test_a_non_web_action_never_becomes_a_web_search` | ✅ corrigés ; reste L2.2 items 3-4 (validation du plan en amont, `request_type`), bloqués par L2.3 (cf. encadré L2.2) |
+| 2026-09-29 | Cline (act) | **L2.3** | Ingestion d'un document en unités §11 localisées + `Dataset` persisté : `document_ingestor.py`, `DatasetRepository`, migration `0015` (`datasets.storage_ref`/`request_id`, `information_units.dataset_id`/`location`) | `a6921ab` | `python -m pytest -q` → **1772 passed / 4 skipped** (183,63 s) ; 3 checkers OK ; BC **0 breaking** (31 warnings) ; `ruff` clean (10 corrections auto) ; `0015` appliquée **et** annulée sur la base docker | ✅ — 17 nouveaux tests ; le champ `information_units` de l'upload n'est plus vide. Reste : découpage ADR 007, `Transformation` par étape (§12.1/C11), granularité page/feuille, `artifact_lineage` |
 
 ---
 
