@@ -501,10 +501,12 @@ est identique, et dont le `storage_ref` existe dans S3.
   `type` ∈ {`text`,`table_row`,`document_section`…} selon §11, avec `raw_reference` pointant
   sur `document_id` + `location` (page/feuille/ligne/colonne) — jamais de contenu sans localisation.
   *preuve : `tests/agentic/test_file_unit_traceability.py` (chaque unité est localisable dans le fichier source)*
-- [ ] Création d'une `Transformation` **par étape réelle** (§12.1) :
+- [x] Création d'une `Transformation` **par étape réelle** (§12.1) :
   `RAW → NORMALIZED → ENRICHED → DERIVED`, avec `operator`, `tool`, `tool_version`,
   `parameters`, `result` (remplacer/compléter la `TRF_` unique de `pipeline_persistence.py:223-262`, C11).
-  *preuve : `tests/unit/knowledge/test_transformation_records_per_stage.py`*
+  *preuve : `tests/unit/knowledge/test_transformation_records_per_stage.py` (créé) + `tests/integration/test_b4bis_persistence.py` (stages distincts en base) + `tests/integration/test_idempotency_integration.py` (rejeu sans doublon)*
+- [x] Fermer **C10** : le champ `transformations` de la livraison n'est plus `[]` — il porte les étapes
+  réellement exécutées (et l'étage `derived` référence les `ART_` livrés). *preuve : `tests/unit/knowledge/test_transformation_records_per_stage.py::TestStageRecording`*
 
 #### L2.4 — Connecteurs fichiers capables de lire autre chose qu'un répertoire (Devin)
 
@@ -772,6 +774,7 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 2026-09-29 | Cline (act) | **L2.2** | Dispatch réel : `tool_dispatch.py` (35 outils §21 enregistrés, vocabulaire d'actions fermé), suppression des **deux** fabrications de step (C6/P1), `StepExecutor` dégradé/échoué, plus de recherche web pour une action non-web | `066ac1b` | `python -m pytest -q` → **1755 passed / 4 skipped** (163,24 s) ; 3 checkers OK ; `ruff` clean sur les 5 fichiers (et erreurs préexistantes de `pipeline_runner.py` : 35 → 34) | ✅ **C5 et C6 fermés**. 25 nouveaux tests. ⚠️ preuve invalide découverte : le plan citait `test_non_hallucination.py::test_no_fabricated_step_output`, **ce test n'existe pas** — la case §36/19 est désormais prouvée par le fichier réellement créé |
 | 2026-09-29 | Cline (act) | L2.2 | Deux défauts trouvés en lisant le vrai chemin d'exécution : toute action déclenchait une recherche web (avec le **nom de l'action** comme requête) et la seconde fabrication (`Fallback execution output`) jetait l'erreur réelle | `066ac1b` | `tests/agentic/test_no_fabricated_step_output.py::test_a_non_web_action_never_becomes_a_web_search` | ✅ corrigés ; reste L2.2 items 3-4 (validation du plan en amont, `request_type`), bloqués par L2.3 (cf. encadré L2.2) |
 | 2026-09-29 | Cline (act) | **L2.3** | Ingestion d'un document en unités §11 localisées + `Dataset` persisté : `document_ingestor.py`, `DatasetRepository`, migration `0015` (`datasets.storage_ref`/`request_id`, `information_units.dataset_id`/`location`) | `a6921ab` | `python -m pytest -q` → **1772 passed / 4 skipped** (183,63 s) ; 3 checkers OK ; BC **0 breaking** (31 warnings) ; `ruff` clean (10 corrections auto) ; `0015` appliquée **et** annulée sur la base docker | ✅ — 17 nouveaux tests ; le champ `information_units` de l'upload n'est plus vide. Reste : découpage ADR 007, `Transformation` par étape (§12.1/C11), granularité page/feuille, `artifact_lineage` |
+| 2026-09-29 | Cline (act) | **C11/C10** | Une `Transformation` **par étape réelle** (Section 12.1) : `stage_transformations.py`, plus de `transformations: []` codé en dur, `persist_transformations` remplace la `TRF_` unique | `3b7d327` | `pytest -q` -> **1783 passed / 4 skipped** (168,76 s) ; 3 checkers OK ; `ruff` sur `pipeline_runner.py` : 34 -> 22 erreurs préexistantes (aucune nouvelle) | OK - 11 tests unitaires + 2 tests d'intégration renforcés. Une étape qui n'a rien produit est **absente** (jamais inventée). Reste : les étages d'un run d'ingestion, `artifact_lineage` |
 
 ---
 

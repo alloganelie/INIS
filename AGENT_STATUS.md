@@ -21,6 +21,7 @@ utiliser pour toute nouvelle ligne de couverture.
 | L2.1 — ingestion d'un fichier (upload multipart, MIME par contenu, S3, migration `0014`, PII §19.4) | `640cebd` | `pytest -q` → **1730 passed / 4 skipped** ; 4 checkers OK (0 breaking) ; `ruff` clean sur le lot ; `0014` up/down vérifiée ; image rebuild + routes montées dans un conteneur jetable |
 | L2.2 — dispatch réel des outils §21, fin des fabrications de step (C5/C6) | `066ac1b` | `pytest -q` → **1755 passed / 4 skipped** ; 3 checkers OK ; `ruff` clean sur le lot (et `pipeline_runner.py` : 35 erreurs préexistantes → 34) |
 | L2.3 — un document ingéré devient des unités §11 localisées + un `Dataset` persisté | `a6921ab` | `pytest -q` → **1772 passed / 4 skipped** ; 3 checkers OK ; BC 0 breaking ; `ruff` clean ; `0015` up/down vérifiée |
+| C11/C10 - une `Transformation` par etape reelle (Section 12.1) et fin du `transformations: []` code en dur | `3b7d327` | `pytest -q` -> **1783 passed / 4 skipped** ; 3 checkers OK ; aucune nouvelle erreur ruff |
 
 L1 est **N2 sur le chemin nominal** : `required_output.format="xlsx"` produit un fichier réellement
 stocké dans le conteneur S3, listé par `GET /v1/artifacts?request_id=`, et téléchargé avec un
