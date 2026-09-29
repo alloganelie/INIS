@@ -224,3 +224,62 @@ def test_a_pdf_is_accepted_as_a_pdf(
     assert body["mime_type"] == "application/pdf"
     assert body["file_name"] == "rapport.pdf"
     assert body["storage_ref"].endswith(f"{hashlib.sha256(PDF_BYTES).hexdigest()}.pdf")
+
+
+def test_the_dataset_and_its_units_are_persisted(
+    db_url: str, live_storage: S3Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§11/§27 — the units and the dataset exist, linked and locatable."""
+    monkeypatch.setenv("INIS_DATABASE_URL", db_url)
+    request_id = _create_request()
+
+    body = _upload(request_id).json()
+    assert len(body["information_units"]) == 2
+
+    engine = create_engine(db_url)
+    try:
+
+        async def read_rows():
+            async with engine.connect() as conn:
+                dataset = (
+                    await conn.execute(
+                        text(
+                            "SELECT dataset_id, row_count, storage_ref, request_id, schema "
+                            "FROM datasets WHERE request_id = :request_id"
+                        ),
+                        {"request_id": request_id},
+                    )
+                ).mappings().first()
+                units = (
+                    await conn.execute(
+                        text(
+                            "SELECT id, type, document_id, dataset_id, location "
+                            "FROM information_units WHERE document_id = :document_id "
+                            "ORDER BY id"
+                        ),
+                        {"document_id": body["document_id"]},
+                    )
+                ).mappings().all()
+            return dataset, units
+
+        dataset, units = asyncio.run(read_rows())
+    finally:
+        pass
+
+    assert dataset is not None
+    assert dataset["row_count"] == 2
+    # §18.1 — the dataset points at the stored object, not at a temp copy.
+    assert dataset["storage_ref"] == body["storage_ref"]
+    assert dataset["schema"] == {"city": "string", "population": "string"}
+
+    assert len(units) == 2
+    assert {unit["dataset_id"] for unit in units} == {dataset["dataset_id"]}
+    assert units[0]["document_id"] == body["document_id"]
+    assert units[0]["location"]["kind"] == "row"
+    assert units[0]["location"]["row"] == 1
+
+    # §32 — and the ingestion is readable back through the unit endpoint.
+    read_back = client.get(f"/v1/information/{units[0]['id']}")
+    assert read_back.status_code == 200
+    assert read_back.json()["document_id"] == body["document_id"]
+    assert read_back.json()["dataset_id"] == dataset["dataset_id"]

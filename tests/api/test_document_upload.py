@@ -145,17 +145,20 @@ class TestAcceptedUpload:
         assert content_type == "text/csv"
         assert key.endswith(f"{sha256_hex(CSV_BYTES)}.csv")
 
-    def test_the_service_states_what_it_did_not_do(
+    def test_the_units_are_extracted_and_the_missing_persistence_is_stated(
         self, storage: RecordingStorage, web_doubles: dict[str, AsyncMock], mock_llm
     ) -> None:
-        """§25.2/§37 — no persistence and no extraction are named, not hidden."""
+        """§11/§25.2 — the document yields units, and what is not persisted is named."""
         mock_llm.configure('{"summary": "Deux villes.", "findings": []}')
         request_id = create_request()
 
         body = upload(request_id, name="villes.csv", content=CSV_BYTES).json()
 
-        assert body["information_units"] == []
-        assert any("unité d'information" in text for text in body["limitations"])
+        units = body["information_units"]
+        assert len(units) == 2
+        assert {unit["type"] for unit in units} == {"record"}
+        assert units[0]["location"]["kind"] == "row"
+        assert units[0]["raw_reference"]["document_id"] == body["document_id"]
         assert any("non persisté" in text for text in body["limitations"])
 
     def test_the_detected_type_wins_over_the_file_name(

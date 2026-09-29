@@ -14,8 +14,9 @@ process-local dict the pipeline never filled, so every persisted unit answered
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Mapping
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import Column, DateTime, MetaData, String, Table, insert, select
 
@@ -41,6 +42,9 @@ information_units_table = Table(
     Column("content", JSON_TYPE, nullable=False),
     Column("source_id", String(64), nullable=False),
     Column("document_id", String(64), nullable=True),
+    # Revision 0015 — §11: which dataset the unit belongs to, and where it is.
+    Column("dataset_id", String(64), nullable=True),
+    Column("location", JSON_TYPE, nullable=True),
     Column("data_stage", String(32), nullable=False),
     Column("raw_reference", JSON_TYPE, nullable=True),
     Column("context", JSON_TYPE, nullable=True),
@@ -63,7 +67,8 @@ def to_information_response(row: Mapping[str, Any]) -> dict[str, Any]:
         "raw_reference": as_dict(data.get("raw_reference")),
         "source_id": data.get("source_id"),
         "document_id": data.get("document_id"),
-        "dataset_id": None,
+        "dataset_id": data.get("dataset_id"),
+        "location": as_dict(data.get("location")),
         "context": as_dict(data.get("context")),
         "language": data.get("language"),
         "provenance": as_dict(data.get("provenance")),
@@ -121,15 +126,18 @@ class InformationUnitRepository(TableRepository):
         await cls.ensure_table(engine)
         item = dict(unit)
         information_id = str(item.get("information_id") or ULID.new("INF_"))
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         row = {
             "id": information_id,
             "type": item.get("type") or "text",
             "content": dict(item.get("content") or {}),
             "source_id": item.get("source_id") or "SRC_UNKNOWN",
-            # ``document_id`` carries a foreign key to ``documents``: a document
-            # that is not registered yet must not be referenced.
-            "document_id": None,
+            # ``document_id`` carries a foreign key to ``documents``: it is
+            # written only when the caller provides one (§9.1 ingestion persists
+            # the document first), never guessed.
+            "document_id": item.get("document_id") or None,
+            "dataset_id": item.get("dataset_id") or None,
+            "location": dict(item.get("location") or {}),
             "data_stage": item.get("data_stage") or "raw",
             "raw_reference": dict(item.get("raw_reference") or {}),
             "context": dict(item.get("context") or {}),

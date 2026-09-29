@@ -40,10 +40,15 @@ from app.connectors.files.upload_policy import effective_max_upload_bytes, overf
 from app.core.errors import ValidationError
 from app.core.hashing import sha256_hex
 from app.domain.value_objects.ulid import ULID
+from app.knowledge.ingestion.document_ingestor import ingest_document
 from app.security.pii.sensitivity_classifier import SensitivityClassifier
 from app.storage.object_storage.object_storage_factory import build_object_storage
+from app.storage.repositories.dataset_repository import DatasetRepository
 from app.storage.repositories.document_repository import DocumentRepository
-from app.storage.repositories.information_unit_repository import get_database_engine
+from app.storage.repositories.information_unit_repository import (
+    InformationUnitRepository,
+    get_database_engine,
+)
 from app.storage.repositories.source_repository import SourceRepository
 
 #: Upload + read router (``/v1/requests/{id}/documents``).
@@ -153,8 +158,9 @@ async def upload_document(
                 limitations=[
                     (
                         "Ces octets étaient déjà enregistrés pour cette requête "
-                        f"(document {existing['document_id']}) : aucun doublon créé, "
-                        "aucun second téléversement."
+                        f"(document {existing['document_id']}) : aucun doublon créé, aucun "
+                        "second téléversement, et les unités §11 ne sont pas ré-extraites "
+                        "(elles restent celles de ce document)."
                     )
                 ],
             )
@@ -221,14 +227,45 @@ async def upload_document(
         )
         stored = record
 
-    limitations.append(
-        "Aucune unité d'information extraite : l'ingestion du contenu (extraction "
-        "§9.1 → unités §11) n'est pas encore branchée sur le pipeline."
+    # ------------------------------------------------------------------
+    # §11 — extract the units the document carries, and the dataset if it is
+    # tabular. Nothing is invented: an unreadable payload returns no unit and
+    # one limitation naming the cause.
+    # ------------------------------------------------------------------
+    ingestion = ingest_document(
+        document_id=document_id,
+        source_id=source_id,
+        request_id=request_id,
+        file_name=file_name,
+        mime_type=sniffed.mime_type,
+        data=data,
+        storage_ref=storage_ref,
     )
+    limitations.extend(ingestion.limitations)
+
+    if engine is not None and (ingestion.units or ingestion.dataset):
+        try:
+            if ingestion.dataset is not None:
+                await DatasetRepository.create(
+                    engine,
+                    {
+                        **ingestion.dataset,
+                        "name": file_name,
+                        "request_id": request_id,
+                    },
+                )
+            for unit in ingestion.units:
+                await InformationUnitRepository.create(engine, unit)
+        except Exception as exc:  # noqa: BLE001 - §25.2: the gap is named
+            limitations.append(
+                f"Unités et/ou dataset non persistés ({type(exc).__name__}: {exc}) — ils "
+                "restent publiés dans cette réponse mais ne sont pas consultables via l'API."
+            )
+
     return DocumentUploadResponse(
         **{k: v for k, v in stored.items() if k in DocumentResponse.model_fields},
         idempotent=False,
-        information_units=[],
+        information_units=ingestion.units,
         limitations=limitations,
     )
 
