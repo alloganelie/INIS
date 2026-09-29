@@ -106,6 +106,10 @@ class InformationRequestResponse(BaseModel):
     required_output: RequiredOutput = Field(default_factory=RequiredOutput)
     requester: dict[str, Any] = Field(default_factory=dict)
     permissions: dict[str, Any] = Field(default_factory=dict)
+    #: §41.2 — the budget the request was created with. Exposed so an ingestion
+    #: endpoint can enforce ``max_storage_bytes`` against the request itself
+    #: instead of a global default the requester never agreed to.
+    budget: RequestBudget | None = None
     status: str = "received"
     created_at: str | None = None
     pipeline_state: dict[str, Any] | None = None

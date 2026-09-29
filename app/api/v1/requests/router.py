@@ -47,6 +47,7 @@ def create_request(
         required_output=payload.required_output,
         requester=payload.requester,
         permissions=payload.permissions,
+        budget=payload.budget,
         status="received",
         created_at=created_at,
     )

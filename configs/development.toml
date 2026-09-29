@@ -1,18 +1,18 @@
-# INIS — profil de développement (chargé par défaut en local).
+# INIS â€” profil de dÃ©veloppement (chargÃ© par dÃ©faut en local).
 #
-# Même structure que `configs/default.toml` ; seules les valeurs de confort
-# local diffèrent. Aucun secret ici : les identifiants viennent de `.env`.
+# MÃªme structure que `configs/default.toml` ; seules les valeurs de confort
+# local diffÃ¨rent. Aucun secret ici : les identifiants viennent de `.env`.
 
 [environment]
 name = "development"
 
-# ── §41.2 : budgets par requête — non bornés, une demande fixe les siens ────
+# â”€â”€ Â§41.2 : budgets par requÃªte â€” non bornÃ©s, une demande fixe les siens â”€â”€â”€â”€
 [budgets]
 # max_llm_tokens = 200000
 # max_web_requests = 20
 # max_api_calls = 40
 
-# ── §7 : contraintes par défaut d'une demande ──────────────────────────────
+# â”€â”€ Â§7 : contraintes par dÃ©faut d'une demande â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 [request_defaults]
 minimum_confidence = 0.8
 maximum_execution_time_seconds = 300
@@ -21,29 +21,32 @@ maximum_web_depth = 3
 required_output_format = "evidence_package"
 ttl_seconds = 900
 
-# ── §41.13 : garde-fous d'exécution ────────────────────────────────────────
+# â”€â”€ Â§41.13 : garde-fous d'exÃ©cution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 [limits]
 max_plan_steps = 50
 max_parallel_tool_calls = 10
+# §36.6 — taille maximale d'un document téléversé (25 Mio), miroir de
+# app/connectors/files/upload_policy.py::DEFAULT_MAX_UPLOAD_BYTES.
+max_upload_bytes = 26214400
 
-# ── §41.5 : cache ──────────────────────────────────────────────────────────
+# â”€â”€ Â§41.5 : cache â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 [cache]
 l1_enabled = true
 redis_ttl_seconds = 300
 redis_prefix = "inis"
 
-# ── §22 : LLM — sans clé, réponses stub explicitement marquées ─────────────
+# â”€â”€ Â§22 : LLM â€” sans clÃ©, rÃ©ponses stub explicitement marquÃ©es â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 [llm]
 provider = "openrouter"
 default_model = "openai/gpt-4"
 probe_max_tokens = 16
-# §41.8 — tentatives totales par modèle, première comprise.
+# Â§41.8 â€” tentatives totales par modÃ¨le, premiÃ¨re comprise.
 retry_attempts = 3
-# §22.2 — chaîne de repli ordonnée (préféré → moins préféré), définie par le
-# déploiement via LLM_MODEL_FALLBACKS ; vide par défaut dans le code.
+# Â§22.2 â€” chaÃ®ne de repli ordonnÃ©e (prÃ©fÃ©rÃ© â†’ moins prÃ©fÃ©rÃ©), dÃ©finie par le
+# dÃ©ploiement via LLM_MODEL_FALLBACKS ; vide par dÃ©faut dans le code.
 fallback_models = []
 
-# ── §9 : recherche web — Wikipedia assure la dégradation sans clé Serper ────
+# â”€â”€ Â§9 : recherche web â€” Wikipedia assure la dÃ©gradation sans clÃ© Serper â”€â”€â”€â”€
 [web]
 provider = "serper"
 fallback_provider = "wikipedia"

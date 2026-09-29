@@ -29,6 +29,11 @@ dependencies = [
     "pypdf>=4.0",
     "pdfplumber>=0.11",
     "python-docx>=1.1",
+    # §36.6/§36.7 — `UploadFile` (POST /v1/requests/{id}/documents) needs the
+    # multipart parser declared here, not only installed: FastAPI refuses to
+    # start without it, and 0.0.6 carries CVE-2024-24762 (ReDoS on multipart
+    # bodies), hence the floor.
+    "python-multipart>=0.0.9",
     # §19 — CVE-patched minimum floors (2026 advisories). The floors below are
     # the highest *published* releases: `httpx` 2.12.0 and `pydantic` 2.14.2 do
     # not exist on the index (pydantic 2.14.x is alpha-only), so the max stable

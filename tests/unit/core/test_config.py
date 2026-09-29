@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
+
 import pytest
 
+from app.connectors.files.upload_policy import DEFAULT_MAX_UPLOAD_BYTES
 from app.domain.value_objects.request_constraints import (
     DEFAULT_CONSTRAINTS,
     DEFAULT_REQUIRED_OUTPUT,
@@ -58,4 +60,7 @@ def test_default_config_matches_domain_constants() -> None:
     limits = data["limits"]
     assert limits["max_plan_steps"] == DEFAULT_MAX_PLAN_STEPS
     assert limits["max_parallel_tool_calls"] == DEFAULT_MAX_PARALLEL_TOOL_CALLS
+    # §36.6 — the upload ceiling of the deployment mirrors the runtime default:
+    # the two must never drift, otherwise a documented limit is not the one used.
+    assert limits["max_upload_bytes"] == DEFAULT_MAX_UPLOAD_BYTES
 
