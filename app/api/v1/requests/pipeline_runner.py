@@ -8,6 +8,7 @@ import json
 import time
 from typing import Any, AsyncGenerator
 
+from app.agents.pipeline.tool_dispatch import describe_action, is_web_action
 from app.agents.runtime.lifecycle import GRACEFUL_EXPIRY_STATUS, RequestLifecycle
 from app.artifacts.delivery.delivery_service import deliver_artifacts
 from app.domain.value_objects.ulid import ULID
@@ -857,6 +858,10 @@ class PipelineRunner:
 
         steps_to_run = plan.get("steps", []) if isinstance(plan, dict) else []
 
+        # §8.4/§25.2 — plan actions the pipeline cannot execute today. They are
+        # collected here so the delivery can name them instead of hiding them.
+        degraded_actions: list[str] = []
+
         # §41.13 Safeguard: max_plan_steps
         max_plan_steps_limit = max_plan_steps()
         if len(steps_to_run) > max_plan_steps_limit:
@@ -903,6 +908,25 @@ class PipelineRunner:
                     break
                 action = step.get("action", "")
                 inputs = step.get("inputs", {})
+                if not is_web_action(action):
+                    # §8.4 — the acquisition stage only knows how to search the
+                    # web. Before this guard, *any* action became a web search
+                    # with its own name as the query (a `file_ingest` step
+                    # searched for the literal string "file_ingest"), and the
+                    # step was then reported as if it had produced material.
+                    spec = describe_action(action)
+                    degraded_actions.append(spec.action)
+                    step_results.append(
+                        {
+                            "step_id": step.get("step_id", ULID.new("STEP_")),
+                            "status": "degraded",
+                            "action": spec.action,
+                            "output": "",
+                            "error": spec.refusal(),
+                            "tools_required": list(spec.tools),
+                        }
+                    )
+                    continue
                 # Derive the search query from step inputs or the objective
                 query = (
                     inputs.get("query")
@@ -1013,7 +1037,10 @@ class PipelineRunner:
                         "step_id": step.get("step_id", ULID.new("STEP_")),
                         "status": "degraded",
                         "action": action,
-                        "output": f"Step degraded: {step_err}",
+                        # §37 — the failure is reported in `error`; `output` stays
+                        # empty because the step produced nothing to deliver.
+                        "output": "",
+                        "error": f"{type(step_err).__name__}: {step_err}",
                     })
 
         except ImportError:
@@ -1023,39 +1050,29 @@ class PipelineRunner:
             execution_status = f"degraded: {err}"
 
         if not step_results:
-            # Pure stub fallback when no steps ran
-            try:
-                from app.agents.pipeline.step_executor import StepExecutor
-
-                executor = StepExecutor()
-
-                class _ToolAdapter:
-                    def execute(self, s: dict[str, Any]) -> dict[str, Any]:
-                        inputs = s.get("inputs", {})
-                        req_val = inputs.get("requirement", objective)
-                        act = s.get("action", "collect_information")
-                        return {
-                            "status": "done",
-                            "action": act,
-                            "output": f"Extracted intelligence payload for {req_val}",
-                        }
-
-                tool_instance = _ToolAdapter()
-                for step in steps_to_run:
-                    res = executor.execute(step, tool_instance)
-                    if "output" not in res and isinstance(res.get("result"), dict):
-                        res["output"] = res["result"].get("output", "")
-                    step_results.append(res)
-            except Exception as fallback_err:
-                step_results = [
+            # ------------------------------------------------------------------
+            # §25.2/§37 — a step the pipeline cannot execute is *reported*.
+            #
+            # This block used to answer with the sentence "Extracted intelligence
+            # payload for <objective>", which is not a result: it is fabricated
+            # text that made an empty run look like a successful one (§0.2,
+            # §22.3). The honest answer is a degraded step, no output, and the
+            # §21 tools the action would have needed.
+            # ------------------------------------------------------------------
+            for step in steps_to_run:
+                spec = describe_action(step.get("action"))
+                step_results.append(
                     {
-                        "step_id": s.get("step_id", ULID.new("STEP_")),
-                        "status": "done",
-                        "output": f"Fallback execution output for {objective}",
+                        "step_id": step.get("step_id", ULID.new("STEP_")),
+                        "status": "degraded",
+                        "action": spec.action,
+                        "output": "",
+                        "error": spec.refusal(),
+                        "tools_required": list(spec.tools),
                     }
-                    for s in steps_to_run
-                ]
-                execution_status = f"degraded: {fallback_err}"
+                )
+            if step_results:
+                execution_status = "degraded: aucune étape exécutable"
 
         self._emit_event(request_id, {
             "step": "executing",
@@ -1488,7 +1505,16 @@ class PipelineRunner:
             )
         if "degraded" in execution_status:
             base_limitations.append(
-                f"Web connectors non disponibles ({execution_status}) — fallback sur stub."
+                f"Exécution incomplète ({execution_status}) : les étapes non exécutables sont "
+                "signalées dans leur champ `error`, aucun contenu de résultat n'est produit "
+                "(§25.2, §37)."
+            )
+        if degraded_actions:
+            base_limitations.append(
+                "Actions planifiées non branchées sur le pipeline (§8.4/§21) : "
+                + ", ".join(sorted(set(degraded_actions)))
+                + " — les outils §21 associés sont enregistrés (app/tools) mais attendent "
+                "leurs entrées (lots L2.3/L2.4)."
             )
         if budget_exceeded:
             base_limitations.append(
