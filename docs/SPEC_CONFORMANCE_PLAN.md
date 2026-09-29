@@ -55,7 +55,7 @@ Chaque tâche porte donc : `Tâche — preuve (fichier de test)`.
    `python scripts\check_backward_compat.py` ·
    `python -m pytest -q`
 3. Aucun secret commité. Rappel : `start.bat` contient encore des clés en clair.
-4. Chaîne de migrations : dernière = `0013` → **la prochaine est `0014`**.
+4. Chaîne de migrations : dernière = `0014` → **la prochaine est `0015`**.
 5. Nouvel identifiant ⇒ §0.3 via `ULID.new("<PREFIXE_>")` — **sauf**
    `ART_{YYYY}_{SEQ6}` (§24.2) qui n'est pas un ULID et exige un compteur.
 6. §22.3 / §37 : le LLM n'est **jamais** source de vérité. Tout chemin qui
@@ -340,9 +340,51 @@ est identique, et dont le `storage_ref` existe dans S3.
 **Objectif** : un client peut fournir **une donnée** (fichier ou requête SQL) et obtenir des
 `InformationUnit` sourcées. C'est l'écart le plus grave de l'audit (C1–C4).
 
+> ### ⚙️ État d'avancement L2 au 2026-09-29 — **L2.1 terminé (N2)**, L2.2/L2.3 à faire
+>
+> **Fait et prouvé** (commit `640cebd`) :
+>
+> | Sous-lot | Preuve |
+> |---|---|
+> | L2.1 endpoint `POST /v1/requests/{id}/documents` (multipart) + `python-multipart` déclaré | `tests/api/test_document_upload.py` (12 cas) |
+> | L2.1 détection MIME **par contenu** + liste blanche + refus nommés | `tests/unit/connectors/test_mime_sniffer.py` (18 cas) |
+> | L2.1 stockage S3 `documents/{request_id}/{sha256}{ext}` + idempotence | `tests/integration/test_document_upload_s3.py` (6 cas, conteneurs réels) |
+> | L2.1 quota §41.2 (`budget.max_storage_bytes`) + `[limits].max_upload_bytes` | `tests/api/test_document_upload.py::TestRefusedUpload::test_the_storage_budget_of_the_request_is_enforced` + `tests/unit/core/test_config.py` |
+> | L2.1 classification §19.4 du **nom reçu** (et non du nom assaini) | `tests/security/test_upload_pii_classification.py` (7 cas) |
+> | L2.1 lecture `GET /v1/documents{,?request_id=,/{id}}` | `tests/integration/test_document_upload_s3.py` + `tests/api/test_document_upload.py::TestReadRoutes` |
+> | migration `0014` (documents : `file_name`, `size_bytes`, `request_id`, `pii_classification`, contrainte d'unicité) | apply/downgrade vérifiés sur la base docker + `scripts/check_backward_compat.py` (0 breaking) |
+>
+> **Décisions prises en L2.1 (à ne pas redécouvrir)**
+>
+> 1. **Classer le nom reçu, stocker un nom assaini** : l'assainissement remplace `@` par `_`,
+>    donc classer *après* l'assainissement effacerait l'email avant de pouvoir le signaler.
+>    Le bug a été trouvé par un test ; il est verrouillé par
+>    `test_the_sanitized_name_would_hide_the_email`.
+> 2. **L'extension détectée gagne** sur celle du client (un PDF nommé `.csv` est stocké `.pdf`),
+>    et le nom ne peut pas sortir de son préfixe (`../../etc/passwd.csv` → `passwd.csv`).
+> 3. **La clé S3 est dérivée du contenu** (`documents/{request_id}/{sha256}{ext}`) : elle ne
+>    révèle rien du nom client et rend l'envoi rejouable sans dupliquer l'objet.
+> 4. **Sans stockage objet, l'envoi est refusé (503)** : ici, contrairement aux artefacts de L1,
+>    enregistrer le document sans ses octets produirait une ligne illisible — l'échec est net.
+> 5. Sans base : l'envoi aboutit (les octets sont stockés) mais une `limitation` nomme l'absence
+>    de persistance et de source.
+> 6. `InformationRequestResponse` expose désormais `budget` : sans cela, `max_storage_bytes`
+>    (§41.2) n'était pas applicable par un endpoint d'ingestion.
+> 7. Le champ `information_units: []` est **déjà dans la réponse** (vide) pour que L2.3 le
+>    remplisse sans changer le contrat.
+>
+> **Reste ouvert dans L2.1** : variante protocole `source_ref: "s3://…"` dans
+> `InformationRequestCreate` (§5.2, agents non-HTTP) ; pas de route de téléchargement d'un
+> document (`GET /v1/documents/{id}/download`) ; le PDF/Excel/DOCX sont acceptés et stockés mais
+> **pas encore lus** (c'est L2.2/L2.3).
+>
+> **Prochaine étape (L2.2)** : `app/agents/pipeline/tool_dispatch.py` — peupler `ToolRegistry`
+> et supprimer le stub `_ToolAdapter` qui **fabrique du texte** (C6/P1). C'est le seul point
+> restant qui produit du contenu inventé dans une livraison.
+
 #### L2.1 — Réception d'un fichier (Antigravity + Devin)
 
-- [ ] `POST /v1/requests/{request_id}/documents` (multipart, `UploadFile`) :
+- [x] `POST /v1/requests/{request_id}/documents` (multipart, `UploadFile`) :
   ⚠️ `python-multipart` n'est **pas** dans `pyproject.toml` (C23) : l'ajouter en dépendance de
   runtime **dans le même commit** que l'endpoint, sinon FastAPI lève au démarrage.
   - contrôle de taille contre `budget.max_storage_bytes` (§41.2) et `[limits]` de `configs/*.toml` ;
@@ -350,9 +392,9 @@ est identique, et dont le `storage_ref` existe dans S3.
   - refus explicite et documenté pour les types non supportés (§25.2) — *liste blanche* : csv, xlsx, json, xml, pdf, docx, txt/md ;
   - réponse : `document_id` (`DOC_` via `ULID.new`), `source_id` (`SRC_`), `size_bytes`, `sha256`.
   *preuve : `tests/api/test_document_upload.py` (succès, type refusé, dépassement de quota, fichier vide)*
-- [ ] Stockage du binaire dans S3 sous `documents/{request_id}/{sha256}{ext}` via `S3Client.upload`
+- [x] Stockage du binaire dans S3 sous `documents/{request_id}/{sha256}{ext}` via `S3Client.upload`
   (idempotent : même hash ⇒ même clé) — *preuve : `tests/integration/test_document_upload_s3.py`*
-- [ ] PII : passer le nom de fichier et les métadonnées au `pii` classifier (§19.4) avant persistance.
+- [x] PII : passer le nom de fichier et les métadonnées au `pii` classifier (§19.4) avant persistance.
   *preuve : `tests/security/test_upload_pii_classification.py`*
 - [ ] Variante protocole : accepter `source_ref: "s3://…"` dans `InformationRequestCreate`
   (`schemas.py:66-87`) pour les agents qui ne font pas de HTTP multipart (§5.2).
@@ -660,6 +702,7 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 2026-09-29 | Cline (act) | **L1** | L1.1→L1.6 : générateurs, packager, migration `0013`, repository, routes, câblage pipeline, mapping UI | `7c1bba2` | `python -m pytest -q` → **1687 passed / 4 skipped** (199,55 s) ; `check_architecture` / `check_contracts` / `check_invariants` OK ; `check_backward_compat` → **0 breaking** (28 warnings BC005, dont 1 nouveau sur `0013`) ; `ruff check` → **clean sur les 32 fichiers du lot** ; `npx tsc --noEmit` OK | ✅ **N2 sur le chemin nominal** (critère de sortie L1 prouvé par `tests/integration/test_artifacts_object_storage.py`) — reste ouvert : `ETag`/`X-Checksum-Sha256`, refus `deleted`, authz §19.3, `artifact_versions`/`lineage`/`delivery_events`, `_ToolAdapter` (C6), section UI |
 | 2026-09-29 | Cline (act) | L1 | Décisions de conception consignées (PDF = option A, record hors du fichier, `created_at` applicatif, `artifact_id_sequences`, séquence mémoire assumée) | `7c1bba2` | — | voir l'encadré « État d'avancement L1 » en §4, items 1→8 |
 | 2026-09-29 | Cline (act) | L1 | Découverte **C24** (`.env.example` : `DATABASE_URL` en psycopg2 ⇒ `make migrate` impossible hors conteneur) — corrigée | `7c1bba2` | `alembic upgrade head` puis `downgrade 0012` puis `upgrade head` vérifiés sur la base docker-compose (`0012` → `0013 (head)`) | ✅ ; `ix_artifacts_request_id` et `artifact_id_sequences` vérifiés en `psql` |
+| 2026-09-29 | Cline (act) | **L2.1** | Ingestion d'un fichier : endpoint multipart, détection MIME par contenu, quota §41.2, stockage S3, migration `0014`, `GET /v1/documents`, classification §19.4 | `640cebd` | `python -m pytest -q` → **1730 passed / 4 skipped** (150,73 s) ; 4 checkers OK (**0 breaking**, 29 warnings BC005) ; `ruff` clean sur les 22 fichiers ; `0014` appliquée **et** annulée sur la base docker ; image reconstruite et `FastAPI.openapi()` généré dans un conteneur jetable (`multipart 0.0.32`, 3 routes `/v1/documents…` montées) | ✅ **N2** — 43 nouveaux tests. ⚠️ défaut trouvé par un test pendant le lot : la classification PII portait sur le nom **assaini** (donc l'email du nom disparaissait avant d'être signalé) → corrigé, verrouillé par `tests/security/test_upload_pii_classification.py` |
 
 ---
 

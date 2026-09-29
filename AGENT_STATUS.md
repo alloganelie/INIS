@@ -18,12 +18,15 @@ utiliser pour toute nouvelle ligne de couverture.
 |---|---|---|
 | L0 — propreté, baseline, branche | `5c3c60f` | WIP pré-existant committé tel quel (114 fichiers) ; `pytest -q` → **1615 passed / 4 skipped** |
 | L1 — artefacts §24.2/§24.3 de bout en bout | `7c1bba2` | `pytest -q` → **1687 passed / 4 skipped** ; 3 checkers + BC (0 breaking) OK ; `ruff` clean sur le lot ; `tsc --noEmit` OK |
+| L2.1 — ingestion d'un fichier (upload multipart, MIME par contenu, S3, migration `0014`, PII §19.4) | `640cebd` | `pytest -q` → **1730 passed / 4 skipped** ; 4 checkers OK (0 breaking) ; `ruff` clean sur le lot ; `0014` up/down vérifiée ; image rebuild + routes montées dans un conteneur jetable |
 
 L1 est **N2 sur le chemin nominal** : `required_output.format="xlsx"` produit un fichier réellement
 stocké dans le conteneur S3, listé par `GET /v1/artifacts?request_id=`, et téléchargé avec un
 `sha256` recalculé identique (`tests/integration/test_artifacts_object_storage.py`).
-Détail des cases, preuves, décisions et du reste à faire : `docs/SPEC_CONFORMANCE_PLAN.md` §4 (encadré L1)
-et §6 (journal). **Prochain lot : L2 (ingestion de fichiers et de bases, C1–C4).**
+Détail des cases, preuves, décisions et du reste à faire : `docs/SPEC_CONFORMANCE_PLAN.md` §4 (encadrés L1
+et L2) et §6 (journal). **Prochain lot : L2.2** — `app/agents/pipeline/tool_dispatch.py` (peupler
+`ToolRegistry`, supprimer le stub `_ToolAdapter` qui fabrique du texte, C6/P1) puis **L2.3** (unités §11
+extraites d'un document ingéré, `Dataset`, `Transformation` par étape).
 
 ## PHASE-05.4 — Temporary ownership exception
 
@@ -123,6 +126,8 @@ uvicorn, clés réelles) est à **63/63 PASS, 0 FAIL**.
 | 6 | `app/domain/entities/memory_result.py` et `app/planning/memory_checker.py` manquaient (modules référencés, absents) | §7, §8 | implémentés |
 | 7 | La route `POST /v1/requests/{id}/cancel` (§32) n'était couverte par **aucun** test | §32, §1.3 | `tests/api/test_request_cancel.py` (statut `CANCELLED`, idempotence, 404, drapeau runner, conservation du matériel déjà obtenu) |
 | 8 | Une livraison annonçait `"artifacts": []` **en dur** (`pipeline_runner`) et aucun endpoint ne pouvait lister ou télécharger un fichier : le §24.2 n'était jamais construit, et `GET /v1/artifacts` n'existait pas alors que le frontend l'appelait | §24.1, §24.2, §24.3, §32 | L1 (`7c1bba2`) : générateurs CSV/JSON/XML/XLSX + refus PDF explicite, séquence `ART_{YYYY}_{SEQ6}` en base, migration `0013` (`request_id`, `created_at`, `artifact_id_sequences`), `ArtifactRepository`, `GET /v1/artifacts{,?request_id=,/{id},/{id}/download}`, câblage pipeline selon `required_output.format` |
+| 9 | Le nom d'un fichier téléversé était **assaini avant** d'être classé (§19.4) : l'assainissement remplace `@` par `_`, donc un email dans le nom disparaissait avant de pouvoir être signalé comme PII | §19.4, §9.1 | L2.1 (`640cebd`) : la classification porte sur le nom **reçu**, le stockage garde le nom assaini ; verrouillé par `tests/security/test_upload_pii_classification.py` (le test qui a trouvé le défaut) |
+| 10 | `python-multipart` était **installé mais non déclaré** : `UploadFile` ne pouvait pas être utilisé, et une image reconstruite sans la dépendance aurait refusé de démarrer | §4.1, §36.6 | L2.1 (`640cebd`) : déclaré dans `pyproject.toml` (`>=0.0.9`, CVE-2024-24762) ; vérifié par rebuild + `FastAPI.openapi()` en conteneur |
 
 ### Suites de tests remplies (lacune n°12 ci-dessus, partiellement soldée)
 
@@ -138,14 +143,15 @@ uvicorn, clés réelles) est à **63/63 PASS, 0 FAIL**.
 
 ### Reste ouvert après cette remédiation
 
-- **BC005 (28 warnings, non bloquants)** : `0013` ajoute `ix_artifacts_request_id` sur une table
-  **préexistante** (`artifacts`, revision `0005`) — le seul cas où §41.14 s'applique réellement.
-  `CREATE INDEX CONCURRENTLY` est **interdit dans une transaction** et Alembic exécute les
-  migrations en transactionnel (`INFO [alembic.runtime.migration] Will assume transactional DDL`) :
-  l'activer casserait la migration. La table est vide avant la livraison de la fonctionnalité
-  (aucun writer n'existait), donc le verrou est sans effet ; à réévaluer si un index est ajouté
-  plus tard sur une table volumineuse. Les 27 autres warnings indexent une table créée dans le
-  **même `upgrade()`** : §41.14 ne s'y applique pas.
+- **BC005 (29 warnings, non bloquants)** : deux index portent sur une table **préexistante** —
+  `ix_artifacts_request_id` (`0013`, table `0005`) et `ix_documents_request_id` (`0014`, table
+  `0002`), plus la contrainte `uq_documents_request_content` : ce sont les seuls cas où §41.14
+  s'applique réellement. `CREATE INDEX CONCURRENTLY` est **interdit dans une transaction** et
+  Alembic exécute les migrations en transactionnel (`INFO [alembic.runtime.migration] Will assume
+  transactional DDL`) : l'activer casserait la migration. Les deux tables sont vides avant la
+  livraison de leurs fonctionnalités (aucun writer n'existait), donc le verrou est sans effet ;
+  à réévaluer si un index est ajouté plus tard sur une table volumineuse. Les 27 autres warnings
+  indexent une table créée dans le **même `upgrade()`** : §41.14 ne s'y applique pas.
 - **Dette n°12 (partie non soldée)** : `app/artifacts/**` + `app/api/v1/artifacts/` sont désormais
   **implémentés et branchés** (§24.2/§24.3, L1, commit `7c1bba2`) ; `app/knowledge/embedding/` (§16)
   et `app/knowledge/enrichment/` (§12) restent absents.
