@@ -314,10 +314,10 @@ Le frontend **appelle déjà** (C14) : `GET /artifacts?request_id=` et `GET /art
 - [~] Persister chaque artefact (`artifact_repository`) + `artifact_versions` (v1) +
   `artifact_lineage` (source/dataset/transformation ids réels) + `artifact_delivery_events`.
   *preuve : `tests/integration/test_artifact_delivery_e2e.py` (requête complète → lignes en base → S3 → download)*
-- [ ] Corriger le chemin stub `_ToolAdapter` (`pipeline_runner.py:1031-1040`, C6) :
+- [x] Corriger le chemin stub `_ToolAdapter` (`pipeline_runner.py:1031-1040`, C6) :
   il ne doit plus produire de contenu textuel fabriqué ; s'il est conservé comme
   secours, il doit renvoyer `status="degraded"` **sans** texte prétendant être un résultat.
-  *preuve : `tests/agentic/test_non_hallucination.py::test_no_fabricated_step_output` (nouveau cas)*
+  *preuve : `tests/agentic/test_no_fabricated_step_output.py` (créé — la preuve `test_non_hallucination.py::test_no_fabricated_step_output` citée initialement **n'existait pas**, cf. §6 journal du 2026-09-29/L2.2)*
 
 #### L1.6 — UI (Antigravity · `frontend/`)
 
@@ -402,16 +402,48 @@ est identique, et dont le `storage_ref` existe dans S3.
 
 #### L2.2 — Dispatch d'outils réel dans le pipeline (Codex)
 
+> ### ⚙️ État d'avancement L2.2 au 2026-09-29 — items 1-2 faits (C5/C6 fermés), items 3-4 ouverts
+>
+> **Fait et prouvé** (commit `066ac1b`) :
+>
+> | Sous-lot | Preuve |
+> |---|---|
+> | `tool_dispatch.py` : les **35** outils §21 enregistrés dans `ToolRegistry` (C5) | `tests/unit/agents/pipeline/test_tool_dispatch.py::TestRegistryPopulation` |
+> | Vocabulaire fermé d'actions, avec outils requis + `executable` + raison | `tests/unit/agents/pipeline/test_tool_dispatch.py::TestActionVocabulary` |
+> | `StepExecutor` : `InfrastructureError` → `degraded`, autre erreur → `failed`, aucun `output` inventé | `tests/unit/agents/test_step_executor_dispatch.py` |
+> | Suppression des **deux** fabrications (`_ToolAdapter` + « Fallback execution output ») | `tests/agentic/test_no_fabricated_step_output.py` |
+> | Une action non-web ne devient **plus** une recherche web (elle était cherchée par son propre nom) | `tests/agentic/test_no_fabricated_step_output.py::test_a_non_web_action_never_becomes_a_web_search` |
+>
+> **Décisions prises en L2.2**
+>
+> 1. `executable=False` n'est pas un aveu d'impuissance mais une **déclaration exacte** : les 35
+>    outils existent, mais la plupart attendent des entrées que le pipeline ne construit pas encore
+>    (un fichier local, une base cible, un `Dataset`). Le test de la liste des manques est
+>    volontairement fermé : passer une action à « exécutable » doit être un acte explicite.
+> 2. Un `output` vide + une raison dans `error` remplacent tout texte de remplissage (§37). Les
+>    `step_results` partent en persistance (C11) : c'est **là** que la fabrication entrait en base.
+> 3. `is_web_action(unknown) == False` : une action inconnue ne doit jamais déclencher d'acquisition.
+>
+> **Reste ouvert dans L2.2**
+>
+> - [ ] Le **planificateur** (`PlanBuilder` + `planning_prompt.py`) n'est pas encore contraint par le
+>   vocabulaire fermé : `_build_step` copie `step["action"]` sans le valider. Le pipeline dégrade
+>   proprement une action inconnue, mais le plan devrait être refusé en amont.
+> - [ ] `request_type` (C4) n'oriente toujours pas le plan. ⚠️ Router naïvement `data`/`source` vers
+>   `file_ingest` **casserait** `tests/api/test_pipeline_e2e.py` (une requête `data` sans document
+>   téléversé y attend une acquisition web). Le routage correct suppose que le planificateur voie les
+>   documents téléversés de la requête : c'est le lot **L2.3**.
+
 > C'est ici que se joue le passage N0 → N1. Aujourd'hui le seul « dispatch » est un stub (C6).
 
-- [ ] `app/agents/pipeline/tool_dispatch.py` : résolveur `action/tool → callable` qui
+- [x] `app/agents/pipeline/tool_dispatch.py` : résolveur `action/tool → callable` qui
   **peuple** `ToolRegistry` (`app/tools/registry.py`) avec les outils §21 réellement
   branchables : `read_csv`, `read_excel`, `read_json`, `read_xml`, `read_pdf`,
   `extract_document`, `postgres_query`, `extract_image_content`, `inspect_schema`,
   `profile_dataset`, `detect_duplicates`, `validate_schema`, `check_missing_values`,
   `check_consistency`, `check_freshness`, `compare_sources`, `retrieve_context`, `hybrid_search`.
   *preuve : `tests/unit/agents/pipeline/test_tool_dispatch.py` (chaque nom §21 est résolu ou explicitement listé comme non branchable)*
-- [ ] `step_executor.py` : exécuter l'outil résolu et **propager les erreurs** (`InfrastructureError`
+- [x] `step_executor.py` : exécuter l'outil résolu et **propager les erreurs** (`InfrastructureError`
   → `status="degraded"` + `limitations`), sans jamais substituer de texte inventé.
   *preuve : `tests/unit/agents/test_step_executor_dispatch.py`*
 - [ ] Ajouter au vocabulaire du plan l'action `file_ingest` (§8.4 `file_ingest_step`) :
@@ -684,7 +716,7 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 16 | Une information modifiée peut être retrouvée dans son historique | `[~]` `VersionStore` en mémoire | L6 | `tests/integration/test_version_store_persistence.py` |
 | 17 | Une suppression n'efface pas silencieusement l'historique | `[~]` à vérifier sur les nouvelles tables | L6 | `tests/unit/migrations/test_soft_delete_columns.py` |
 | 18 | Une information insuffisamment étayée est marquée comme telle | `[x]` (+ limites qualité) | L5 | `tests/agentic/test_insufficient_evidence.py` |
-| 19 | **INIS n'utilise pas le LLM comme source de vérité** | `[~]` **stub qui fabrique du texte (C6)** | L1.5 | `tests/agentic/test_non_hallucination.py::test_no_fabricated_step_output` |
+| 19 | **INIS n'utilise pas le LLM comme source de vérité** | `[x]` ✅ la fabrication de step est supprimée (C6 fermé en L2.2) | L2.2 | `tests/agentic/test_no_fabricated_step_output.py` (+ `test_non_hallucination.py` pour les claims LLM) |
 | 20 | Une sortie factuelle peut être reliée à une preuve et une source | `[~]` web seulement | L2.3 | `tests/agentic/test_non_hallucination.py` (cas fichier) |
 
 **Clôture de la vague V1 = critères 6, 7, 8, 9, 11, 16, 19, 20 passés à `[x]`.**
@@ -703,6 +735,8 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 2026-09-29 | Cline (act) | L1 | Décisions de conception consignées (PDF = option A, record hors du fichier, `created_at` applicatif, `artifact_id_sequences`, séquence mémoire assumée) | `7c1bba2` | — | voir l'encadré « État d'avancement L1 » en §4, items 1→8 |
 | 2026-09-29 | Cline (act) | L1 | Découverte **C24** (`.env.example` : `DATABASE_URL` en psycopg2 ⇒ `make migrate` impossible hors conteneur) — corrigée | `7c1bba2` | `alembic upgrade head` puis `downgrade 0012` puis `upgrade head` vérifiés sur la base docker-compose (`0012` → `0013 (head)`) | ✅ ; `ix_artifacts_request_id` et `artifact_id_sequences` vérifiés en `psql` |
 | 2026-09-29 | Cline (act) | **L2.1** | Ingestion d'un fichier : endpoint multipart, détection MIME par contenu, quota §41.2, stockage S3, migration `0014`, `GET /v1/documents`, classification §19.4 | `640cebd` | `python -m pytest -q` → **1730 passed / 4 skipped** (150,73 s) ; 4 checkers OK (**0 breaking**, 29 warnings BC005) ; `ruff` clean sur les 22 fichiers ; `0014` appliquée **et** annulée sur la base docker ; image reconstruite et `FastAPI.openapi()` généré dans un conteneur jetable (`multipart 0.0.32`, 3 routes `/v1/documents…` montées) | ✅ **N2** — 43 nouveaux tests. ⚠️ défaut trouvé par un test pendant le lot : la classification PII portait sur le nom **assaini** (donc l'email du nom disparaissait avant d'être signalé) → corrigé, verrouillé par `tests/security/test_upload_pii_classification.py` |
+| 2026-09-29 | Cline (act) | **L2.2** | Dispatch réel : `tool_dispatch.py` (35 outils §21 enregistrés, vocabulaire d'actions fermé), suppression des **deux** fabrications de step (C6/P1), `StepExecutor` dégradé/échoué, plus de recherche web pour une action non-web | `066ac1b` | `python -m pytest -q` → **1755 passed / 4 skipped** (163,24 s) ; 3 checkers OK ; `ruff` clean sur les 5 fichiers (et erreurs préexistantes de `pipeline_runner.py` : 35 → 34) | ✅ **C5 et C6 fermés**. 25 nouveaux tests. ⚠️ preuve invalide découverte : le plan citait `test_non_hallucination.py::test_no_fabricated_step_output`, **ce test n'existe pas** — la case §36/19 est désormais prouvée par le fichier réellement créé |
+| 2026-09-29 | Cline (act) | L2.2 | Deux défauts trouvés en lisant le vrai chemin d'exécution : toute action déclenchait une recherche web (avec le **nom de l'action** comme requête) et la seconde fabrication (`Fallback execution output`) jetait l'erreur réelle | `066ac1b` | `tests/agentic/test_no_fabricated_step_output.py::test_a_non_web_action_never_becomes_a_web_search` | ✅ corrigés ; reste L2.2 items 3-4 (validation du plan en amont, `request_type`), bloqués par L2.3 (cf. encadré L2.2) |
 
 ---
 
@@ -710,7 +744,7 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 
 | # | Piège | Conséquence si ignoré |
 |---|---|---|
-| P1 | `_ToolAdapter` (`pipeline_runner.py:1031-1040`) **fabrique** le texte du résultat de step | un test passera au vert alors que rien n'a été ingéré ; viole §0.2/§22.3 |
+| P1 | `_ToolAdapter` (`pipeline_runner.py`) **fabriquait** le texte du résultat de step | un test passait au vert alors que rien n'a été ingéré ; violait §0.2/§22.3 — ✅ **supprimé en L2.2** (`066ac1b`), preuve `tests/agentic/test_no_fabricated_step_output.py` |
 | P2 | Table `artifacts` **sans `request_id`** (C9/C25) | impossible de lister les artefacts d'une requête sans migration `0013` — ✅ **corrigé en L1** |
 | P3 | `artifacts` est un **namespace package PEP-420** : `import app.artifacts.generators` « marche » sans code | un import-test naïf validerait du vide ; toujours tester un **symbole** — ⚠️ **vérifié en L1** : les `.pyc` orphelins de `app/artifacts/**/__pycache__` subsistaient alors que les sources avaient été supprimées (`c948d6b`) |
 | P4 | `SourceRepository` crée sa propre table (`metadata.create_all`) | vert sur SQLite, cassé sur PostgreSQL (C16) |

@@ -19,14 +19,17 @@ utiliser pour toute nouvelle ligne de couverture.
 | L0 — propreté, baseline, branche | `5c3c60f` | WIP pré-existant committé tel quel (114 fichiers) ; `pytest -q` → **1615 passed / 4 skipped** |
 | L1 — artefacts §24.2/§24.3 de bout en bout | `7c1bba2` | `pytest -q` → **1687 passed / 4 skipped** ; 3 checkers + BC (0 breaking) OK ; `ruff` clean sur le lot ; `tsc --noEmit` OK |
 | L2.1 — ingestion d'un fichier (upload multipart, MIME par contenu, S3, migration `0014`, PII §19.4) | `640cebd` | `pytest -q` → **1730 passed / 4 skipped** ; 4 checkers OK (0 breaking) ; `ruff` clean sur le lot ; `0014` up/down vérifiée ; image rebuild + routes montées dans un conteneur jetable |
+| L2.2 — dispatch réel des outils §21, fin des fabrications de step (C5/C6) | `066ac1b` | `pytest -q` → **1755 passed / 4 skipped** ; 3 checkers OK ; `ruff` clean sur le lot (et `pipeline_runner.py` : 35 erreurs préexistantes → 34) |
 
 L1 est **N2 sur le chemin nominal** : `required_output.format="xlsx"` produit un fichier réellement
 stocké dans le conteneur S3, listé par `GET /v1/artifacts?request_id=`, et téléchargé avec un
 `sha256` recalculé identique (`tests/integration/test_artifacts_object_storage.py`).
-Détail des cases, preuves, décisions et du reste à faire : `docs/SPEC_CONFORMANCE_PLAN.md` §4 (encadrés L1
-et L2) et §6 (journal). **Prochain lot : L2.2** — `app/agents/pipeline/tool_dispatch.py` (peupler
-`ToolRegistry`, supprimer le stub `_ToolAdapter` qui fabrique du texte, C6/P1) puis **L2.3** (unités §11
-extraites d'un document ingéré, `Dataset`, `Transformation` par étape).
+Détail des cases, preuves, décisions et du reste à faire : `docs/SPEC_CONFORMANCE_PLAN.md` §4 (encadrés L1,
+L2.1 et L2.2) et §6 (journal). **Prochain lot : L2.3** — unités §11 extraites d'un document ingéré (le
+champ `information_units` de la réponse d'upload est **déjà** au contrat, vide), `Dataset` persisté et
+`Transformation` par étape. C'est aussi ce qui débloque les items L2.2 restants : validation du plan par
+le vocabulaire fermé en amont, et `request_type` réellement opérant (C4) — router `data`/`source` vers
+`file_ingest` suppose que le planificateur voie les documents téléversés de la requête.
 
 ## PHASE-05.4 — Temporary ownership exception
 
@@ -128,6 +131,9 @@ uvicorn, clés réelles) est à **63/63 PASS, 0 FAIL**.
 | 8 | Une livraison annonçait `"artifacts": []` **en dur** (`pipeline_runner`) et aucun endpoint ne pouvait lister ou télécharger un fichier : le §24.2 n'était jamais construit, et `GET /v1/artifacts` n'existait pas alors que le frontend l'appelait | §24.1, §24.2, §24.3, §32 | L1 (`7c1bba2`) : générateurs CSV/JSON/XML/XLSX + refus PDF explicite, séquence `ART_{YYYY}_{SEQ6}` en base, migration `0013` (`request_id`, `created_at`, `artifact_id_sequences`), `ArtifactRepository`, `GET /v1/artifacts{,?request_id=,/{id},/{id}/download}`, câblage pipeline selon `required_output.format` |
 | 9 | Le nom d'un fichier téléversé était **assaini avant** d'être classé (§19.4) : l'assainissement remplace `@` par `_`, donc un email dans le nom disparaissait avant de pouvoir être signalé comme PII | §19.4, §9.1 | L2.1 (`640cebd`) : la classification porte sur le nom **reçu**, le stockage garde le nom assaini ; verrouillé par `tests/security/test_upload_pii_classification.py` (le test qui a trouvé le défaut) |
 | 10 | `python-multipart` était **installé mais non déclaré** : `UploadFile` ne pouvait pas être utilisé, et une image reconstruite sans la dépendance aurait refusé de démarrer | §4.1, §36.6 | L2.1 (`640cebd`) : déclaré dans `pyproject.toml` (`>=0.0.9`, CVE-2024-24762) ; vérifié par rebuild + `FastAPI.openapi()` en conteneur |
+| 11 | Le pipeline **fabriquait** le résultat d'une étape impossible (`"Extracted intelligence payload for <objectif>"`, puis `"Fallback execution output for <objectif>"`) : une livraison vide passait pour un succès et ces textes partaient en persistance | §0.2, §22.3, §37 | L2.2 (`066ac1b`) : étapes `degraded` avec `output` vide + raison dans `error` ; `tests/agentic/test_no_fabricated_step_output.py` |
+| 12 | Toute action du plan déclenchait une **recherche web**, y compris `file_ingest` — et la requête était le **nom de l'action** (`"file_ingest"`) | §8.4, §21 | L2.2 (`066ac1b`) : seul un action web atteint l'étage d'acquisition ; une action non-web est dégradée avec ses outils §21 requis (`tool_dispatch.ACTIONS`) |
+| 13 | `ToolRegistry` n'était **jamais peuplé** : les 35 outils §21 existaient mais aucun plan ne pouvait les atteindre (C5) | §21, §8.4 | L2.2 (`066ac1b`) : `app/agents/pipeline/tool_dispatch.py` enregistre les 35 (0 indisponible), avec vocabulaire d'actions fermé et `executable`/raison par action |
 
 ### Suites de tests remplies (lacune n°12 ci-dessus, partiellement soldée)
 
