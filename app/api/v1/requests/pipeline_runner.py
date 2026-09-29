@@ -3,25 +3,25 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timezone
 import json
 import time
-from typing import Any, AsyncGenerator
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
+from typing import Any
+
+from ulid import ULID as PythonUlid
 
 from app.agents.pipeline.tool_dispatch import describe_action, is_web_action
 from app.agents.runtime.lifecycle import GRACEFUL_EXPIRY_STATUS, RequestLifecycle
-from app.artifacts.delivery.delivery_service import deliver_artifacts
-from app.domain.value_objects.ulid import ULID
-from app.core.statuses import CANCELLED_STATUS, resolve_delivery_status
-from app.core.logging import get_logger
-from app.core.version import API_VERSION
-from app.planning.limits import (
-    PLANNING_LIMIT_EXCEEDED_STATUS,
-    ConcurrencyLimiter,
-    max_parallel_tool_calls,
-    max_plan_steps,
+from app.api.v1.requests.pipeline_persistence import (
+    persist_pipeline_delivery,
+    persist_transformations,
 )
-from app.quality.conflict.conflict_status import conflict_payload
+from app.artifacts.delivery.delivery_service import deliver_artifacts
+from app.core.logging import get_logger
+from app.core.statuses import CANCELLED_STATUS, resolve_delivery_status
+from app.core.version import API_VERSION
+from app.domain.value_objects.ulid import ULID
 from app.governance.budget.quotas import (
     BUDGET_EXCEEDED_STATUS,
     GLOBAL_USAGE,
@@ -29,10 +29,17 @@ from app.governance.budget.quotas import (
     BudgetExceeded,
     BudgetGuard,
 )
+from app.knowledge.provenance.stage_transformations import build_transformations
 from app.llm.tracing.llm_trace_writer import LLMTraceWriter
+from app.planning.limits import (
+    PLANNING_LIMIT_EXCEEDED_STATUS,
+    ConcurrencyLimiter,
+    max_parallel_tool_calls,
+    max_plan_steps,
+)
+from app.quality.conflict.conflict_status import conflict_payload
 from app.storage.cache.cache_store import CacheStore
-from app.api.v1.requests.pipeline_persistence import persist_pipeline_delivery
-from ulid import ULID as PythonUlid
+from app.storage.database.session import database_configured
 
 #: §34 ``llm_cost`` fallback pricing (USD per token) when the provider response
 #: carries no ``cost_usd``. Documented estimate, not a billing figure.
@@ -255,7 +262,7 @@ class PipelineRunner:
         killed mid-write. Cancelling twice returns the same ``CANCELLED``
         state, so the endpoint never depends on the caller's timing.
         """
-        cancelled_at = datetime.now(timezone.utc).isoformat()
+        cancelled_at = datetime.now(UTC).isoformat()
         state = dict(self._run_states.get(request_id, {}))
         state.update(
             {
@@ -342,7 +349,7 @@ class PipelineRunner:
             {
                 "status": "resumed",
                 "resumed_from_step": checkpoint.step_id if checkpoint else None,
-                "resumed_at": datetime.now(timezone.utc).isoformat(),
+                "resumed_at": datetime.now(UTC).isoformat(),
             }
         )
         self._run_states[request_id] = state
@@ -469,6 +476,21 @@ class PipelineRunner:
             if trace.get("request_id") == request_id
         ]
 
+    def _synthesis_model(self, request_id: str) -> str | None:
+        """Return the model that produced the synthesis, when the trace knows it.
+
+        Recorded in the §12.1 ``enriched`` transformation so a delivery can say
+        *which* model summarised its material. ``None`` when no trace names one:
+        the stage then reports the generic tool ``synthesis`` rather than an
+        invented model identifier.
+        """
+        for trace in reversed(self.llm_traces(request_id)):
+            for key in ("model", "model_id", "provider_model"):
+                value = trace.get(key)
+                if value:
+                    return str(value)
+        return None
+
     def trace_steps(self, request_id: str) -> dict[str, str]:
         """Return the ``phase -> STEP_{ULID}`` map used to trace a request."""
         return {
@@ -566,7 +588,7 @@ class PipelineRunner:
                 "step": "received",
                 "status": "received",
                 "request_id": request_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             }
             yield f"data: {json.dumps(init_event)}\n\n"
         else:
@@ -589,7 +611,7 @@ class PipelineRunner:
     async def run(self, request_id: str, payload: Any) -> dict[str, Any]:
         """Run the end-to-end pipeline with graceful degradation if modules are missing."""
         start_time = time.monotonic()
-        start_iso = datetime.now(timezone.utc).isoformat()
+        start_iso = datetime.now(UTC).isoformat()
         self._running.add(request_id)
 
         objective = getattr(payload, "objective", None) or (
@@ -664,8 +686,8 @@ class PipelineRunner:
 
         requirements: Any = requirements_list
         try:
-            from app.llm.tasks.understanding_task import UnderstandingTask
             from app.llm.prompts.understanding_prompt import build as build_understanding_prompt
+            from app.llm.tasks.understanding_task import UnderstandingTask
 
             prompt = build_understanding_prompt(objective=objective)
             task = UnderstandingTask()
@@ -775,9 +797,9 @@ class PipelineRunner:
                 planning_status = f"degraded: {err}"
 
         try:
-            from app.llm.tasks.planning_task import PlanningTask
-            from app.llm.prompts.planning_prompt import build as build_planning_prompt
             from app.llm.parsers.plan_parser import parse_plan
+            from app.llm.prompts.planning_prompt import build as build_planning_prompt
+            from app.llm.tasks.planning_task import PlanningTask
 
             try:
                 prompt = build_planning_prompt(objective=objective, requirements=requirements)
@@ -890,8 +912,8 @@ class PipelineRunner:
 
 
         try:
-            from app.connectors.web.provider_router import ProviderRouter
             from app.connectors.web.extractors.wikipedia_extractor import WikipediaExtractor
+            from app.connectors.web.provider_router import ProviderRouter
             from app.knowledge.extraction.fact_extractor import FactExtractor
             from app.quality.source_reliability import SourceReliabilityScorer
 
@@ -1015,7 +1037,7 @@ class PipelineRunner:
                                 # §15.1 — the acquisition instant feeds the
                                 # freshness dimension; an ISO 8601 UTC stamp,
                                 # never a guessed publication date.
-                                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                                "retrieved_at": datetime.now(UTC).isoformat(),
                             })
                             step_output_snippets.append(
                                 f"[{result.title}] {snippet}"
@@ -1090,7 +1112,7 @@ class PipelineRunner:
         # because §15 scores what was actually collected. The aggregate internal
         # unit stays first: it is the synthesis of the run, never a substitute
         # for the information that was really acquired.
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = datetime.now(UTC).isoformat()
         inf_id = ULID.new("INF_")
         evid_id = ULID.new("EVID_")
         resp_id = f"RESP_{PythonUlid()}"
@@ -1323,7 +1345,7 @@ class PipelineRunner:
         synthesis_model = ""
 
         try:
-            from app.llm.router.model_router import ModelRouter, LLMTask
+            from app.llm.router.model_router import LLMTask, ModelRouter
 
             router = ModelRouter()
             synthesis_model = router.route("understanding")
@@ -1613,6 +1635,22 @@ class PipelineRunner:
             if isinstance(payload, dict)
             else getattr(payload, "required_output", None)
         )
+        # §12.1 — the stages that already happened (acquisition, extraction,
+        # synthesis) are recorded *before* the artifact is built, so the file
+        # exported for the client carries them; the `derived` stage is appended
+        # once the artifact exists (a file cannot contain its own record, L1).
+        transformations = build_transformations(
+            request_id=request_id,
+            objective=objective,
+            sources=final_sources,
+            information_units=information_units,
+            evidence=evidence,
+            findings=findings,
+            model=self._synthesis_model(request_id),
+        )
+        if transformations:
+            delivery_response["transformations"] = transformations
+
         artifact_outcome = await deliver_artifacts(
             request_id=request_id,
             required_output=requested_output,
@@ -1624,6 +1662,25 @@ class PipelineRunner:
         if artifact_outcome.artifacts:
             delivery_response["artifacts"] = artifact_outcome.artifacts
         base_limitations.extend(artifact_outcome.limitations)
+
+        derived = build_transformations(
+            request_id=request_id,
+            objective=objective,
+            sources=final_sources,
+            information_units=information_units,
+            evidence=evidence,
+            findings=findings,
+            artifacts=artifact_outcome.artifacts,
+            model=self._synthesis_model(request_id),
+        )
+        if derived:
+            delivery_response["transformations"] = derived
+        persisted_lineage = await persist_transformations(derived, request_id=request_id)
+        if not persisted_lineage and database_configured():
+            base_limitations.append(
+                "Transformations §12.1 non persistées (écriture en échec) : elles restent "
+                "exposées dans cette livraison."
+            )
         duration = time.monotonic() - start_time
         self._runs_count += 1
         self._total_duration += duration

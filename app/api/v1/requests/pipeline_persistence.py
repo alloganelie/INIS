@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
-import time
 import os
-from datetime import datetime, timezone
+import time
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
+
 from app.domain.value_objects.ulid import ULID
 
 
@@ -24,7 +25,7 @@ async def persist_pipeline_delivery(
     db_url = os.getenv("INIS_DATABASE_URL")
     fallback_audit = {
         "audit_event_id": ULID.new("AUD_"),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
     if not db_url:
         return (
@@ -57,12 +58,11 @@ async def persist_pipeline_delivery(
     started = time.perf_counter()
     try:
         async for session in get_session():
-            now_dt = datetime.now(timezone.utc)
+            now_dt = datetime.now(UTC)
             stored_audit = await AuditWriter().write(audit_payload, session=session)
             await _insert_sources(session, sources, now_dt)
             inf_ids = await _insert_units(session, information_units, now_dt)
             await _insert_evidence(session, evidence, now_dt)
-            await _insert_lineage(session, sources, inf_ids, step_results, delivery_status, request_id, now_dt)
             await session.commit()
             _observe_postgres_latency(started)
             return True, [], stored_audit
@@ -220,43 +220,78 @@ async def _insert_evidence(session: Any, evidence: list[dict[str, Any]], now_dt:
         )
 
 
-async def _insert_lineage(
-    session: Any,
-    sources: list[dict[str, Any]],
-    inf_ids: list[str],
-    step_results: list[dict[str, Any]],
-    delivery_status: str,
+def _parse_timestamp(value: Any) -> datetime:
+    """Return *value* as a timezone-aware datetime (ISO 8601 accepted)."""
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    if isinstance(value, str) and value:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return datetime.now(UTC)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    return datetime.now(UTC)
+
+
+async def persist_transformations(
+    transformations: list[dict[str, Any]],
+    *,
     request_id: str,
-    now_dt: datetime,
-) -> None:
-    input_src_ids = [s.get("source_id") for s in sources if s.get("source_id")]
-    if not (input_src_ids and inf_ids):
-        return
-    trf_id = ULID.new("TRF_")
-    await session.execute(
-        text(
-            """
-            INSERT INTO transformations (
-                transformation_id, input_ids, output_ids, operator, tool,
-                tool_version, parameters, timestamp, result, justification
-            ) VALUES (
-                :transformation_id, CAST(:input_ids AS JSONB), CAST(:output_ids AS JSONB),
-                :operator, :tool, :tool_version, CAST(:parameters AS JSONB),
-                :timestamp, :result, :justification
-            )
-            ON CONFLICT (transformation_id) DO NOTHING
-            """
-        ),
-        {
-            "transformation_id": trf_id,
-            "input_ids": json.dumps(input_src_ids),
-            "output_ids": json.dumps(inf_ids),
-            "operator": "PipelineRunner",
-            "tool": "PipelineRunner.run",
-            "tool_version": "1.0.0",
-            "parameters": json.dumps({"steps_executed": len(step_results)}),
-            "timestamp": now_dt,
-            "result": "success" if delivery_status == "completed" else "failure",
-            "justification": f"Synthesized research for {request_id}",
-        },
-    )
+) -> bool:
+    """Write one §12.1 row per transformation a run executed.
+
+    Args:
+        transformations: The rows built by
+            :func:`app.knowledge.provenance.stage_transformations.build_transformations`.
+        request_id: The request they belong to (used for the log/limitation text).
+
+    Returns:
+        ``True`` when they were written, ``False`` when no database is
+        configured. A write that fails never raises: the delivery is already
+        built and must not be lost because its lineage could not be stored.
+
+    Replaces the single generic ``TRF_`` row this module used to write for every
+    run, whatever it had actually done (§12.1, C11).
+    """
+    if not transformations:
+        return True
+    from app.storage.database.session import ensure_session_maker, get_session
+
+    if not ensure_session_maker():
+        return False
+    try:
+        async for session in get_session():
+            for transformation in transformations:
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO transformations (
+                            transformation_id, input_ids, output_ids, operator, tool,
+                            tool_version, parameters, timestamp, result, justification
+                        ) VALUES (
+                            :transformation_id, CAST(:input_ids AS JSONB),
+                            CAST(:output_ids AS JSONB), :operator, :tool,
+                            :tool_version, CAST(:parameters AS JSONB),
+                            :timestamp, :result, :justification
+                        )
+                        ON CONFLICT (transformation_id) DO NOTHING
+                        """
+                    ),
+                    {
+                        "transformation_id": transformation.get("transformation_id"),
+                        "input_ids": json.dumps(transformation.get("input_ids") or []),
+                        "output_ids": json.dumps(transformation.get("output_ids") or []),
+                        "operator": transformation.get("operator"),
+                        "tool": transformation.get("tool"),
+                        "tool_version": transformation.get("tool_version"),
+                        "parameters": json.dumps(transformation.get("parameters") or {}),
+                        "timestamp": _parse_timestamp(transformation.get("timestamp")),
+                        "result": transformation.get("result") or "success",
+                        "justification": transformation.get("justification"),
+                    },
+                )
+            await session.commit()
+            return True
+    except Exception:  # noqa: BLE001 - §25.2: the delivery outlives its lineage
+        return False
+    return False

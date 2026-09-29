@@ -11,8 +11,12 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import text
 
-from app.api.v1.requests.pipeline_persistence import persist_pipeline_delivery
+from app.api.v1.requests.pipeline_persistence import (
+    persist_pipeline_delivery,
+    persist_transformations,
+)
 from app.domain.value_objects.ulid import ULID
+from app.knowledge.provenance.stage_transformations import build_transformations
 from app.storage.database.engine import create_engine
 from app.storage.database.session import reset_session_maker
 
@@ -67,8 +71,14 @@ def _payload(request_id: str) -> dict:
 
 
 async def _persist(payload: dict) -> tuple[bool, list[str], dict]:
-    """Replay one delivery payload through the persistence helper."""
-    return await persist_pipeline_delivery(
+    """Replay one delivery payload through the persistence helpers.
+
+    Since L2.3 the §12.1 lineage is written by the pipeline through
+    ``persist_transformations`` (one row per real stage, C11) instead of a
+    single generic row inside ``persist_pipeline_delivery``: a replay test must
+    therefore exercise both, exactly as a run does.
+    """
+    result = await persist_pipeline_delivery(
         payload["request_id"],
         payload["objective"],
         payload["delivery_status"],
@@ -77,6 +87,10 @@ async def _persist(payload: dict) -> tuple[bool, list[str], dict]:
         payload["evidence"],
         payload["step_results"],
     )
+    transformations = payload.get("transformations")
+    if transformations:
+        await persist_transformations(transformations, request_id=payload["request_id"])
+    return result
 
 
 async def _counts(db_url: str, ids: dict[str, str]) -> dict[str, int]:
@@ -149,13 +163,25 @@ class TestReplayIdempotence:
         assert counts["sources"] == 1
 
     async def test_replay_keeps_the_lineage_traceable(self, db_url: str) -> None:
-        """Each replay records a transformation row referencing the same unit."""
+        """Each replay records the same §12.1 stages: idempotent, never lost."""
         payload = _payload(ULID.new("REQ_"))
+        transformations = build_transformations(
+            request_id=payload["request_id"],
+            objective=payload["objective"],
+            sources=payload["sources"],
+            information_units=payload["information_units"],
+            evidence=payload["evidence"],
+        )
+        payload["transformations"] = transformations
+
         await _persist(payload)
         first = (await _counts(db_url, payload["_ids"]))["transformations"]
         assert first >= 1
+
         await _persist(payload)
-        assert (await _counts(db_url, payload["_ids"]))["transformations"] >= first
+        # §12.1/C11 — the same stage rows replay onto themselves (ON CONFLICT DO
+        # NOTHING), so a retry adds no duplicate lineage.
+        assert (await _counts(db_url, payload["_ids"]))["transformations"] == first
 
     async def test_distinct_requests_are_stored_separately(self, db_url: str) -> None:
         """Idempotence is per identifier: another request adds its own rows."""
