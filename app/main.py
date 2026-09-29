@@ -11,6 +11,7 @@ from fastapi import FastAPI
 # app/api/v1/router.py is kept intact but no longer used by main.py.
 from app.api.v1.accounts.router import router as accounts_router
 from app.api.v1.agents.router import router as agents_router
+from app.api.v1.artifacts.router import router as artifacts_router
 from app.api.v1.auth.router import router as auth_router
 from app.api.v1.confidence.router import router as confidence_router
 from app.api.v1.conflicts.router import router as conflicts_router
@@ -94,6 +95,7 @@ app.include_router(requests_router, prefix="/v1")
 app.include_router(progress_router, prefix="/v1")
 app.include_router(usage_router, prefix="/v1")
 app.include_router(agents_router, prefix="/v1")
+app.include_router(artifacts_router, prefix="/v1")
 app.include_router(sources_router, prefix="/v1")
 app.include_router(information_router, prefix="/v1")
 app.include_router(evidence_router, prefix="/v1")

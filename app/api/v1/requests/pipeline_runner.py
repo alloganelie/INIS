@@ -9,8 +9,9 @@ import time
 from typing import Any, AsyncGenerator
 
 from app.agents.runtime.lifecycle import GRACEFUL_EXPIRY_STATUS, RequestLifecycle
+from app.artifacts.delivery.delivery_service import deliver_artifacts
 from app.domain.value_objects.ulid import ULID
-from app.core.statuses import resolve_delivery_status
+from app.core.statuses import CANCELLED_STATUS, resolve_delivery_status
 from app.core.logging import get_logger
 from app.core.version import API_VERSION
 from app.planning.limits import (
@@ -51,6 +52,25 @@ CACHE_NS_PAGE_FETCH = "page_fetch"
 #: ``ConcurrencyLimiter`` live in :mod:`app.planning.limits`; the names below
 #: are re-exported so existing importers keep working.
 
+#: §15.1 — extraction confidence of a fact read from the full page vs snippet.
+_FULL_TEXT_CONFIDENCE = 0.9
+_SNIPPET_CONFIDENCE = 0.6
+
+
+def _fact_confidence(fact: dict[str, Any], full_text: bool) -> float:
+    """Return the 0..1 extraction confidence of one extracted fact (§15.1).
+
+    The extractor does not measure confidence itself, so the pipeline states
+    the only signal it honestly owns: whether the sentence was read from the
+    fetched document or from a search result snippet.
+    """
+    raw = fact.get("confidence")
+    if isinstance(raw, dict):
+        raw = raw.get("score")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return _FULL_TEXT_CONFIDENCE if full_text else _SNIPPET_CONFIDENCE
+    return max(0.0, min(1.0, float(raw)))
+
 
 class PipelineRunner:
     """Orchestrates request processing across understanding, planning, coordinator, and confidence."""
@@ -62,6 +82,8 @@ class PipelineRunner:
         self._event_history: dict[str, list[dict[str, Any]]] = {}
         self._subscribers: dict[str, list[asyncio.Queue[dict[str, Any]]]] = {}
         self._running: set[str] = set()
+        #: §1.3 — requests cancelled by the requester (cooperative stop).
+        self._cancelled: set[str] = set()
         self._lifecycles: dict[str, RequestLifecycle] = {}
         self._guards: dict[str, BudgetGuard] = {}
         self._llm_traces: LLMTraceWriter = LLMTraceWriter()
@@ -192,6 +214,7 @@ class PipelineRunner:
         self._event_history.clear()
         self._subscribers.clear()
         self._running.clear()
+        self._cancelled.clear()
         self._lifecycles.clear()
         self._guards.clear()
         self._trace_step_ids.clear()
@@ -215,6 +238,50 @@ class PipelineRunner:
     def is_running(self, request_id: str) -> bool:
         """Check if pipeline is actively running for a request."""
         return request_id in self._running
+
+    # -- §1.3 / §32 cancellation ----------------------------------------
+
+    def is_cancelled(self, request_id: str) -> bool:
+        """Return ``True`` when the requester cancelled the request (§1.3)."""
+        return request_id in self._cancelled
+
+    def cancel(self, request_id: str) -> dict[str, Any]:
+        """Cancel a request and return its updated state (§1.3 ``CANCELLED``).
+
+        Cancellation is cooperative and idempotent: the state, the §41.1
+        lifecycle and the SSE stream are updated immediately, while a run
+        already in flight stops at its next step boundary instead of being
+        killed mid-write. Cancelling twice returns the same ``CANCELLED``
+        state, so the endpoint never depends on the caller's timing.
+        """
+        cancelled_at = datetime.now(timezone.utc).isoformat()
+        state = dict(self._run_states.get(request_id, {}))
+        state.update(
+            {
+                "status": CANCELLED_STATUS,
+                "current_step": "cancelled",
+                "request_id": request_id,
+                "cancelled_at": cancelled_at,
+            }
+        )
+        self._run_states[request_id] = state
+        self._cancelled.add(request_id)
+        self._running.discard(request_id)
+        lifecycle = self._lifecycles.get(request_id)
+        if lifecycle is not None:
+            # §41.1 — the cancellation is a committed step, so a resume
+            # projection reports where the run actually stopped.
+            lifecycle.commit_step("CANCELLED", {"cancelled_at": cancelled_at})
+        self._emit_event(
+            request_id,
+            {
+                "step": "cancelled",
+                "status": CANCELLED_STATUS,
+                "request_id": request_id,
+                "timestamp": cancelled_at,
+            },
+        )
+        return state
 
     # -- §41.1 lifecycle ------------------------------------------------
 
@@ -512,7 +579,7 @@ class PipelineRunner:
                 while True:
                     event = await queue.get()
                     yield f"data: {json.dumps(event)}\n\n"
-                    if event.get("step") in ("delivering", "completed", "failed"):
+                    if event.get("step") in ("delivering", "completed", "failed", "cancelled"):
                         break
             finally:
                 if request_id in self._subscribers and queue in self._subscribers[request_id]:
@@ -829,6 +896,11 @@ class PipelineRunner:
             reliability_scorer = SourceReliabilityScorer()
 
             for step in steps_to_run:
+                # §1.3 — a cancelled request stops at the next step boundary
+                # instead of continuing acquisition for nobody.
+                if self.is_cancelled(request_id):
+                    execution_status = CANCELLED_STATUS
+                    break
                 action = step.get("action", "")
                 inputs = step.get("inputs", {})
                 # Derive the search query from step inputs or the objective
@@ -890,7 +962,19 @@ class PipelineRunner:
                                     document_id=doc_id,
                                     url=url,
                                 )
-                                web_facts.extend(facts)
+                                # §24.1 — a finding carries its own extraction
+                                # confidence: a fact read from the full page is
+                                # stronger material than one read from a search
+                                # snippet, and the §15 extraction dimension must
+                                # be able to tell the two apart.
+                                web_facts.extend(
+                                    {
+                                        **fact,
+                                        "confidence": _fact_confidence(fact, page_text),
+                                        "evidence_ids": [fact.get("evidence_id")],
+                                    }
+                                    for fact in facts
+                                )
                             except Exception:
                                 pass
 
@@ -904,6 +988,10 @@ class PipelineRunner:
                                 "reliability_score": rel_score,
                                 "search_score": result.score,
                                 "source_type": "web",
+                                # §15.1 — the acquisition instant feeds the
+                                # freshness dimension; an ISO 8601 UTC stamp,
+                                # never a guessed publication date.
+                                "retrieved_at": datetime.now(timezone.utc).isoformat(),
                             })
                             step_output_snippets.append(
                                 f"[{result.title}] {snippet}"
@@ -979,56 +1067,12 @@ class PipelineRunner:
         lifecycle.commit_step("DATA_ACQUISITION", {"facts": len(web_facts), "results": len(step_results)})
 
         # -------------------------------------------------------------
-        # Stage 4: Confidence Evaluation (with graceful degradation)
+        # Stage 3.5: Information units & evidence assembly (§11, §14.2)
         # -------------------------------------------------------------
-        lifecycle.set_step("CONFIDENCE_ASSESSMENT")
-        self._emit_event(request_id, {
-            "step": "confidence",
-            "status": "in_progress",
-            "request_id": request_id,
-        })
-        confidence_score = 0.85
-        confidence_details: dict[str, Any] = {}
-        try:
-            from app.confidence.confidence_scorer import score as score_confidence
-
-            dims = {
-                "source_reliability": 0.88,
-                "source_freshness": 0.90,
-                "extraction_confidence": 0.85,
-                "data_quality": 0.85,
-                "evidence_strength": 0.82,
-                "cross_source_agreement": 0.80,
-                "methodological_consistency": 0.85,
-            }
-            score_dict = score_confidence(dims)
-            confidence_score = float(score_dict.get("confidence_score", 0.85))
-            confidence_details = {
-                "score": confidence_score,
-                "dimensions": dims,
-                "explanation": score_dict.get("explanation"),
-                "not_a_probability": True,
-            }
-            confidence_status = "completed"
-        except Exception as err:
-            confidence_score = 0.80
-            confidence_details = {
-                "score": confidence_score,
-                "dimensions": {},
-                "explanation": f"Fallback confidence scoring: {err}",
-            }
-            confidence_status = f"degraded: {err}"
-
-        self._emit_event(request_id, {
-            "step": "confidence",
-            "status": confidence_status,
-            "request_id": request_id,
-            "confidence_score": confidence_score,
-        })
-
-        # -------------------------------------------------------------
-        # Stage 5: Delivery per §24.1
-        # -------------------------------------------------------------
+        # One unit per traceable web fact, built *before* the confidence stage
+        # because §15 scores what was actually collected. The aggregate internal
+        # unit stays first: it is the synthesis of the run, never a substitute
+        # for the information that was really acquired.
         now_iso = datetime.now(timezone.utc).isoformat()
         inf_id = ULID.new("INF_")
         evid_id = ULID.new("EVID_")
@@ -1042,7 +1086,7 @@ class PipelineRunner:
         if not details_list:
             details_list = [f"Intelligence findings collected for {objective}"]
 
-        information_units = [
+        information_units: list[dict[str, Any]] = [
             {
                 "information_id": inf_id,
                 "type": "text",
@@ -1050,23 +1094,175 @@ class PipelineRunner:
                     "summary": f"Factual intelligence unit regarding {objective}",
                     "details": details_list,
                 },
+                "raw_reference": {"request_id": request_id, "objective": objective},
                 "source_id": "SRC_INTERNAL_PIPELINE",
+                "dataset_id": None,
+                "location": {},
+                "context": {"request_id": request_id, "objective": objective},
+                "language": None,
+                "unit": None,
+                "time": {},
+                "classification": {},
+                "quality": {},
+                "confidence": {"not_a_probability": True},
+                # §0.2/§11 — a delivered unit must state where it comes from, even
+                # when its origin is the run itself: this one names the internal
+                # pipeline source and the derivation that produced it instead of
+                # shipping an empty provenance block.
+                "provenance": {
+                    "source_id": "SRC_INTERNAL_PIPELINE",
+                    "method": "pipeline_synthesis",
+                    "derived_from": "plan_execution",
+                    "request_id": request_id,
+                },
                 "data_stage": "derived",
                 "epistemic_status": "factual",
+                # §18.1 — the stored unit starts its own version chain.
+                "versions": [inf_id],
                 "created_at": now_iso,
+                "updated_at": now_iso,
             }
         ]
+        evidence: list[dict[str, Any]] = []
 
-        evidence = [
-            {
-                "evidence_id": evid_id,
-                "information_id": inf_id,
-                "strength": confidence_score,
-                "excerpt": f"Evidence derived from execution of {len(step_results)} plan steps.",
-                "epistemic_status": "factual",
-                "created_at": now_iso,
+        for fact in web_facts:
+            if not isinstance(fact, dict):
+                continue
+            fact_text = str(
+                (fact.get("content") or {}).get("text")
+                or fact.get("value")
+                or fact.get("statement")
+                or ""
+            ).strip()
+            fact_source = str(fact.get("source_id") or "")
+            # §0.2 invariant 8 — an untraceable fact is never persisted as a
+            # unit: it stays an assumption on the delivery side.
+            if not fact_text or not fact_source.startswith("SRC_"):
+                continue
+            unit_id = str(fact.get("information_id") or ULID.new("INF_"))
+            fact_strength = _fact_confidence(fact, True)
+            raw_reference = dict(fact.get("raw_reference") or {})
+            provenance = dict(fact.get("provenance") or {})
+            if raw_reference.get("url") and "extracted_from" not in provenance:
+                provenance["extracted_from"] = raw_reference["url"]
+            language = fact.get("language") if isinstance(fact.get("language"), str) else None
+            information_units.append(
+                {
+                    "information_id": unit_id,
+                    "type": str(fact.get("type") or "text"),
+                    "content": dict(fact.get("content") or {"text": fact_text}),
+                    "raw_reference": raw_reference,
+                    "source_id": fact_source,
+                    "dataset_id": None,
+                    "location": {},
+                    "context": {"request_id": request_id, "objective": objective},
+                    "language": language,
+                    "unit": fact.get("unit"),
+                    "time": {},
+                    "classification": {},
+                    "quality": {},
+                    "confidence": {"score": fact_strength, "not_a_probability": True},
+                    "provenance": provenance,
+                    "data_stage": str(fact.get("data_stage") or "raw"),
+                    "epistemic_status": str(fact.get("epistemic_status") or "factual"),
+                    # §18.1 — the stored unit starts its own version chain.
+                    "versions": [unit_id],
+                    "created_at": now_iso,
+                    "updated_at": now_iso,
+                }
+            )
+            evidence.append(
+                {
+                    "evidence_id": str(fact.get("evidence_id") or ULID.new("EVID_")),
+                    "information_id": unit_id,
+                    "source_id": fact_source,
+                    "strength": fact_strength,
+                    "excerpt": fact_text[:300],
+                    "provenance": provenance,
+                    "epistemic_status": "factual",
+                    "created_at": now_iso,
+                }
+            )
+
+        if not evidence:
+            # Nothing traceable was acquired: the delivery still states that it
+            # rests on the plan execution and nothing else, with the neutral
+            # strength of "no measured evidence" (0.5) instead of a borrowed one.
+            evidence.append(
+                {
+                    "evidence_id": evid_id,
+                    "information_id": inf_id,
+                    "strength": 0.5,
+                    "excerpt": (
+                        f"Evidence derived from execution of {len(step_results)} plan steps."
+                    ),
+                    "epistemic_status": "factual",
+                    "created_at": now_iso,
+                }
+            )
+
+
+        # -------------------------------------------------------------
+        # Stage 4: Confidence Evaluation (with graceful degradation)
+        # -------------------------------------------------------------
+        lifecycle.set_step("CONFIDENCE_ASSESSMENT")
+        self._emit_event(request_id, {
+            "step": "confidence",
+            "status": "in_progress",
+            "request_id": request_id,
+        })
+        confidence_score = 0.85
+        confidence_details: dict[str, Any] = {}
+        try:
+            from app.confidence.confidence_scorer import score as score_confidence
+            from app.confidence.dimension_inputs import derive as derive_dimensions
+
+            # §15.1 — the 7 dimensions are computed from what this run actually
+            # collected (sources, units, findings, evidence), never from
+            # constants: an empty run no longer scores like a sourced one.
+            derived = derive_dimensions(
+                sources=web_sources,
+                units=information_units,
+                findings=web_facts,
+                evidence=evidence,
+            )
+            dims = derived["dimensions"]
+            score_dict = score_confidence(dims)
+            confidence_score = float(score_dict.get("confidence_score", 0.85))
+            confidence_details = {
+                "score": confidence_score,
+                "dimensions": dims,
+                # §15.3 — the inputs behind each dimension, so a reader can tell
+                # a low score caused by thin material from one caused by
+                # disagreeing sources.
+                "signals": derived["signals"],
+                "explanation": score_dict.get("explanation"),
+                "not_a_probability": True,
             }
-        ]
+            confidence_status = "completed"
+        except Exception as err:
+            confidence_score = 0.0
+            confidence_details = {
+                "score": confidence_score,
+                "dimensions": {},
+                "signals": {},
+                "explanation": f"Fallback confidence scoring: {err}",
+                "not_a_probability": True,
+            }
+            confidence_status = f"degraded: {err}"
+
+        self._emit_event(request_id, {
+            "step": "confidence",
+            "status": confidence_status,
+            "request_id": request_id,
+            "confidence_score": confidence_score,
+        })
+
+        # -------------------------------------------------------------
+        # Stage 5: Delivery per §24.1
+        # -------------------------------------------------------------
+        # ``information_units``/``evidence`` were assembled in Stage 3.5 so the
+        # §15 confidence could score them; Stage 5 only finalizes the payload.
 
         # -- §41.3 language metadata on every delivered unit -------------
         try:
@@ -1104,11 +1300,16 @@ class PipelineRunner:
         summary = f"Synthesized research report for '{objective}'."
         # Seed findings with real web facts extracted in Stage 3 (§0.2-compliant)
         findings: list[Any] = list(web_facts)
+        # §41.12 — the failed-synthesis trace still needs a *model* and a prompt
+        # to be as informative as the successful one.
+        synthesis_prompt = ""
+        synthesis_model = ""
 
         try:
             from app.llm.router.model_router import ModelRouter, LLMTask
 
             router = ModelRouter()
+            synthesis_model = router.route("understanding")
             synthesis_prompt = (
                 f"Réponds en français à la question suivante : {objective}\n\n"
                 f"Faits collectés : {json.dumps(findings, ensure_ascii=False)}\n\n"
@@ -1189,6 +1390,21 @@ class PipelineRunner:
                 request_id=request_id,
                 error=str(err),
             )
+            # §41.2/§41.12 — a failed synthesis is stated, never silent: the
+            # trace shows zero tokens and the exact cause, so an operator (or
+            # a harness) can never mistake it for a served call.
+            self._trace_llm(
+                request_id,
+                phase="synthesis",
+                task_type="understanding",
+                prompt=synthesis_prompt,
+                llm_result={
+                    "model": synthesis_model or "unavailable",
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                },
+                decision_summary=f"call failed; deterministic default summary kept ({err})",
+            )
 
         # ------------------------------------------------------------------
         # §0.2 invariant 8 — separate verified findings from unsourced claims
@@ -1241,8 +1457,12 @@ class PipelineRunner:
         delivery_status = resolve_delivery_status(
             findings=findings, conflicts=len(conflicts)
         )
+        # §1.3 — a cancelled request is reported as CANCELLED, even when it had
+        # already collected verified findings; the requester asked us to stop.
+        if self.is_cancelled(request_id):
+            delivery_status = CANCELLED_STATUS
         # §41.2 — a breached budget is reported explicitly, never silently.
-        if budget_exceeded:
+        elif budget_exceeded:
             delivery_status = BUDGET_EXCEEDED_STATUS
 
         # §41.2 — close the usage report with the measured compute time.
@@ -1355,7 +1575,29 @@ class PipelineRunner:
             },
         }
 
-        # Update metrics & running state
+        # ------------------------------------------------------------------
+        # §24.2 — deliver the files the request asked for (if any).
+        # ``evidence_package`` (the §7 default) attaches no file, so a request
+        # that did not ask for a format keeps exactly the previous behaviour.
+        # A format that cannot be produced (pdf, §4.1) or cannot be stored adds
+        # one explicit limitation (§25.2) instead of failing the delivery.
+        # ------------------------------------------------------------------
+        requested_output = (
+            payload.get("required_output")
+            if isinstance(payload, dict)
+            else getattr(payload, "required_output", None)
+        )
+        artifact_outcome = await deliver_artifacts(
+            request_id=request_id,
+            required_output=requested_output,
+            delivery=delivery_response,
+            information_units=information_units,
+            evidence=evidence,
+            sources=final_sources,
+        )
+        if artifact_outcome.artifacts:
+            delivery_response["artifacts"] = artifact_outcome.artifacts
+        base_limitations.extend(artifact_outcome.limitations)
         duration = time.monotonic() - start_time
         self._runs_count += 1
         self._total_duration += duration

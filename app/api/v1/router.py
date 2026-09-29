@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 from app.api.v1.accounts.router import router as accounts_router
 from app.api.v1.agents.router import router as agents_router
+from app.api.v1.artifacts.router import router as artifacts_router
 from app.api.v1.auth.router import router as auth_router
 from app.api.v1.confidence.router import router as confidence_router
 from app.api.v1.conflicts.router import router as conflicts_router
@@ -35,6 +36,7 @@ router.include_router(requests_router)
 router.include_router(progress_router)
 router.include_router(usage_router)
 router.include_router(agents_router)
+router.include_router(artifacts_router)
 router.include_router(sources_router)
 router.include_router(information_router)
 router.include_router(evidence_router)
@@ -45,4 +47,4 @@ router.include_router(changelog_router)
 router.include_router(metrics_router)
 router.include_router(health_router)
 
-__all__ = ["accounts_router", "router"]
+__all__ = ["accounts_router", "artifacts_router", "router"]
