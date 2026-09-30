@@ -48,6 +48,7 @@ __all__ = [
     "TEXT_MIME_TYPES",
     "IngestionOutcome",
     "ingest_document",
+    "reader_for",
 ]
 
 #: Types read as a table: one unit per record.
@@ -93,6 +94,17 @@ _READERS: dict[str, str] = {
     "application/pdf": "app.tools.files.read_pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "app.tools.files.extract_document",
 }
+
+
+def reader_for(mime_type: str | None) -> str:
+    """Return the §21 reader name that reads *mime_type* (``read_csv``, …).
+
+    Public because the pipeline has to name the tool a ``file_ingest`` step used
+    in the §12.1 lineage: the reader that ran is the tool of the ``raw`` stage,
+    never a generic ``DocumentIngestor`` when a specific one is known.
+    """
+    qualified = _READERS.get(str(mime_type or ""), "app.tools.files.extract_document")
+    return qualified.rsplit(".", 1)[-1]
 
 
 @dataclass

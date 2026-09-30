@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -28,6 +28,11 @@ from app.governance.budget.quotas import (
     Budget,
     BudgetExceeded,
     BudgetGuard,
+)
+from app.knowledge.ingestion.document_ingestor import reader_for
+from app.knowledge.ingestion.request_material import (
+    RequestMaterial,
+    load_request_material,
 )
 from app.knowledge.provenance.stage_transformations import build_transformations
 from app.llm.tracing.llm_trace_writer import LLMTraceWriter
@@ -116,6 +121,106 @@ def _plan_budget(plan: dict[str, Any] | None) -> dict[str, Any]:
         "max_cost": raw.get("max_cost"),
         "max_execution_time_seconds": raw.get("max_execution_time_seconds", 300),
     }
+
+
+def _ingest_step(document: Mapping[str, Any], order: int) -> dict[str, Any]:
+    """Return the §8.4 ``file_ingest`` step of one ingested *document*.
+
+    The step names the §21 reader of the document's MIME type and carries the
+    storage reference, so a reader of the plan can tell which file it will read
+    without running it.
+    """
+    return {
+        "step_id": ULID.new("STEP_"),
+        "order": order,
+        "action": "file_ingest",
+        "tool": reader_for(document.get("mime_type")),
+        "inputs": {
+            "document_id": document.get("document_id"),
+            "file_name": document.get("file_name"),
+            "storage_ref": document.get("storage_ref"),
+            "mime_type": document.get("mime_type"),
+        },
+        "expected_output": "information_unit",
+        "status": "pending",
+    }
+
+
+def _orient_plan(
+    steps: Sequence[dict[str, Any]],
+    material: RequestMaterial,
+    request_type: str,
+) -> list[dict[str, Any]]:
+    """Return *steps* oriented by the material the request already ingested.
+
+    §7/§8.4 — this is where ``request_type`` becomes operative (C4):
+
+    * a ``data``/``source`` request is planned **around its file**: the web
+      acquisition steps are dropped, because the requester said the data was the
+      file it sent — searching the web for it would answer another question;
+    * any other request keeps its steps and gains the ``file_ingest`` steps
+      first, so the file's units join its delivery instead of being ignored.
+
+    Nothing is added when the request ingested nothing: the caller only calls
+    this with material in hand, and a plan is never given a step it cannot run.
+    """
+    ingest_steps = [
+        _ingest_step(document, order)
+        for order, document in enumerate(material.documents, start=1)
+    ]
+    if request_type in ("data", "source"):
+        kept: list[dict[str, Any]] = []
+    else:
+        kept = [dict(step) for step in steps]
+    combined = [*ingest_steps, *kept]
+    for order, step in enumerate(combined, start=1):
+        step["order"] = order
+    return combined
+
+
+def _material_step_result(
+    step: Mapping[str, Any], material: RequestMaterial
+) -> dict[str, Any]:
+    """Return the step result of a real ``file_ingest`` (§9.1, §25.2).
+
+    The step reads back what ingestion already stored for this request. When the
+    request ingested nothing it is ``degraded`` with the reason, never ``done``
+    with an empty output, and it never falls back to a web search.
+    """
+    spec = describe_action("file_ingest")
+    result: dict[str, Any] = {
+        "step_id": step.get("step_id") or ULID.new("STEP_"),
+        "action": "file_ingest",
+        "tools_required": list(spec.tools),
+    }
+    if not material.has_material:
+        result.update({"status": "degraded", "output": "", "error": spec.refusal()})
+        return result
+    result.update(
+        {
+            "status": "done",
+            # §37 — what was read back, with its identifiers; no interpretation.
+            "output": (
+                f"file_ingest : {material.summary()} Documents : "
+                + ", ".join(
+                    str(document.get("file_name") or document.get("document_id"))
+                    for document in material.documents
+                )
+            ),
+            "documents": [
+                {"document_id": document.get("document_id"), "file_name": document.get("file_name")}
+                for document in material.documents
+            ],
+            "datasets": [
+                dataset.get("dataset_id") for dataset in material.datasets
+            ],
+            "information_units": [
+                unit.get("information_id") for unit in material.units
+            ],
+        }
+    )
+    return result
+
 
 
 
@@ -921,6 +1026,25 @@ class PipelineRunner:
         lifecycle.commit_step("PLAN_GENERATION", {"plan_id": plan.get("plan_id") if isinstance(plan, dict) else None})
 
         # -------------------------------------------------------------
+        # Stage 2.5: §9.1 material the request already ingested
+        # -------------------------------------------------------------
+        # An uploaded document is ingested when it arrives (L2.3): its §11 units
+        # and its Dataset are already stored. Reading them back here is what
+        # makes ``request_type`` operative (§7, C4) and what puts ``datasets[]``
+        # in the colis (§24.1) instead of leaving the file's material unused.
+        request_material = await load_request_material(request_id)
+        request_type = str(
+            getattr(payload, "request_type", None)
+            or (payload.get("request_type") if isinstance(payload, dict) else "")
+            or "research"
+        )
+        if request_material.has_documents and isinstance(plan, dict):
+            plan["steps"] = _orient_plan(
+                plan.get("steps", []), request_material, request_type
+            )
+            plan["request_type"] = request_type
+
+        # -------------------------------------------------------------
         # Stage 3: Real web-search execution per §9/§10 (graceful degradation)
         # -------------------------------------------------------------
         lifecycle.set_step("DATA_ACQUISITION")
@@ -941,6 +1065,9 @@ class PipelineRunner:
         # §8.4/§25.2 — plan actions the pipeline cannot execute today. They are
         # collected here so the delivery can name them instead of hiding them.
         degraded_actions: list[str] = []
+        #: §8.4/§9.1 — ``file_ingest`` steps that had nothing to read: the action
+        #: is wired, but *this* request ingested no document.
+        unavailable_ingests: list[str] = []
 
         # §41.13 Safeguard: max_plan_steps
         max_plan_steps_limit = max_plan_steps()
@@ -988,6 +1115,16 @@ class PipelineRunner:
                     break
                 action = step.get("action", "")
                 inputs = step.get("inputs", {})
+                if action == "file_ingest":
+                    # §9.1 — the step reads back the material the request already
+                    # ingested. It is `done` only when there is material to read;
+                    # otherwise it is degraded with the reason, and the step never
+                    # becomes a web search for the string "file_ingest".
+                    ingest_result = _material_step_result(step, request_material)
+                    step_results.append(ingest_result)
+                    if ingest_result.get("status") != "done":
+                        unavailable_ingests.append(action)
+                    continue
                 if not is_web_action(action):
                     # §8.4 — the acquisition stage only knows how to search the
                     # web. Before this guard, *any* action became a web search
@@ -1221,6 +1358,10 @@ class PipelineRunner:
             }
         ]
         evidence: list[dict[str, Any]] = []
+        #: §12.1 — the units the §21 extraction produced, as opposed to the unit
+        #: this pipeline synthesises: the lineage must not credit the extractor
+        #: with material the run wrote itself.
+        fact_unit_ids: list[str] = []
 
         for fact in web_facts:
             if not isinstance(fact, dict):
@@ -1268,6 +1409,7 @@ class PipelineRunner:
                     "updated_at": now_iso,
                 }
             )
+            fact_unit_ids.append(unit_id)
             evidence.append(
                 {
                     "evidence_id": str(fact.get("evidence_id") or ULID.new("EVID_")),
@@ -1298,6 +1440,37 @@ class PipelineRunner:
                 }
             )
 
+
+        # -------------------------------------------------------------
+        # Stage 3.6: §9.1 — the request's own ingested material joins the colis
+        # -------------------------------------------------------------
+        # The units were extracted and stored when the file was uploaded (L2.3).
+        # They are delivered as they are: located (§11 ``location``), traceable to
+        # their document, and never re-attributed to the web extraction that ran
+        # in this request — the §12.1 lineage keeps the two producers apart.
+        datasets: list[dict[str, Any]] = [
+            dict(dataset) for dataset in request_material.datasets
+        ]
+        delivered_unit_ids: set[str] = {
+            str(unit.get("information_id")) for unit in information_units
+        }
+        for unit in request_material.units:
+            if str(unit.get("information_id")) in delivered_unit_ids:
+                continue
+            information_units.append(dict(unit))
+        #: The documents are sources too (§9.1): the colis lists them next to the
+        #: web sources, with the storage reference they were read from.
+        ingested_sources: list[dict[str, Any]] = [
+            {
+                "source_id": document.get("source_id"),
+                "name": document.get("file_name") or document.get("document_id"),
+                "source_type": "file",
+                "url": document.get("storage_ref"),
+                "data_stage": "raw",
+            }
+            for document in request_material.documents
+            if document.get("source_id")
+        ]
 
         # -------------------------------------------------------------
         # Stage 4: Confidence Evaluation (with graceful degradation)
@@ -1576,6 +1749,14 @@ class PipelineRunner:
         base_limitations: list[str] = [
             "Les affirmations sans source_id vérifié sont marquées comme hypothèses §0.2."
         ]
+        # §9.1 — a request that had to read a file (or said its data was the file)
+        # must state why the file's material could not be read, rather than
+        # delivering an empty ``datasets[]`` without explanation.
+        if request_material.limitations and (
+            request_type in ("data", "source")
+            or any(str(step.get("action")) == "file_ingest" for step in steps_to_run)
+        ):
+            base_limitations.extend(request_material.limitations)
         # §33.3 « demande ambiguë » — the ambiguity is stated, never hidden.
         missing_information: list[str] = list(clarifications)
         if missing_information:
@@ -1598,6 +1779,16 @@ class PipelineRunner:
                 + plan_rejection
                 + " Le plan déterministe a été exécuté à la place."
             )
+        if unavailable_ingests:
+            # §8.4/§9.1 — the action *is* wired (unlike ``degraded_actions``): it
+            # is this request that carries no ingested document to read.
+            base_limitations.append(
+                "Étapes « file_ingest » sans matière (§8.4/§9.1) : "
+                + ", ".join(sorted(set(unavailable_ingests)))
+                + " — aucun document n'a été ingéré pour cette requête "
+                "(POST /v1/requests/{request_id}/documents) : l'étape est dégradée, "
+                "aucun contenu de résultat n'est produit (§37)."
+            )
         if degraded_actions:
             base_limitations.append(
                 "Actions planifiées non branchées sur le pipeline (§8.4/§21) : "
@@ -1618,7 +1809,7 @@ class PipelineRunner:
                 "source_type": "internal",
                 "trust_level": 9,
             }
-        ] + web_sources
+        ] + web_sources + ingested_sources
 
         # ------------------------------------------------------------------
         # Constat 1 (B4-bis): Persist to real PostgreSQL when configured
@@ -1644,7 +1835,10 @@ class PipelineRunner:
             "information_units": information_units,
             "evidence": evidence,
             "sources": final_sources,
-            "datasets": [],
+            # §24.1 — the datasets of the documents ingested for this request:
+            # before L2.4 this field was hard-coded to ``[]`` even when a CSV had
+            # been ingested and its Dataset was sitting in PostgreSQL.
+            "datasets": datasets,
             "artifacts": [],
             "transformations": [],
             "conflicts": conflict_payload(conflicts),
@@ -1661,6 +1855,8 @@ class PipelineRunner:
             "provenance": {
                 "pipeline": "PipelineRunner",
                 "request_id": request_id,
+                # §7 — the request type the plan was oriented by (C4).
+                "request_type": request_type,
                 "plan_id": plan.get("plan_id") if isinstance(plan, dict) else None,
                 "steps_executed": len(step_results),
             },
@@ -1706,14 +1902,34 @@ class PipelineRunner:
         # synthesis) are recorded *before* the artifact is built, so the file
         # exported for the client carries them; the `derived` stage is appended
         # once the artifact exists (a file cannot contain its own record, L1).
+        # §12.1 — only the units this run *extracted* belong to the extraction
+        # stage: the file's units were produced by the ingestion reader (their own
+        # rows below) and the aggregate unit was written by this pipeline.
+        fact_unit_id_set = set(fact_unit_ids)
+        extracted_information_units = [
+            unit
+            for unit in information_units
+            if str(unit.get("information_id")) in fact_unit_id_set
+        ]
+        ingested_material: dict[str, Any] | None = (
+            {
+                "documents": list(request_material.documents),
+                "units": list(request_material.units),
+                "readers": request_material.readers,
+            }
+            if request_material.has_material
+            else None
+        )
         transformations = build_transformations(
             request_id=request_id,
             objective=objective,
             sources=final_sources,
-            information_units=information_units,
+            information_units=extracted_information_units,
             evidence=evidence,
             findings=findings,
             model=self._synthesis_model(request_id),
+            ingested=ingested_material,
+            delivered_units=information_units,
         )
         if transformations:
             delivery_response["transformations"] = transformations
@@ -1734,11 +1950,13 @@ class PipelineRunner:
             request_id=request_id,
             objective=objective,
             sources=final_sources,
-            information_units=information_units,
+            information_units=extracted_information_units,
             evidence=evidence,
             findings=findings,
             artifacts=artifact_outcome.artifacts,
             model=self._synthesis_model(request_id),
+            ingested=ingested_material,
+            delivered_units=information_units,
         )
         if derived:
             delivery_response["transformations"] = derived

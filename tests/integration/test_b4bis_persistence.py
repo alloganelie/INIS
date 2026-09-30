@@ -110,8 +110,12 @@ async def test_pipeline_persists_information_units_to_db(db_url: str, monkeypatc
     assert ev_count >= 1
     # §12.1 — one transformation per stage the run really executed, not a single
     # generic TRF_ row (C11): the stages are readable from the row itself.
+    #
+    # The aggregate unit this run synthesises is **not** an extractor output, so
+    # no `normalized` row is claimed when no fact was extracted: a run that
+    # acquired sources and extracted nothing records `raw` and stops there.
     stages = {row["stage"] for row in trf_rows}
-    assert {"raw", "normalized"} <= stages
+    assert "raw" in stages
     assert len(trf_rows) == len(stages), "one row per stage, no duplicate stage"
 
 

@@ -22,6 +22,7 @@ from sqlalchemy import Column, DateTime, MetaData, String, Table, insert, select
 
 from app.domain.value_objects.ulid import ULID
 from app.storage.database.engine import get_default_engine
+from app.storage.repositories.document_repository import documents_table
 from app.storage.repositories.table_repository import (
     JSON_TYPE,
     TableRepository,
@@ -118,6 +119,31 @@ class InformationUnitRepository(TableRepository):
             if source_id:
                 query = query.where(information_units_table.c.source_id == source_id)
             result = await conn.execute(query)
+            return [to_information_response(row) for row in result.mappings().all()]
+
+    @classmethod
+    async def list_for_request(
+        cls, engine: Any, request_id: str, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        """Return the §11 units ingested for *request_id*, newest first.
+
+        §9.1 — a unit belongs to a request through the document it was extracted
+        from: the upload endpoint writes ``document_id`` on every unit it stores,
+        and ``documents`` carries the ``request_id``. That join is what answers
+        "what did this request ingest?" without re-reading the file.
+        """
+        await cls.ensure_table(engine)
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                select(information_units_table)
+                .join(
+                    documents_table,
+                    information_units_table.c.document_id == documents_table.c.id,
+                )
+                .where(documents_table.c.request_id == request_id)
+                .order_by(information_units_table.c.created_at.desc())
+                .limit(limit)
+            )
             return [to_information_response(row) for row in result.mappings().all()]
 
     @classmethod

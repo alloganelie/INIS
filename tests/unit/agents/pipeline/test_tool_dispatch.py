@@ -29,12 +29,15 @@ from app.agents.pipeline.tool_dispatch import (
 )
 from app.tools.registry import ToolRegistry
 
-#: §8.4 actions that the pipeline can execute today (web acquisition only).
-EXECUTABLE_ACTIONS = {"collect_information", "fetch_page"}
+#: §8.4 actions the pipeline can execute today. ``file_ingest`` joined them in
+#: L2.4: it re-reads the §11 units of the documents already ingested for the
+#: request (``app.knowledge.ingestion.request_material``). It is executable and
+#: *conditional*: without an ingested document the step is degraded, never turned
+#: into a web search.
+EXECUTABLE_ACTIONS = {"collect_information", "fetch_page", "file_ingest"}
 
 #: §8.4 actions that are declared but not wired yet, with the reason why.
 KNOWN_GAPS = {
-    "file_ingest",
     "query_database",
     "analyze_dataset",
     "extract_image_content",
@@ -97,10 +100,21 @@ class TestActionVocabulary:
 
         assert executable == EXECUTABLE_ACTIONS
 
-    def test_every_declared_gap_is_really_a_gap(self) -> None:
-        """The list of un-wired actions is deliberate: changing it must be explicit."""
+    def test_a_conditional_action_declares_what_it_needs(self) -> None:
+        """§9.1 — an executable action may still need per-request state."""
+        spec = describe_action("file_ingest")
+
+        assert spec.executable is True
+        assert spec.requires, "a conditional action must state its condition"
+        assert "documents" in spec.requires
+        assert spec.reason, "the un-runnable case must be explainable"
+        assert "aucun document" in spec.refusal()
+
+    def test_the_declared_action_is_the_executed_one(self) -> None:
+        """Control: an executable action is not listed as a gap."""
         gaps = {name for name, spec in ACTIONS.items() if not spec.executable}
 
+        assert "file_ingest" not in gaps
         assert gaps == KNOWN_GAPS
 
     def test_every_action_names_registered_tools(self) -> None:

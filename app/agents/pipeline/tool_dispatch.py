@@ -16,6 +16,12 @@ replaced by invented text. :func:`describe_action` makes the honest answer
 possible: which §21 tools an action needs, whether the pipeline can execute it
 today, and if not, **why** — so a delivery can state a limitation instead of
 inventing a result (§25.2, §37).
+
+``file_ingest`` is executable since L2.3/L2.4: the pipeline re-reads the §11 units
+of the documents already ingested for the request (``app.knowledge.ingestion.
+request_material``). It stays *conditionally* executable — a request that ingested
+no document cannot run it, and that case is named by :attr:`ActionSpec.reason`
+instead of being turned into a web search.
 """
 
 from __future__ import annotations
@@ -59,6 +65,10 @@ class ActionSpec:
     executable: bool
     reason: str | None = None
     web: bool = False
+    #: What the action needs to be able to run (documented for the delivery):
+    #: an executable action may still be un-runnable for *this* request — a
+    #: ``file_ingest`` needs an ingested document, which is per-request state.
+    requires: str | None = None
 
     def refusal(self) -> str:
         """Return the §25.2 sentence explaining why the action cannot run today."""
@@ -91,11 +101,15 @@ ACTIONS: dict[str, ActionSpec] = {
             "read_pdf",
             "extract_document",
         ),
-        executable=False,
+        executable=True,
+        requires=(
+            "un document déjà ingéré pour la requête "
+            "(POST /v1/requests/{request_id}/documents, §9.1)"
+        ),
         reason=(
-            "les lecteurs §21 de fichiers attendent un chemin local, alors qu'un document "
-            "téléversé vit dans S3 sous son storage_ref : la matérialisation puis l'extraction "
-            "des unités §11 ne sont pas encore branchées (lot L2.3)"
+            "aucun document n'a été ingéré pour cette requête : un file_ingest relit "
+            "les unités §11 du document téléversé (POST /v1/requests/{request_id}/documents), "
+            "il ne va pas le chercher sur le réseau"
         ),
     ),
     "query_database": ActionSpec(
