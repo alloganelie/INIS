@@ -23,7 +23,8 @@ utiliser pour toute nouvelle ligne de couverture.
 | L2.3 — un document ingéré devient des unités §11 localisées + un `Dataset` persisté | `a6921ab` | `pytest -q` → **1772 passed / 4 skipped** ; 3 checkers OK ; BC 0 breaking ; `ruff` clean ; `0015` up/down vérifiée |
 | C11/C10 - une `Transformation` par etape reelle (Section 12.1) et fin du `transformations: []` code en dur | `3b7d327` | `pytest -q` -> **1783 passed / 4 skipped** ; 3 checkers OK ; aucune nouvelle erreur ruff |
 | L2.2 (fin) — le plan est contraint par le vocabulaire fermé §8.4 (plan client et plan LLM refusés en amont, la prose n'est plus une action) | `8b13da2` | `pytest -q` → **1802 passed / 4 skipped** ; 3 checkers OK ; `ruff` sans nouvelle erreur |
-| L2.4 — `file_ingest` branché, `request_type` opérant (C4) : la matière ingérée entre dans le colis (`datasets[]`, unités localisées, étages §12.1 de l'ingestion) | `3fde944` | `pytest -q` → **1842 passed / 4 skipped** ; 3 checkers OK ; `ruff` : aucune nouvelle erreur ; critère de sortie L2 (branche fichier) prouvé sur PostgreSQL réel |
+| L2.2 (fin) — C4 : `file_ingest` branché, `request_type` opérant : la matière ingérée entre dans le colis (`datasets[]`, unités localisées, étages §12.1 de l'ingestion) | `3fde944` | `pytest -q` → **1842 passed / 4 skipped** ; 3 checkers OK ; `ruff` : aucune nouvelle erreur ; critère de sortie L2 (branche fichier) prouvé sur PostgreSQL réel |
+| L2.4 — cible explicite des connecteurs fichiers (C3), S3 lu en flux vers un fichier temporaire, `content_type`/`location` réels dans `RawSource.metadata`, plafond unique upload/lecture (`app/core/size_limits.py`) | `a90f385` | `pytest -q` → **1938 passed / 4 skipped** ; 3 checkers OK ; BC 0 breaking ; `ruff` clean sur le lot ; 96 nouveaux tests dont 4 sur MinIO réel |
 
 L1 est **N2 sur le chemin nominal** : `required_output.format="xlsx"` produit un fichier réellement
 stocké dans le conteneur S3, listé par `GET /v1/artifacts?request_id=`, et téléchargé avec un
@@ -35,12 +36,11 @@ L2 est **N2 sur la branche fichier** : un CSV ingéré pour une requête ressort
 un fichier qu'elle a fourni (§7/C4) — `tests/integration/test_request_file_ingestion_e2e.py`.
 
 Détail des cases, preuves, décisions et du reste à faire : `docs/SPEC_CONFORMANCE_PLAN.md` §4 (encadrés L1,
-L2.1, L2.2 et L2.3) et §6 (journal). **Prochain lot : fin de L2 puis L3** — dans l'ordre de valeur :
-(1) `artifact_lineage` (le colis porte désormais de vrais `DATA_`/`TRF_` à référencer) ; (2) items
-**L2.4** restants (cible explicite des connecteurs fichiers, S3 en streaming, `content_type`/`location`
-dans `RawSource.metadata`) ; (3) **L2.5** PostgreSQL lecture seule (`postgres_query`, route depuis
-`request_type="data"`) puis **L2.6** PDF/image ; (4) `ChunkedDatasetProcessor` (ADR 007) ; (5) **L3** —
-cycle de vie RAW→DERIVED et embeddings (§12, §16, C12 : la table `embeddings` est vide).
+L2.1, L2.2, L2.3 et L2.4) et §6 (journal). **Prochain lot : fin de L2 puis L3** — dans l'ordre de valeur :
+(1) `artifact_lineage` (le colis porte désormais de vrais `DATA_`/`TRF_` à référencer) ; (2) **L2.5**
+PostgreSQL lecture seule (`postgres_query`, route depuis `request_type="data"`) puis **L2.6** PDF/image ;
+(3) `ChunkedDatasetProcessor` (ADR 007) ; (4) **L3** — cycle de vie RAW→DERIVED et embeddings
+(§12, §16, C12 : la table `embeddings` est vide).
 
 ## PHASE-05.4 — Temporary ownership exception
 
@@ -147,6 +147,9 @@ uvicorn, clés réelles) est à **63/63 PASS, 0 FAIL**.
 | 13 | `ToolRegistry` n'était **jamais peuplé** : les 35 outils §21 existaient mais aucun plan ne pouvait les atteindre (C5) | §21, §8.4 | L2.2 (`066ac1b`) : `app/agents/pipeline/tool_dispatch.py` enregistre les 35 (0 indisponible), avec vocabulaire d'actions fermé et `executable`/raison par action |
 | 14 | Un fichier téléversé **n'était jamais lu** : la réponse annonçait `information_units: []` et le contenu restait un blob dans S3 (§36.6 restait à moitié satisfait) | §9.1, §11, §36.7 | L2.3 (`a6921ab`) : `document_ingestor.py` produit une unité §11 par enregistrement ou par section, chacune localisée (`kind=row`/`kind=section`), plus le `Dataset` correspondant ; persistées et lisibles via `GET /v1/information/{id}` |
 | 15 | Le `Dataset` d'un fichier pointait sur un chemin `file://` **temporaire** (mort dès la fin de la lecture) et `information_units` n'avait **ni `dataset_id` ni `location`** | §11, §18.1, §27 | L2.3 (`a6921ab`) : migration `0015` (`datasets.storage_ref`, `datasets.request_id`, `information_units.dataset_id`, `information_units.location`) ; le dataset est reconstruit avec la référence objet |
+| 16 | Le plafond de taille n'était appliqué qu'à l'**entrée HTTP** : ce qu'INIS va chercher lui-même (fichier local, objet S3) entrait sans passer par le quota | §41.2, §41.13, §9.1 | L2.4 (`a90f385`) : `app/core/size_limits.py` borne les **deux** directions, le plus strict gagne ; l'objet trop gros est refusé **avant** le transfert puis vérifié pendant le flux (`tests/unit/storage/test_s3_stream_download.py`) |
+| 17 | `_read_local` **enveloppait** `FileNotFoundError` dans une `InfrastructureError` : l'erreur d'origine (donc le nom du fichier) était perdue | §25.2, §9.1 | L2.4 (`a90f385`) : l'erreur est propagée telle quelle — deux tests d'intégration existants attendaient déjà ce contrat |
+| 18 | Un connecteur pointé sur un fichier du **mauvais type** répondait « aucun candidat » : « pas trouvé » et « pas mon format » étaient indiscernables, et l'acquisition vide ne disait pas pourquoi | §9.1, §25.2 | L2.4 (`a90f385`) : en mode cible explicite le refus est **nommé** (`ValidationError`, « ne lit que … ») — `tests/unit/connectors/test_connector_explicit_location.py` |
 
 ### Suites de tests remplies (lacune n°12 ci-dessus, partiellement soldée)
 

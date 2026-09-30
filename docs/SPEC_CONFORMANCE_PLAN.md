@@ -72,7 +72,7 @@ Relevé du 2026-09-29 sur `3ac6c73` (+ constat que `app/artifacts/**` est un
 |---|---|---|---|
 | C1 | `UploadFile` : **0 occurrence** dans `app/` → aucun endpoint n'accepte un fichier | grep `UploadFile` | §1.1, §9, §36.6 |
 | C2 | Le pipeline n'importe **aucun** module fichiers/DB/images ; uniquement web | imports de `app/api/v1/requests/pipeline_runner.py` | §8.4, §9.1 |
-| C3 | Connecteurs fichiers = `glob("*.csv")` sur un répertoire local | `app/connectors/files/csv_connector.py:22,40,45,60` | §9.1 |
+| C3 | Connecteurs fichiers = `glob("*.csv")` sur un répertoire local | `app/connectors/files/csv_connector.py:22,40,45,60` | §9.1 — **corrigé en L2.4** (`a90f385`) |
 | C4 | `request_type` validé puis **jamais lu** par le pipeline | `schemas.py:70` vs 0 occurrence dans le runner | §1.1, §7 |
 | C5 | `ToolRegistry` jamais peuplé ; les 35 outils §21 non adressables | seul `GLOBAL_USAGE.register(...)` | §21 |
 | C6 | Le « dispatch » réel est un stub qui **fabrique du texte** | `pipeline_runner.py:1031-1040` (`"Extracted intelligence payload for …"`) | §0.2, §22.3, §37 |
@@ -541,16 +541,21 @@ est identique, et dont le `storage_ref` existe dans S3.
 > Aujourd'hui `CSVConnector.discover()` fait `self._base_path.glob("*.csv")` (C3) : un fichier
 > uploadé ou un objet S3 est invisible.
 
-- [ ] Ajouter un mode « cible explicite » aux connecteurs (`app/connectors/files/*`) :
+> ✅ **Fait le 2026-09-30 (`a90f385`)** — le mode « cible explicite » existe, S3 est lu en
+> flux, et le matériau porte son `content_type`/`location` réels. Détail en §6.
+
+- [x] Ajouter un mode « cible explicite » aux connecteurs (`app/connectors/files/*`) :
   `discover(Query(filters={"location": "s3://…|/abs/path"}))` renvoie exactement ce fichier ;
   conserver le comportement `glob` actuel comme mode par défaut (**non régression** :
   `tests/unit/connectors/test_csv_connector.py` doit rester vert sans modification).
-  *preuve : `tests/unit/connectors/test_connector_explicit_location.py`*
-- [ ] Téléchargement S3 → répertoire de travail temporaire (`object_downloader`), streaming
+  *preuve : `tests/unit/connectors/test_connector_explicit_location.py` (43 tests, les 6 connecteurs)*
+- [x] Téléchargement S3 → répertoire de travail temporaire (`object_downloader`), streaming
   plutôt que `read()` intégral au-delà de `[limits]`.
-  *preuve : `tests/integration/test_connector_from_s3.py`*
-- [ ] `retrieve()` doit conserver `content_type` + `location` réels dans `RawSource.metadata`
-  (indispensable à la localisation §11). *preuve : `tests/unit/connectors/test_raw_source_metadata.py`*
+  *preuve : `tests/integration/test_connector_from_s3.py` (MinIO réel) +
+  `tests/unit/storage/test_s3_stream_download.py` (13 tests : plafond déclaré refusé **avant** le
+  transfert, plafond dépassé en cours de flux, aucun fichier partiel)*
+- [x] `retrieve()` doit conserver `content_type` + `location` réels dans `RawSource.metadata`
+  (indispensable à la localisation §11). *preuve : `tests/unit/connectors/test_raw_source_metadata.py` (36 tests)*
 
 #### L2.5 — PostgreSQL (§36.7) (Devin)
 
@@ -593,9 +598,9 @@ lecture seule ; les tests d'erreur (type refusé, quota, SQL d'écriture) passen
 > | provenance complète | idem : `provenance.request_type`, sources du document dans `sources[]`, `document_id`/`dataset_id` sur chaque unité |
 > | type refusé / quota | `tests/integration/test_document_upload_s3.py::test_an_unsupported_document_never_reaches_the_bucket` (+ tests de quota §41.2 du lot L2.1) |
 >
-> ⚠️ Reste dû pour **clore** L2 : la branche « requête PostgreSQL lecture seule » (lot **L2.5**),
-> le mode « cible explicite » des connecteurs fichiers et le téléchargement S3 en streaming
-> (lot **L2.4**), ainsi que l'extraction PDF/image (lot **L2.6**).
+> ⚠️ Reste dû pour **clore** L2 : la branche « requête PostgreSQL lecture seule » (lot **L2.5**)
+> et l'extraction PDF/image (lot **L2.6**). Le mode « cible explicite » des connecteurs fichiers et
+> la lecture S3 en flux (lot **L2.4**) sont **faits** (`a90f385`).
 
 ---
 
@@ -818,7 +823,8 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 2026-09-29 | Cline (act) | **L2.3** | Ingestion d'un document en unités §11 localisées + `Dataset` persisté : `document_ingestor.py`, `DatasetRepository`, migration `0015` (`datasets.storage_ref`/`request_id`, `information_units.dataset_id`/`location`) | `a6921ab` | `python -m pytest -q` → **1772 passed / 4 skipped** (183,63 s) ; 3 checkers OK ; BC **0 breaking** (31 warnings) ; `ruff` clean (10 corrections auto) ; `0015` appliquée **et** annulée sur la base docker | ✅ — 17 nouveaux tests ; le champ `information_units` de l'upload n'est plus vide. Reste : découpage ADR 007, `Transformation` par étape (§12.1/C11), granularité page/feuille, `artifact_lineage` |
 | 2026-09-29 | Cline (act) | **C11/C10** | Une `Transformation` **par étape réelle** (Section 12.1) : `stage_transformations.py`, plus de `transformations: []` codé en dur, `persist_transformations` remplace la `TRF_` unique | `3b7d327` | `pytest -q` -> **1783 passed / 4 skipped** (168,76 s) ; 3 checkers OK ; `ruff` sur `pipeline_runner.py` : 34 -> 22 erreurs préexistantes (aucune nouvelle) | OK - 11 tests unitaires + 2 tests d'intégration renforcés. Une étape qui n'a rien produit est **absente** (jamais inventée). Reste : les étages d'un run d'ingestion, `artifact_lineage` |
 | 2026-09-30 | Cline (act) | **L2.2 (fin)** | Le plan est **contraint par le vocabulaire fermé §8.4** : `InvalidPlanAction` + `PlanBuilder.validate_step(s)`, plan client **et** plan LLM validés avant exécution, `parse_plan` ne promeut plus la prose en action, le prompt énonce le vocabulaire | `8b13da2` | `pytest -q` → **1802 passed / 4 skipped** (168,95 s) ; 3 checkers OK ; `ruff` sans nouvelle erreur | ✅ 19 nouveaux tests. ⚠️ 4 tests existants documentaient l'ancien contrat et devaient bouger (**acte explicite**) : `test_plan_builder` (actions `search`/`verify` hors vocabulaire), `test_pipeline_guards` (plan `web_search`), `test_plan_parser` (forme exacte d'une étape), `test_no_fabricated_step_output` (un plan inconnu était *exécuté* puis dégradé) — il est désormais **refusé en amont** |
-| 2026-09-30 | Cline (act) | **L2.2 (fin) / L2.4** | `file_ingest` branché et `request_type` **opérant** (C4) : `request_material.py` relit la matière ingérée (documents/datasets/unités localisées), le pipeline exécute l'étape, remplit `datasets[]`, ajoute les sources fichiers, oriente le plan `data`/`source` vers le fichier, et enregistre les étages `raw`/`normalized` de l'ingestion | `3fde944` | `pytest -q` → **1842 passed / 4 skipped** (152,48 s) ; 3 checkers OK ; `ruff` : `pipeline_runner.py` à 22 erreurs préexistantes (aucune nouvelle) | ✅ **C4 fermé** ; moitié « fichier » du critère de sortie L2 prouvée sur PostgreSQL réel (`tests/integration/test_request_file_ingestion_e2e.py`). ⚠️ Fabrication découverte **dans le lignage** : l'unité agrégée du run était attribuée au `FactExtractor` (deux étages `normalized` dès qu'un fichier était livré) → corrigé par un paramètre `delivered_units` distinct ; `test_b4bis_persistence` verrouillait cette attribution et a été corrigé ; `entity.requires` introduit pour les actions exécutables conditionnelles |
+| 2026-09-30 | Cline (act) | **L2.2 (fin)** | `file_ingest` branché et `request_type` **opérant** (C4) : `request_material.py` relit la matière ingérée (documents/datasets/unités localisées), le pipeline exécute l'étape, remplit `datasets[]`, ajoute les sources fichiers, oriente le plan `data`/`source` vers le fichier, et enregistre les étages `raw`/`normalized` de l'ingestion | `3fde944` | `pytest -q` → **1842 passed / 4 skipped** (152,48 s) ; 3 checkers OK ; `ruff` : `pipeline_runner.py` à 22 erreurs préexistantes (aucune nouvelle) | ✅ **C4 fermé** ; moitié « fichier » du critère de sortie L2 prouvée sur PostgreSQL réel (`tests/integration/test_request_file_ingestion_e2e.py`). ⚠️ Fabrication découverte **dans le lignage** : l'unité agrégée du run était attribuée au `FactExtractor` (deux étages `normalized` dès qu'un fichier était livré) → corrigé par un paramètre `delivered_units` distinct ; `test_b4bis_persistence` verrouillait cette attribution et a été corrigé ; `entity.requires` introduit pour les actions exécutables conditionnelles |
+| 2026-09-30 | Cline (act) | **L2.4** | Le mode « cible explicite » (`Query.filters["location"]` : chemin ou `s3://…`) existe dans les 6 connecteurs fichiers, le glob reste le défaut ; S3 est lu **en flux** vers un fichier temporaire nettoyé, refusé sur la taille déclarée **puis** pendant le transfert ; `RawSource.metadata` porte le `content_type` et la `location` réels ; plafond unique `[limits].max_upload_bytes` partagé entre l'upload et la lecture de source (`app/core/size_limits.py`) | `a90f385` | `pytest -q` → **1938 passed / 4 skipped** (374,02 s) ; 3 checkers OK ; BC **0 breaking** (31 warnings BC005) ; `ruff` clean sur les fichiers du lot | ✅ **C3 fermé** (96 nouveaux tests : 43 + 36 + 13 + 4 MinIO réel). ⚠️ Trois pièges corrigés au passage : le quota ne bornait que l'entrée HTTP (P16), `FileNotFoundError` était **enveloppée** donc anonyme (P17), un mauvais suffixe se lisait « aucun candidat » au lieu d'un refus nommé (P18) |
 
 ---
 
@@ -841,6 +847,9 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | P13 | `POST /v1/requests` lance **aussi** un run en tâche de fond (`BackgroundTasks`), et `TestClient` l'exécute de façon **synchrone** | un test qui compte les appels d'un provider voit le run de création *et* le sien : compter après `reset_mock()`, sinon la mesure ne dit rien — ⚠️ **rencontré en L2.4** (`test_request_file_ingestion_e2e.py`) |
 | P14 | L'engine de `get_default_engine()` est **caché par URL** et lié à sa boucle d'événements | un test synchrone (`TestClient`) puis `asyncio.run(...)` réutilisent le même pool à travers deux boucles : `RuntimeError: Event loop is closed` ou un pool qui rend des connexions mortes — poser `INIS_NULL_POOL=1`, `set_default_engine(None)` et créer l'engine **dans la boucle qui l'utilise** — ⚠️ **rencontré en L2.4** |
 | P15 | Une seule ligne de `transformations` par étape §12 n'est **pas** garanti : deux producteurs d'une même étape (acquisition web + lecteur d'un fichier ingéré) produisent légitimement **deux** lignes | un test qui compte « une ligne par étape » interdit la vérité ; vérifier l'unicité par `(stage, tool)` — ⚠️ **découvert en L2.4** (`test_b4bis_persistence.py` verrouillait l'attribution erronée de l'unité agrégée du run au `FactExtractor`) |
+| P16 | Le plafond de taille n'était appliqué qu'à l'**entrée HTTP** (`POST …/documents`), pas à ce qu'INIS va **chercher** lui-même (fichier local, objet S3) | la même donnée entre par le « pull » sans passer par le quota : un knob unique bornant les deux directions, sinon la limite §41.2 est décorative — ⚠️ **corrigé en L2.4** (`app/core/size_limits.py` ; l'objet trop gros est refusé **avant** le transfert, preuve `tests/unit/storage/test_s3_stream_download.py`) |
+| P17 | `_read_local` **enveloppait** `FileNotFoundError` dans une `InfrastructureError` | remplacer l'erreur d'origine cache *quel* fichier manque : dans un contexte multi-sources, l'opérateur ne peut plus distinguer une faute de frappe d'un bug de stockage — ⚠️ **corrigé en L2.4** (l'erreur est propagée telle quelle) |
+| P18 | Un connecteur pointé sur un fichier du **mauvais type** répondait « aucun candidat » | « pas trouvé » et « pas mon format » deviennent indiscernables, et la requête se termine avec une acquisition vide **sans dire pourquoi** ; en mode cible explicite, le refus doit être **nommé** (`ValidationError`) — ⚠️ **corrigé en L2.4** (preuve `tests/unit/connectors/test_connector_explicit_location.py`) |
 
 ---
 
