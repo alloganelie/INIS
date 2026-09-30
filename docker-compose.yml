@@ -32,9 +32,10 @@ x-api-environment: &api-environment
   S3_BUCKET: ${S3_BUCKET:-inis-artifacts}
   S3_REGION: ${S3_REGION:-eu-west-3}
   S3_USE_SSL: "false"
-  # §19 — authentification et secrets.
+  # §19 — authentification et secrets. `INIS_AUTH_ENABLED` vaut true par défaut
+  # en développement : le contrôle d'accès §19.3 doit être exercé, pas contourné.
   JWT_SECRET: ${JWT_SECRET:-dev_only_change_me}
-  INIS_AUTH_ENABLED: ${INIS_AUTH_ENABLED:-false}
+  INIS_AUTH_ENABLED: ${INIS_AUTH_ENABLED:-true}
   INIS_RATE_LIMIT_ENABLED: ${INIS_RATE_LIMIT_ENABLED:-false}
   INIS_RESUME_SECRET: ${INIS_RESUME_SECRET:-dev_only_resume_secret}
   # §9/§22 — recherche web et LLM : laisser vide active les modes dégradés

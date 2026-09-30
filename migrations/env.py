@@ -8,9 +8,17 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+# The migration CLI is a first-class entry point for developers: it reads the
+# same ``.env`` as the API (no-op in production, §19) so that
+# ``docker compose up -d`` + ``make migrate`` work without exporting anything.
+from app.core.env import bootstrap_environment
+
+bootstrap_environment()
 
 config = context.config
-database_url = os.environ.get("DATABASE_URL")
+# ``INIS_DATABASE_URL`` is the canonical variable of the application (§4.2);
+# ``DATABASE_URL`` remains accepted for tools that only know the generic name.
+database_url = os.environ.get("INIS_DATABASE_URL") or os.environ.get("DATABASE_URL")
 if database_url:
     config.set_main_option("sqlalchemy.url", database_url)
 
