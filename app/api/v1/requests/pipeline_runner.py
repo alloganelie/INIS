@@ -1943,6 +1943,35 @@ class PipelineRunner:
         datasets = resolved_dataset_stages(information_units, datasets)
 
         # -------------------------------------------------------------
+        # Stage 3.8: §13.2/§13.3 — the datasets of the colis are checked
+        # -------------------------------------------------------------
+        # A delivery that lists a dataset without saying whether it is complete,
+        # unique and consistent leaves the reader to assume it is clean. The
+        # checks run on the rows already delivered (the §11 units of that
+        # dataset), and their issues join the delivery's limitations: §37
+        # « signaler > inventer » applies to quality as it does to the rest.
+        dataset_quality = None
+        dataset_quality_limits: list[str] = []
+        dataset_quality_missing: list[str] = []
+        try:
+            from app.quality.dataset_quality import assess_datasets
+
+            dataset_quality = await assess_datasets(datasets, information_units)
+            dataset_quality_limits = list(dataset_quality.limitations)
+            dataset_quality_missing = list(dataset_quality.missing_information)
+            for dataset in datasets:
+                block = dataset_quality.datasets.get(str(dataset.get("dataset_id") or ""))
+                if block is not None:
+                    # ``None`` when the rows were not in the colis: not measured
+                    # is not the same as measured and good (§13.3).
+                    dataset["quality_score"] = block.get("quality_score")
+        except Exception as quality_error:  # noqa: BLE001 - §25.2: never lose the colis
+            dataset_quality_limits.append(
+                "Qualité §13.2 non mesurée : les contrôles ont échoué "
+                f"({type(quality_error).__name__}: {quality_error})."
+            )
+
+        # -------------------------------------------------------------
         # Stage 4: Confidence Evaluation (with graceful degradation)
         # -------------------------------------------------------------
         lifecycle.set_step("CONFIDENCE_ASSESSMENT")
@@ -2232,6 +2261,10 @@ class PipelineRunner:
         if database_refusal:
             base_limitations.append(database_refusal)
         base_limitations.extend(database_persistence_limits)
+        # §13.2 — ce que les contrôles qualité des datasets ont trouvé (doublons,
+        # valeurs manquantes, colonnes incohérentes) et, le cas échéant, la raison
+        # pour laquelle ils n'ont pas pu tourner.
+        base_limitations.extend(dataset_quality_limits)
         # §12/§25.2 — what the enrichment of Stage 3.7 could not read: a date
         # whose convention is unknown, an amount behind an ambiguous ``$``, a
         # duplicate that was kept and named. Stating it is the point.
@@ -2260,6 +2293,9 @@ class PipelineRunner:
             base_limitations.extend(database_material.limitations)
         # §33.3 « demande ambiguë » — the ambiguity is stated, never hidden.
         missing_information: list[str] = list(clarifications)
+        # §13.3 — une qualité non mesurée est une information manquante, au même
+        # titre qu'une clarification non obtenue (le colis dit ce qu'il ne sait pas).
+        missing_information.extend(dataset_quality_missing)
         if missing_information:
             base_limitations.append(
                 "Demande ambiguë (§33.3) — informations manquantes : "
@@ -2354,6 +2390,14 @@ class PipelineRunner:
             "transformations": [],
             "conflicts": conflict_payload(conflicts),
             "confidence": confidence_details,
+            # §13.2/§13.3 — les contrôles des datasets livrés et leur score : un
+            # colis qui porte un dataset dit ce qu'il vaut, ou pourquoi il ne l'a
+            # pas mesuré (``quality_score: null``).
+            "quality": (
+                dataset_quality.to_dict()
+                if dataset_quality is not None
+                else {"datasets": {}, "checks": [], "not_a_probability": True}
+            ),
             "limitations": base_limitations,
             "assumptions": assumptions_from_llm,
             "missing_information": missing_information,
