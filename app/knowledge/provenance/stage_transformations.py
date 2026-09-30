@@ -16,7 +16,8 @@ The four stages of §12 are recorded here — but **only those that ran**:
 A file the request already ingested (§9.1) gets its **own** ``raw``/``normalized``
 pair, produced by the §21 reader that read it (``read_csv``…): two producers mean
 two rows, and the file's units are never attributed to the extraction of the web
-material.
+material. A PostgreSQL source read by ``postgres_query`` (§36.7) gets its own pair
+for the same reason — the tool that ran is not a file reader.
 
 A stage with nothing to show is not recorded: a transformation that claims an
 output it never produced would be worse than a missing one (§0.2). Every row
@@ -99,6 +100,7 @@ def build_transformations(
     artifacts: Sequence[dict[str, Any]] = (),
     model: str | None = None,
     ingested: Mapping[str, Any] | None = None,
+    database: Mapping[str, Any] | None = None,
     delivered_units: Sequence[dict[str, Any]] = (),
 ) -> list[dict[str, Any]]:
     """Return the §12.1 transformations of the stages that produced something.
@@ -120,6 +122,10 @@ def build_transformations(
             CSV is not the ``FactExtractor`` that read a web page: one row per
             producer is the truthful lineage, and the file's units are never
             attributed to the extraction of the web material.
+        database: The PostgreSQL read of the request (§36.7): ``service``,
+            ``table``, ``source_ids``, ``unit_ids`` and ``row_count``. Recorded
+            as its own ``raw``/``normalized`` pair for the same reason — the tool
+            that ran is ``postgres_query``, not the ingestion of a file.
         delivered_units: Every unit of the colis, including the ones the run
             synthesised: the ``derived`` stage declares them all as its inputs,
             so a file never contains material its lineage does not mention.
@@ -138,6 +144,11 @@ def build_transformations(
     document_ids = _ids(list(material.get("documents") or ()), "document_id")
     ingested_unit_ids = _ids(list(material.get("units") or ()), "information_id")
     readers = sorted(str(reader) for reader in (material.get("readers") or ()))
+
+    read = database or {}
+    database_source_ids = _unique(str(value) for value in (read.get("source_ids") or ()))
+    database_unit_ids = _unique(str(value) for value in (read.get("unit_ids") or ()))
+    database_tool = str(read.get("tool") or "postgres_query")
 
     candidates = [
         _stage(
@@ -188,10 +199,38 @@ def build_transformations(
             },
         ),
         _stage(
+            stage="raw",
+            request_id=request_id,
+            objective=objective,
+            input_ids=[request_id],
+            output_ids=database_source_ids,
+            operator="PostgresConnector",
+            tool=database_tool,
+            parameters={
+                "service": read.get("service"),
+                "table": read.get("table"),
+                "rows": read.get("row_count"),
+                "origin": "database_query",
+            },
+        ),
+        _stage(
+            stage="normalized",
+            request_id=request_id,
+            objective=objective,
+            input_ids=database_source_ids or [request_id],
+            output_ids=database_unit_ids,
+            operator="DatabaseMaterial",
+            tool=database_tool,
+            parameters={
+                "information_units": len(database_unit_ids),
+                "origin": "database_query",
+            },
+        ),
+        _stage(
             stage="enriched",
             request_id=request_id,
             objective=objective,
-            input_ids=unit_ids or ingested_unit_ids or [request_id],
+            input_ids=unit_ids or ingested_unit_ids or database_unit_ids or [request_id],
             output_ids=evidence_ids,
             operator="ModelRouter",
             tool=model or "synthesis",
@@ -201,7 +240,7 @@ def build_transformations(
             stage="derived",
             request_id=request_id,
             objective=objective,
-            input_ids=_unique([*delivered_ids, *unit_ids, *ingested_unit_ids])
+            input_ids=_unique([*delivered_ids, *unit_ids, *ingested_unit_ids, *database_unit_ids])
             or source_ids
             or [request_id],
             output_ids=artifact_ids,

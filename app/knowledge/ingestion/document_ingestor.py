@@ -27,9 +27,11 @@ Two deliberate limits, stated rather than hidden:
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from app.core.errors import InisError
 from app.domain.entities.dataset import Dataset
@@ -49,6 +51,7 @@ __all__ = [
     "IngestionOutcome",
     "ingest_document",
     "reader_for",
+    "record_units",
 ]
 
 #: Types read as a table: one unit per record.
@@ -172,7 +175,7 @@ def _base_unit(
     unit_type: str,
     content: dict,
     location: dict,
-    document_id: str,
+    document_id: str | None,
     source_id: str,
     request_id: str,
     file_name: str,
@@ -180,8 +183,15 @@ def _base_unit(
     mime_type: str,
     dataset_id: str | None,
     method: str,
+    origin: str = "uploaded_document",
+    raw_reference: Mapping[str, Any] | None = None,
 ) -> InformationUnit:
     """Build one §11 unit, validated by the domain entity.
+
+    ``raw_reference`` and ``origin`` are overridable because a second producer
+    exists since L2.5: a PostgreSQL table read by ``postgres_query`` (§36.7)
+    produces record units located in a *table*, not in an uploaded document, and
+    its lineage must not claim an origin it does not have.
 
     Raises:
         ValidationError: When the unit would violate §11 (no provenance, an
@@ -189,22 +199,23 @@ def _base_unit(
     """
     information_id = ULID.new("INF_")
     now = _now()
+    raw = dict(raw_reference) if raw_reference is not None else {
+        "document_id": document_id,
+        "file_name": file_name,
+        "storage_ref": storage_ref,
+        "mime_type": mime_type,
+    }
+    raw["location"] = location
     unit = InformationUnit(
         information_id=information_id,
         type=unit_type,
         content=content,
-        raw_reference={
-            "document_id": document_id,
-            "file_name": file_name,
-            "storage_ref": storage_ref,
-            "mime_type": mime_type,
-            "location": location,
-        },
+        raw_reference=raw,
         source_id=source_id,
         document_id=document_id,
         dataset_id=dataset_id,
         location=location,
-        context={"request_id": request_id, "origin": "uploaded_document"},
+        context={"request_id": request_id, "origin": origin},
         language=None,
         unit=None,
         time={},
@@ -226,19 +237,29 @@ def _base_unit(
     return unit
 
 
-def _record_units(
+def record_units(
     *,
     rows: list[dict],
     dataset: Dataset,
-    document_id: str,
     source_id: str,
     request_id: str,
-    file_name: str,
-    storage_ref: str,
-    mime_type: str,
+    document_id: str | None = None,
+    file_name: str = "",
+    storage_ref: str = "",
+    mime_type: str = "",
+    method: str | None = None,
+    origin: str = "uploaded_document",
+    raw_reference: Mapping[str, Any] | None = None,
 ) -> list[dict]:
-    """Return one §11 ``record`` unit per row, each with its row locator."""
-    method = _READERS.get(mime_type, "app.tools.files.read_csv")
+    """Return one §11 ``record`` unit per row, each with its row locator.
+
+    Public since L2.5 because two producers build record units: the ingestion of
+    an uploaded document (§9.1) and the read of a PostgreSQL table (§36.7). Both
+    need the same localisation and the same §11 validation, and each keeps its own
+    ``method``/``origin`` so the §12.1 lineage can tell which one ran — an
+    aggregate unit attributed to the wrong producer is a fabrication (§0.2).
+    """
+    method = method or _READERS.get(mime_type, "app.tools.files.read_csv")
     units: list[dict] = []
     for index, row in enumerate(rows, start=1):
         location = {
@@ -260,6 +281,8 @@ def _record_units(
                 mime_type=mime_type,
                 dataset_id=dataset.dataset_id,
                 method=method,
+                origin=origin,
+                raw_reference=raw_reference,
             ).model_dump(mode="json")
         )
     return units
@@ -368,7 +391,7 @@ def ingest_document(
                 dataset_id=dataset.dataset_id,
             )
             outcome.dataset = dataset.model_dump(mode="json")
-            outcome.units = _record_units(
+            outcome.units = record_units(
                 rows=rows,
                 dataset=dataset,
                 document_id=document_id,

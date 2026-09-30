@@ -73,14 +73,14 @@ Relevé du 2026-09-29 sur `3ac6c73` (+ constat que `app/artifacts/**` est un
 | C1 | `UploadFile` : **0 occurrence** dans `app/` → aucun endpoint n'accepte un fichier | grep `UploadFile` | §1.1, §9, §36.6 |
 | C2 | Le pipeline n'importe **aucun** module fichiers/DB/images ; uniquement web | imports de `app/api/v1/requests/pipeline_runner.py` | §8.4, §9.1 |
 | C3 | Connecteurs fichiers = `glob("*.csv")` sur un répertoire local | `app/connectors/files/csv_connector.py:22,40,45,60` | §9.1 — **corrigé en L2.4** (`a90f385`) |
-| C4 | `request_type` validé puis **jamais lu** par le pipeline | `schemas.py:70` vs 0 occurrence dans le runner | §1.1, §7 |
-| C5 | `ToolRegistry` jamais peuplé ; les 35 outils §21 non adressables | seul `GLOBAL_USAGE.register(...)` | §21 |
-| C6 | Le « dispatch » réel est un stub qui **fabrique du texte** | `pipeline_runner.py:1031-1040` (`"Extracted intelligence payload for …"`) | §0.2, §22.3, §37 |
+| C4 | `request_type` validé puis **jamais lu** par le pipeline | `schemas.py:70` vs 0 occurrence dans le runner | §1.1, §7 — **corrigé en L2.2** (`3fde944`) : le plan est orienté par `request_type`
+| C5 | `ToolRegistry` jamais peuplé ; les 35 outils §21 non adressables | seul `GLOBAL_USAGE.register(...)` | §21 — **corrigé en L2.2** (`066ac1b`) |
+| C6 | Le « dispatch » réel est un stub qui **fabrique du texte** | `pipeline_runner.py:1031-1040` (`"Extracted intelligence payload for …"`) | §0.2, §22.3, §37 — **corrigé en L2.2** (`066ac1b`) : l'étape est dégradée avec sa cause |
 | C7 | `app/artifacts/{delivery,generators,packager}/` + `app/api/v1/artifacts/` = dossiers vides | `dir(app.artifacts.generators) == []`, `git ls-files` vide | §24.2, §24.3 |
 | C8 | Aucun ORM/repository `artifact` ; `app/storage/models/` = `account.py` seul | listing | §24.2, §27 |
 | C9 | Table `artifacts` (migration `0005:41-58`) **sans `request_id` ni `created_at`** | `migrations/versions/0005_create_remaining_core_tables.py` | §24.2, §32 |
-| C10 | Colis §24.1 : `datasets`/`artifacts`/`transformations` **codés en dur à `[]`** | `pipeline_runner.py:1531-1533` | §24.1 |
-| C11 | Une **seule** `TRF_` par run, operator générique `PipelineRunner`, jamais projetée | `pipeline_persistence.py:223-262` | §12.1, §24.1 |
+| C10 | Colis §24.1 : `datasets`/`artifacts`/`transformations` **codés en dur à `[]`** | `pipeline_runner.py:1531-1533` | §24.1 — **corrigé en L1/L2.3** (`7c1bba2`, `a6921ab`, `3fde944`) |
+| C11 | Une **seule** `TRF_` par run, operator générique `PipelineRunner`, jamais projetée | `pipeline_persistence.py:223-262` | §12.1, §24.1 — **corrigé** (`3b7d327`) : une transformation par étape réellement exécutée |
 | C12 | `app/knowledge/embedding/` et `app/knowledge/enrichment/` vides → `embeddings` jamais alimentée | listing | §12, §16 |
 | C13 | `memory_checker`, `HybridSearch`, `VectorSearch`, `ChunkedDatasetProcessor` : **aucun consommateur** | grep global | §16.2, §17, §41.6 |
 | C14 | Frontend : `api/artifacts.ts` appelle déjà `GET /artifacts?request_id=` (fallback silencieux) → endpoint absent | `frontend/src/api/artifacts.ts` | §24.2, §31 |
@@ -479,8 +479,10 @@ est identique, et dont le `storage_ref` existe dans S3.
   `tests/agentic/test_file_ingest_delivery.py::TestTheOtherRequestTypesKeepTheirPlan` (unitaire, sans
   Docker) et `tests/integration/test_request_file_ingestion_e2e.py::test_a_data_request_does_not_search_the_web_for_its_own_file`
   (PostgreSQL réel : **zéro** appel de recherche pour une requête `data` dont le fichier est ingéré).
-  ⚠️ `postgres_query` reste dû (**L2.5**) : `request_type="data"` oriente vers `file_ingest` tant que la
-  base lecture seule n'existe pas.
+  ⚠️ `postgres_query` était dû ici (**L2.5**) : `request_type="data"` oriente vers `file_ingest`
+  tant que la base lecture seule n'existe pas — ✅ **fait le 2026-09-30** (`7476a14` + L2.5b) : une
+  préférence `postgres:` nommée par la requête oriente désormais le plan vers `query_database`, et
+  les deux sources peuvent coexister (l'ingestion du fichier *et* la lecture de la base).
 
 #### L2.3 — Datasets réels et traçabilité (§11, §12, §27)
 
@@ -559,17 +561,49 @@ est identique, et dont le `storage_ref` existe dans S3.
 
 #### L2.5 — PostgreSQL (§36.7) (Devin)
 
-- [ ] Exposer l'outil `postgres_query` **en lecture seule** : liste blanche
+> ✅ **Fait le 2026-09-30 (`7476a14` + L2.5b)** — l'outil est en lecture seule stricte, les
+> identifiants viennent du vault, et la source nommée par la requête entre dans le colis.
+> Détail en §6.
+
+- [x] Exposer l'outil `postgres_query` **en lecture seule** : liste blanche
   `SELECT`/`WITH`, refus de toute écriture DDL/DML, `LIMIT` forcé, `statement_timeout`,
   connexion par identifiants du **vault** (§41.4, `app/security/vault/credential_vault.py`) —
   **jamais** de DSN dans la requête client.
-  *preuve : `tests/unit/tools/test_postgres_query_readonly.py` (SELECT OK ; `UPDATE`/`DROP` refusés)*
-- [ ] Étape de plan `database_query` déclenchée par `request_type="data"` +
-  `constraints.source_preferences=["postgres:…"]`, résultat converti en `Dataset` + unités
-  (même chemin que L2.3). *preuve : `tests/integration/test_postgres_query_e2e.py`*
-- [ ] `PostgresConnector` : compléter les méthodes encore stub (`AGENT_STATUS.md`, dette PHASE-11 :
+  *preuve : `tests/unit/tools/test_postgres_query_readonly.py` (36 tests : `SELECT` OK ;
+  `UPDATE`/`DROP`/CTE d'écriture/empilement refusés ; `SET TRANSACTION READ ONLY` +
+  `SET LOCAL statement_timeout` observés ; DSN refusé par son nom, sans écho du secret)*
+  — commit `7476a14`
+- [x] Étape de plan `query_database` déclenchée par `request_type="data"` +
+  `constraints.source_preferences=["postgres:<credential_ref>[#table]"]`, résultat converti en
+  `Dataset` + unités (même chemin que L2.3). *preuve :
+  `tests/integration/test_request_database_read_e2e.py` (PostgreSQL réel : `datasets[]` non vide,
+  unités localisées en `row`, source de type `database`, étages §12.1 `postgres_query`, zéro
+  recherche web) + `tests/agentic/test_database_read_delivery.py` (24 tests : deux sources détenues
+  par la même requête, échec nommé, aucune recherche de remplacement) +
+  `tests/unit/knowledge/test_database_material.py` (32) +
+  `tests/unit/connectors/test_postgres_source_target.py` (28)*
+- [x] `PostgresConnector` : compléter les méthodes encore stub (`AGENT_STATUS.md`, dette PHASE-11 :
   « read/write encore stub ») ou documenter précisément ce qui reste hors périmètre.
-  *preuve : `tests/integration/test_postgres_connector_real.py`*
+  *preuve : `tests/unit/connectors/test_postgres_connector.py` (10 tests : `discover` ne fabrique
+  aucun candidat, `retrieve` lie `LIMIT`, `write` insère en paramètres liés, `health_check`
+  nomme une base injoignable) — les méthodes ne sont plus des stubs ; le connecteur reste
+  l'outil **interne** (DSN fourni par le déploiement) alors que le **chemin requête** passe par
+  `postgres_query` + vault, seule voie ouverte à un client*
+- [x] (L2.5b) La source nommée est lue **sur son propre DSN** : `postgres_query` n'est jamais
+  appelé avec l'engine d'INIS (`INIS_DATABASE_URL`), sinon les lignes lues seraient celles
+  d'INIS sous une provenance annonçant la base du client.
+  *preuve : `tests/unit/knowledge/test_database_material.py::TestWhichDatabaseIsRead`*
+- [x] (L2.5b) Le `DATA_` livré existe en base (`DatasetRepository`) : un identifiant publié dans
+  `datasets[]` doit être consultable via l'API, comme celui d'un fichier ingéré.
+  *preuve : `tests/integration/test_request_database_read_e2e.py::test_the_delivered_dataset_is_consultable`*
+- [x] (L2.5b) Les **deux sources détenues** par une même requête (`data` + fichier ingéré + base
+  nommée) sont lues : orienter le plan sur la base ne retire que les étapes **web**.
+  *preuve : `tests/agentic/test_database_read_delivery.py::TestBothOwnedSourcesCoexist`*
+
+> **Ce qui reste hors périmètre de L2.5** : le *choix* de la table dans une base à plusieurs
+> tables se fait par la préférence (`#<table>`) — sans table nommée, INIS **liste** les tables du
+> schéma `public` et le déclare, plutôt que de lire une table au hasard ; les jointures/`SELECT`
+> libres ne sont pas exposés au client (aucune requête SQL dans la requête HTTP, §1.2/§19).
 
 #### L2.6 — Images et documents non structurés (Codex)
 
@@ -598,9 +632,21 @@ lecture seule ; les tests d'erreur (type refusé, quota, SQL d'écriture) passen
 > | provenance complète | idem : `provenance.request_type`, sources du document dans `sources[]`, `document_id`/`dataset_id` sur chaque unité |
 > | type refusé / quota | `tests/integration/test_document_upload_s3.py::test_an_unsupported_document_never_reaches_the_bucket` (+ tests de quota §41.2 du lot L2.1) |
 >
-> ⚠️ Reste dû pour **clore** L2 : la branche « requête PostgreSQL lecture seule » (lot **L2.5**)
-> et l'extraction PDF/image (lot **L2.6**). Le mode « cible explicite » des connecteurs fichiers et
-> la lecture S3 en flux (lot **L2.4**) sont **faits** (`a90f385`).
+> ⚠️ Reste dû pour **clore** L2 : l'extraction PDF/image (lot **L2.6**). La branche « requête
+> PostgreSQL lecture seule » (lot **L2.5**), le mode « cible explicite » des connecteurs fichiers
+> et la lecture S3 en flux (lot **L2.4**) sont **faits** (`a90f385`, `7476a14` + L2.5b).
+
+> ### ✅ Moitié « PostgreSQL lecture seule » du critère de sortie L2 — prouvée le 2026-09-30 (L2.5b)
+>
+> | Exigence | Preuve |
+> |---|---|
+> | `datasets[]` non vide | `tests/integration/test_request_database_read_e2e.py::test_a_data_request_reads_the_named_table` (`row_count`, `storage_ref` = `postgres://analytics/<table>`, schéma inféré des valeurs réelles) |
+> | unités localisables dans la source | idem : `location.kind == "row"`, `row ∈ {1,2,3}`, `dataset_id` lié, `provenance.extracted_from` = la référence de la source, `context.origin == "database_query"` (§11) |
+> | `transformations[]` non vide | idem : étage `raw` (`PostgresConnector`/`postgres_query`) + `normalized` (`DatabaseMaterial`/`postgres_query`) — deux lignes, deux producteurs, pas une seule attribuée au web |
+> | provenance complète | idem : `provenance.request_type == "data"`, source de type `database` dans `sources[]`, unités persistées avec `raw_reference.table` + `location` |
+> | SQL d'écriture refusé | lot L2.5a : `tests/unit/tools/test_postgres_query_readonly.py` (36 tests) ; L2.5b :
+> `test_a_table_identifier_carrying_sql_cannot_reach_the_database` (la table est toujours là après le run) |
+> | échec nommé, rien d'inventé | `test_a_missing_table_is_named_and_nothing_is_delivered`, `test_an_absent_vault_entry_names_the_variable_an_operator_must_set`, `tests/agentic/test_database_read_delivery.py::TestWhenTheSourceCannotBeRead` (étape `degraded`, `datasets[]` vide, **aucune** recherche web de remplacement) |
 
 ---
 
@@ -787,7 +833,7 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 4 | INIS construit automatiquement un plan | `[x]` | — | `tests/unit/planning/test_plan_builder.py` |
 | 5 | INIS peut rechercher sur le Web | `[x]` | — | `tests/integration/test_v2_full_stack.py` |
 | 6 | **INIS peut ingérer un fichier structuré** | `[ ]` **absent** | L2 | `tests/integration/test_file_ingestion_e2e.py` |
-| 7 | **INIS peut interroger PostgreSQL** | `[ ]` **absent** | L2.5 | `tests/integration/test_postgres_query_e2e.py` |
+| 7 | **INIS peut interroger PostgreSQL** | `[x]` | L2.5 | `tests/integration/test_request_database_read_e2e.py` |
 | 8 | INIS stocke les sources et leurs métadonnées | `[~]` web seulement, repo divergent | L6 | `tests/unit/storage/test_source_repository.py` |
 | 9 | INIS conserve la provenance | `[~]` vrai pour le web, à étendre | L2.3 | `tests/agentic/test_file_unit_traceability.py` |
 | 10 | INIS peut retourner une information avec son contexte | `[x]` | — | `tests/integration/test_smoke.py` |
@@ -825,6 +871,8 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 2026-09-30 | Cline (act) | **L2.2 (fin)** | Le plan est **contraint par le vocabulaire fermé §8.4** : `InvalidPlanAction` + `PlanBuilder.validate_step(s)`, plan client **et** plan LLM validés avant exécution, `parse_plan` ne promeut plus la prose en action, le prompt énonce le vocabulaire | `8b13da2` | `pytest -q` → **1802 passed / 4 skipped** (168,95 s) ; 3 checkers OK ; `ruff` sans nouvelle erreur | ✅ 19 nouveaux tests. ⚠️ 4 tests existants documentaient l'ancien contrat et devaient bouger (**acte explicite**) : `test_plan_builder` (actions `search`/`verify` hors vocabulaire), `test_pipeline_guards` (plan `web_search`), `test_plan_parser` (forme exacte d'une étape), `test_no_fabricated_step_output` (un plan inconnu était *exécuté* puis dégradé) — il est désormais **refusé en amont** |
 | 2026-09-30 | Cline (act) | **L2.2 (fin)** | `file_ingest` branché et `request_type` **opérant** (C4) : `request_material.py` relit la matière ingérée (documents/datasets/unités localisées), le pipeline exécute l'étape, remplit `datasets[]`, ajoute les sources fichiers, oriente le plan `data`/`source` vers le fichier, et enregistre les étages `raw`/`normalized` de l'ingestion | `3fde944` | `pytest -q` → **1842 passed / 4 skipped** (152,48 s) ; 3 checkers OK ; `ruff` : `pipeline_runner.py` à 22 erreurs préexistantes (aucune nouvelle) | ✅ **C4 fermé** ; moitié « fichier » du critère de sortie L2 prouvée sur PostgreSQL réel (`tests/integration/test_request_file_ingestion_e2e.py`). ⚠️ Fabrication découverte **dans le lignage** : l'unité agrégée du run était attribuée au `FactExtractor` (deux étages `normalized` dès qu'un fichier était livré) → corrigé par un paramètre `delivered_units` distinct ; `test_b4bis_persistence` verrouillait cette attribution et a été corrigé ; `entity.requires` introduit pour les actions exécutables conditionnelles |
 | 2026-09-30 | Cline (act) | **L2.4** | Le mode « cible explicite » (`Query.filters["location"]` : chemin ou `s3://…`) existe dans les 6 connecteurs fichiers, le glob reste le défaut ; S3 est lu **en flux** vers un fichier temporaire nettoyé, refusé sur la taille déclarée **puis** pendant le transfert ; `RawSource.metadata` porte le `content_type` et la `location` réels ; plafond unique `[limits].max_upload_bytes` partagé entre l'upload et la lecture de source (`app/core/size_limits.py`) | `a90f385` | `pytest -q` → **1938 passed / 4 skipped** (374,02 s) ; 3 checkers OK ; BC **0 breaking** (31 warnings BC005) ; `ruff` clean sur les fichiers du lot | ✅ **C3 fermé** (96 nouveaux tests : 43 + 36 + 13 + 4 MinIO réel). ⚠️ Trois pièges corrigés au passage : le quota ne bornait que l'entrée HTTP (P16), `FileNotFoundError` était **enveloppée** donc anonyme (P17), un mauvais suffixe se lisait « aucun candidat » au lieu d'un refus nommé (P18) |
+| 2026-09-30 | Cline (act) | **L2.5a** | `postgres_query` en **lecture seule** : liste blanche `SELECT`/`WITH`, mots-clés d'écriture refusés, empilement refusé, `LIMIT` ajouté si absent, transaction `READ ONLY` + `statement_timeout` (5 s par défaut, plafond 120 s) dans un seul `engine.begin()` ; identifiants par entrée du **vault** §41.4 (`app/tools/database/credentials.py`) et DSN refusé par son nom, sans écho du secret | `7476a14` | `pytest -q` → **1974 passed / 4 skipped** ; 3 checkers OK ; BC **0 breaking** ; `ruff` clean sur le lot | ✅ 36 nouveaux tests (`tests/unit/tools/test_postgres_query_readonly.py`) | 
+| 2026-09-30 | Cline (act) | **L2.5b** | La source PostgreSQL **nommée par la requête** entre dans le pipeline : `constraints.source_preferences=["postgres:<ref>[#table]"]` (nouveau `app/connectors/database/source_target.py`, une entrée malformée **lève** au lieu de disparaître), lecture → `Dataset` + une unité §11 par ligne localisée en `row` (`app/knowledge/ingestion/database_material.py`), étape `query_database` **exécutable** et conditionnelle (`tool_dispatch.py`), orientation du plan `data`/`source` (aucune recherche web), sources `database`, étages §12.1 `PostgresConnector`/`DatabaseMaterial`, `Dataset` persisté (`DatasetRepository`) pour que le `DATA_` livré soit consultable | L2.5b (à venir) | `pytest -q` → **2067 passed / 4 skipped** (163,86 s) ; `check_architecture` + `check_contracts` + `check_invariants` OK ; BC **0 breaking** (31 warnings BC005) ; `ruff` : **0 nouvelle erreur** (`pipeline_runner.py` reste à 22 erreurs préexistantes, dont 14 E501 — comptes identiques avant/après vérifiés par `git stash`) | ✅ **critère §36/7 fermé** — 92 nouveaux tests : 8 d'intégration sur PostgreSQL réel (`test_request_database_read_e2e.py`), 24 agentiques (`test_database_read_delivery.py`), 32 unitaires matériau, 28 sur la cible. ⚠️ Trois pièges : lire la base du client **avec l'engine d'INIS** (P19), publier un `DATA_` absent de la table `datasets` (P20), et **jeter le `file_ingest`** d'une requête `data` qui nomme *aussi* une base (P21) — les trois sont écartés et verrouillés par un test |
 
 ---
 
@@ -850,6 +898,10 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | P16 | Le plafond de taille n'était appliqué qu'à l'**entrée HTTP** (`POST …/documents`), pas à ce qu'INIS va **chercher** lui-même (fichier local, objet S3) | la même donnée entre par le « pull » sans passer par le quota : un knob unique bornant les deux directions, sinon la limite §41.2 est décorative — ⚠️ **corrigé en L2.4** (`app/core/size_limits.py` ; l'objet trop gros est refusé **avant** le transfert, preuve `tests/unit/storage/test_s3_stream_download.py`) |
 | P17 | `_read_local` **enveloppait** `FileNotFoundError` dans une `InfrastructureError` | remplacer l'erreur d'origine cache *quel* fichier manque : dans un contexte multi-sources, l'opérateur ne peut plus distinguer une faute de frappe d'un bug de stockage — ⚠️ **corrigé en L2.4** (l'erreur est propagée telle quelle) |
 | P18 | Un connecteur pointé sur un fichier du **mauvais type** répondait « aucun candidat » | « pas trouvé » et « pas mon format » deviennent indiscernables, et la requête se termine avec une acquisition vide **sans dire pourquoi** ; en mode cible explicite, le refus doit être **nommé** (`ValidationError`) — ⚠️ **corrigé en L2.4** (preuve `tests/unit/connectors/test_connector_explicit_location.py`) |
+| P19 | Lire la base **nommée par le client** avec l'engine du déploiement (`get_default_engine()` sur `INIS_DATABASE_URL`) | les lignes livrées seraient celles d'INIS sous une provenance annonçant la base du client : une fabrication silencieuse, et des chiffres plausibles donc invisibles — ⚠️ **écarté en L2.5b** (la lecture passe par le DSN de l'entrée du vault ; `TestWhichDatabaseIsRead` verrouille l'URL réellement utilisée) |
+| P20 | Publier un `DATA_` dans `datasets[]` **sans l'avoir persisté** | le client ne peut pas appeler l'API avec cet identifiant à la place de la table d'INIS ; un dataset en mémoire est un dataset inexistant — ⚠️ **corrigé en L2.5b** (`_persist_database_dataset`, limitation nommée si l'écriture échoue ; preuve `test_the_delivered_dataset_is_consultable`) |
+| P21 | Orienter un plan `data` sur la **base nommée** en ne gardant que cette source | le `file_ingest` d'un fichier pourtant fourni par la même requête disparaît : la moitié de ce que le client a donné n'est jamais livrée, **sans limitation** (l'étape n'existe plus, donc plus rien ne la signale) — ⚠️ **corrigé en L2.5b** (`OWNED_SOURCE_ACTIONS` : les deux sources détenues par la requête survivent, seules les étapes web sont retirées ; preuve `test_database_read_delivery.py::TestBothOwnedSourcesCoexist`) |
+| P22 | Une préférence `postgres:` **malformée** ignorée silencieusement | une faute de frappe devient « aucune base n'a été nommée », et le pipeline interroge le **web** pour des données que le demandeur détient déjà : la requête « réussit » en répondant à côté — ⚠️ **écarté en L2.5b** (`parse_target` lève ; l'étape est dégradée avec la cause, jamais remplacée par une recherche) |
 
 ---
 

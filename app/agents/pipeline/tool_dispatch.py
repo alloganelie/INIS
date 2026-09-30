@@ -115,10 +115,15 @@ ACTIONS: dict[str, ActionSpec] = {
     "query_database": ActionSpec(
         action="query_database",
         tools=("postgres_query",),
-        executable=False,
+        executable=True,
+        requires=(
+            "une source PostgreSQL nommée par la requête : "
+            "constraints.source_preferences = [\"postgres:<credential_ref>[#table]\"] (§7/§36.7)"
+        ),
         reason=(
-            "postgres_query exige une base cible et une requête SQL fournies par la demande "
-            "(§8.4) : le raccordement du connecteur base est le lot L2.4"
+            "aucune source PostgreSQL n'est nommée par la requête : les identifiants "
+            "viennent du vault (§41.4) et la requête ne porte jamais de DSN. Nommer la "
+            "source voulue : source_preferences = [\"postgres:<credential_ref>#<table>\"]"
         ),
     ),
     "analyze_dataset": ActionSpec(

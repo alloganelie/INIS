@@ -25,22 +25,27 @@ utiliser pour toute nouvelle ligne de couverture.
 | L2.2 (fin) — le plan est contraint par le vocabulaire fermé §8.4 (plan client et plan LLM refusés en amont, la prose n'est plus une action) | `8b13da2` | `pytest -q` → **1802 passed / 4 skipped** ; 3 checkers OK ; `ruff` sans nouvelle erreur |
 | L2.2 (fin) — C4 : `file_ingest` branché, `request_type` opérant : la matière ingérée entre dans le colis (`datasets[]`, unités localisées, étages §12.1 de l'ingestion) | `3fde944` | `pytest -q` → **1842 passed / 4 skipped** ; 3 checkers OK ; `ruff` : aucune nouvelle erreur ; critère de sortie L2 (branche fichier) prouvé sur PostgreSQL réel |
 | L2.4 — cible explicite des connecteurs fichiers (C3), S3 lu en flux vers un fichier temporaire, `content_type`/`location` réels dans `RawSource.metadata`, plafond unique upload/lecture (`app/core/size_limits.py`) | `a90f385` | `pytest -q` → **1938 passed / 4 skipped** ; 3 checkers OK ; BC 0 breaking ; `ruff` clean sur le lot ; 96 nouveaux tests dont 4 sur MinIO réel |
+| L2.5a — `postgres_query` en **lecture seule** (liste blanche `SELECT`/`WITH`, `READ ONLY` + `statement_timeout`, `LIMIT` forcé) et identifiants par entrée du **vault** §41.4, jamais par un DSN client | `7476a14` | `pytest -q` → **1974 passed / 4 skipped** ; 3 checkers OK ; BC 0 breaking ; `ruff` clean sur le lot ; 36 nouveaux tests |
+| L2.5b — la source PostgreSQL **nommée par la requête** entre dans le pipeline (`source_preferences=["postgres:<ref>[#table]"]` → `Dataset` + unités §11 localisées en `row`, étape `query_database` exécutable, plan `data` orienté sur la base, aucune recherche web, étages §12.1 `PostgresConnector`/`DatabaseMaterial`, `Dataset` persisté) | L2.5b | `pytest -q` → **2067 passed / 4 skipped** ; 3 checkers OK + `check_invariants` OK ; BC 0 breaking ; `ruff` : 0 nouvelle erreur (`pipeline_runner.py` reste à 22 erreurs préexistantes) ; 92 nouveaux tests dont 8 sur PostgreSQL réel |
 
 L1 est **N2 sur le chemin nominal** : `required_output.format="xlsx"` produit un fichier réellement
 stocké dans le conteneur S3, listé par `GET /v1/artifacts?request_id=`, et téléchargé avec un
 `sha256` recalculé identique (`tests/integration/test_artifacts_object_storage.py`).
 
-L2 est **N2 sur la branche fichier** : un CSV ingéré pour une requête ressort dans le colis §24.1
-(`datasets[]` non vide, unités §11 localisables, `transformations[]` de l'ingestion avec le lecteur
-§21 qui a lu, provenance complète) et une requête `request_type="data"` n'explore plus le web pour
-un fichier qu'elle a fourni (§7/C4) — `tests/integration/test_request_file_ingestion_e2e.py`.
+L2 est **N2 sur les deux branches** (fichier et PostgreSQL lecture seule) : un CSV ingéré pour une
+requête ressort dans le colis §24.1 (`datasets[]` non vide, unités §11 localisables,
+`transformations[]` de l'ingestion avec le lecteur §21 qui a lu, provenance complète) et une
+requête `request_type="data"` n'explore plus le web pour la source qu'elle a fournie (§7/C4) —
+fichier : `tests/integration/test_request_file_ingestion_e2e.py` ; base :
+`tests/integration/test_request_database_read_e2e.py` (le `Dataset` livré est persisté et
+consultable, la table est lue sur le DSN de l'entrée du vault, un échec est nommé sans
+recherche web de remplacement).
 
 Détail des cases, preuves, décisions et du reste à faire : `docs/SPEC_CONFORMANCE_PLAN.md` §4 (encadrés L1,
-L2.1, L2.2, L2.3 et L2.4) et §6 (journal). **Prochain lot : fin de L2 puis L3** — dans l'ordre de valeur :
-(1) `artifact_lineage` (le colis porte désormais de vrais `DATA_`/`TRF_` à référencer) ; (2) **L2.5**
-PostgreSQL lecture seule (`postgres_query`, route depuis `request_type="data"`) puis **L2.6** PDF/image ;
-(3) `ChunkedDatasetProcessor` (ADR 007) ; (4) **L3** — cycle de vie RAW→DERIVED et embeddings
-(§12, §16, C12 : la table `embeddings` est vide).
+L2.1, L2.2, L2.3, L2.4 et L2.5) et §6 (journal). **Prochain lot : fin de L2 puis L3** — dans l'ordre de valeur :
+(1) `artifact_lineage` (le colis porte désormais de vrais `DATA_`/`TRF_` à référencer) ; (2) **L2.6**
+PDF/image (`extract_image_content` reste dû) ; (3) `ChunkedDatasetProcessor` (ADR 007) ; (4) **L3** —
+cycle de vie RAW→DERIVED et embeddings (§12, §16, C12 : la table `embeddings` est vide).
 
 ## PHASE-05.4 — Temporary ownership exception
 

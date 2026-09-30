@@ -30,15 +30,15 @@ from app.agents.pipeline.tool_dispatch import (
 from app.tools.registry import ToolRegistry
 
 #: §8.4 actions the pipeline can execute today. ``file_ingest`` joined them in
-#: L2.4: it re-reads the §11 units of the documents already ingested for the
-#: request (``app.knowledge.ingestion.request_material``). It is executable and
-#: *conditional*: without an ingested document the step is degraded, never turned
-#: into a web search.
-EXECUTABLE_ACTIONS = {"collect_information", "fetch_page", "file_ingest"}
+#: L2.4 (it re-reads the §11 units of the documents already ingested for the
+#: request) and ``query_database`` in L2.5 (it reads the PostgreSQL source named
+#: by ``constraints.source_preferences``). Both are executable and *conditional*:
+#: without the material they need, the step is degraded with the reason, never
+#: turned into a web search.
+EXECUTABLE_ACTIONS = {"collect_information", "fetch_page", "file_ingest", "query_database"}
 
 #: §8.4 actions that are declared but not wired yet, with the reason why.
 KNOWN_GAPS = {
-    "query_database",
     "analyze_dataset",
     "extract_image_content",
     "compare_sources",
@@ -109,6 +109,15 @@ class TestActionVocabulary:
         assert "documents" in spec.requires
         assert spec.reason, "the un-runnable case must be explainable"
         assert "aucun document" in spec.refusal()
+
+    def test_the_database_action_declares_the_source_it_needs(self) -> None:
+        """§36.7 — the same rule for ``query_database``: it needs a named source."""
+        spec = describe_action("query_database")
+
+        assert spec.executable is True
+        assert spec.tools == ("postgres_query",)
+        assert "postgres:" in (spec.requires or "")
+        assert spec.reason and "vault" in spec.refusal()
 
     def test_the_declared_action_is_the_executed_one(self) -> None:
         """Control: an executable action is not listed as a gap."""

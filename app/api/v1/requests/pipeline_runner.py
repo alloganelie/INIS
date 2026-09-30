@@ -18,6 +18,7 @@ from app.api.v1.requests.pipeline_persistence import (
     persist_transformations,
 )
 from app.artifacts.delivery.delivery_service import deliver_artifacts
+from app.core.errors import InisError
 from app.core.logging import get_logger
 from app.core.statuses import CANCELLED_STATUS, resolve_delivery_status
 from app.core.version import API_VERSION
@@ -28,6 +29,10 @@ from app.governance.budget.quotas import (
     Budget,
     BudgetExceeded,
     BudgetGuard,
+)
+from app.knowledge.ingestion.database_material import (
+    DatabaseMaterial,
+    load_database_material_for_request,
 )
 from app.knowledge.ingestion.document_ingestor import reader_for
 from app.knowledge.ingestion.request_material import (
@@ -69,6 +74,12 @@ CACHE_NS_PAGE_FETCH = "page_fetch"
 #: §15.1 — extraction confidence of a fact read from the full page vs snippet.
 _FULL_TEXT_CONFIDENCE = 0.9
 _SNIPPET_CONFIDENCE = 0.6
+
+#: §8.4 actions that read a source the request *already owns* (a file it uploaded
+#: for this request, the database it named). They survive plan orientation: a
+#: ``data`` request is planned around its sources, and a file it sent is one of
+#: them. The web acquisition steps are the ones removed, never these.
+OWNED_SOURCE_ACTIONS = frozenset({"file_ingest", "query_database"})
 
 
 def _fact_confidence(fact: dict[str, Any], full_text: bool) -> float:
@@ -169,7 +180,14 @@ def _orient_plan(
         for order, document in enumerate(material.documents, start=1)
     ]
     if request_type in ("data", "source"):
-        kept: list[dict[str, Any]] = []
+        # §8.4 — only the sources the request owns survive; ``file_ingest`` steps
+        # are added below, and a ``query_database`` step would be another owned
+        # source rather than a web acquisition.
+        kept: list[dict[str, Any]] = [
+            dict(step)
+            for step in steps
+            if str(step.get("action")) in OWNED_SOURCE_ACTIONS
+        ]
     else:
         kept = [dict(step) for step in steps]
     combined = [*ingest_steps, *kept]
@@ -223,6 +241,145 @@ def _material_step_result(
 
 
 
+
+
+def _database_step(target: Any | None, order: int) -> dict[str, Any]:
+    """Return the §8.4 ``query_database`` step of one named PostgreSQL source.
+
+    The step carries the *service* and the *table*, never a DSN: a reader of the
+    plan can tell which database and which table it will read, and the secret
+    stays in the vault where the tool reads it (§41.4, §36.7).
+    """
+    return {
+        "step_id": ULID.new("STEP_"),
+        "order": order,
+        "action": "query_database",
+        "tool": "postgres_query",
+        "inputs": {
+            "service": getattr(target, "service", None),
+            "table": getattr(target, "table", None),
+        },
+        "expected_output": "dataset",
+        "status": "pending",
+    }
+
+
+def _orient_database_plan(
+    steps: Sequence[dict[str, Any]],
+    target: Any | None,
+    request_type: str,
+) -> list[dict[str, Any]]:
+    """Return *steps* oriented by the PostgreSQL source the request named (§7).
+
+    Same rule as the file branch: a ``data``/``source`` request is planned
+    **around its sources** — searching the web for data the requester already
+    owns answers another question. Any other request keeps its steps and gains
+    the database read first.
+
+    A ``file_ingest`` step is *kept* for a ``data`` request: it is a second source
+    the same request already owns (a file it uploaded *and* a database it named),
+    and dropping it would silently discard half of what was given. Only the web
+    acquisition steps are removed.
+    """
+    if request_type in ("data", "source"):
+        kept = [
+            dict(step)
+            for step in steps
+            if str(step.get("action")) in OWNED_SOURCE_ACTIONS
+        ]
+    else:
+        kept = [dict(step) for step in steps]
+    combined = [_database_step(target, 1), *kept]
+    for order, step in enumerate(combined, start=1):
+        step["order"] = order
+    return combined
+
+
+async def _persist_database_dataset(
+    material: DatabaseMaterial, request_id: str
+) -> list[str]:
+    """Store the ``Dataset`` read from PostgreSQL so it stays consultable (§11/§27).
+
+    The rows are not re-stored — the source database remains their storage — but
+    the ``DATA_`` identifier the delivery publishes must exist: a client that
+    reads ``datasets[]`` and calls the API with that identifier must find the
+    dataset, exactly as it does for an ingested file.
+
+    Returns:
+        The limitations of a persistence that did not happen; never an exception.
+    """
+    if material.dataset is None:
+        return []
+    if not database_configured():
+        return [
+            (
+                "Dataset PostgreSQL non persisté (INIS_DATABASE_URL non configuré) : il "
+                "reste publié dans cette livraison mais n'est pas consultable via l'API."
+            )
+        ]
+    from app.storage.database.engine import get_default_engine
+    from app.storage.repositories.dataset_repository import DatasetRepository
+
+    engine = get_default_engine()
+    if engine is None:  # pragma: no cover - guarded by database_configured()
+        return []
+    try:
+        await DatasetRepository.create(
+            engine,
+            {
+                **material.dataset,
+                # §27 — ``name`` is NOT NULL; the preference is the honest label.
+                "name": f"{material.target.credential_ref}#{material.target.table or ''}",
+                "request_id": request_id,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - §25.2: the gap is named, not hidden
+        return [
+            (
+                f"Dataset PostgreSQL non persisté ({type(exc).__name__}: {exc}) — il reste "
+                "publié dans cette livraison mais n'est pas consultable via l'API."
+            )
+        ]
+    return []
+
+
+def _database_step_result(
+    step: Mapping[str, Any],
+    material: DatabaseMaterial | None,
+    refusal: str | None = None,
+) -> dict[str, Any]:
+    """Return the step result of a real ``query_database`` (§36.7, §25.2).
+
+    The step is ``done`` only when the database returned something: an empty read
+    is ``degraded`` with the reason, never ``done`` with an empty output, and it
+    never becomes a web search for the name of the table.
+    """
+    spec = describe_action("query_database")
+    result: dict[str, Any] = {
+        "step_id": step.get("step_id") or ULID.new("STEP_"),
+        "action": "query_database",
+        "tools_required": list(spec.tools),
+    }
+    if material is None or not material.has_material:
+        reason = (
+            refusal
+            or (material.limitations[0] if material and material.limitations else None)
+            or spec.refusal()
+        )
+        result.update({"status": "degraded", "output": "", "error": reason})
+        return result
+    result.update(
+        {
+            "status": "done",
+            # §37 — the counts that were really read; no interpretation.
+            "output": material.summary(),
+            "datasets": [material.dataset.get("dataset_id")] if material.dataset else [],
+            "information_units": [
+                unit.get("information_id") for unit in material.units
+            ],
+        }
+    )
+    return result
 
 
 class PipelineRunner:
@@ -1045,6 +1202,41 @@ class PipelineRunner:
             plan["request_type"] = request_type
 
         # -------------------------------------------------------------
+        # Stage 2.6: §36.7 PostgreSQL source named by the request
+        # -------------------------------------------------------------
+        # ``constraints.source_preferences`` is the only channel a request has for
+        # "interroge ma base" (§7). Naming one makes the read part of the plan —
+        # and, for a ``data`` request, replaces the web acquisition: searching the
+        # web for data the requester already owns answers another question.
+        database_material: DatabaseMaterial | None = None
+        database_refusal: str | None = None
+        try:
+            database_material = await load_database_material_for_request(
+                payload, request_id=request_id
+            )
+        except InisError as exc:
+            # §25.2 — an uninterpretable ``postgres:`` entry is a named failure of
+            # the step, never "no database was named" (which would silently send
+            # the request to the web).
+            database_refusal = (
+                f"Préférence de source PostgreSQL inutilisable (§7) : {exc}"
+            )
+        if (database_material is not None or database_refusal) and isinstance(plan, dict):
+            plan["steps"] = _orient_database_plan(
+                plan.get("steps", []),
+                database_material.target if database_material else None,
+                request_type,
+            )
+            plan["request_type"] = request_type
+        #: §11/§27 — the datasets this read produced, and why one could not be
+        #: stored; both are stated in the delivery rather than assumed.
+        database_persistence_limits: list[str] = (
+            await _persist_database_dataset(database_material, request_id)
+            if database_material is not None
+            else []
+        )
+
+        # -------------------------------------------------------------
         # Stage 3: Real web-search execution per §9/§10 (graceful degradation)
         # -------------------------------------------------------------
         lifecycle.set_step("DATA_ACQUISITION")
@@ -1068,6 +1260,9 @@ class PipelineRunner:
         #: §8.4/§9.1 — ``file_ingest`` steps that had nothing to read: the action
         #: is wired, but *this* request ingested no document.
         unavailable_ingests: list[str] = []
+        #: §8.4/§36.7 — ``query_database`` steps whose source could not be read
+        #: (absent vault entry, unreachable host, empty table, no table named).
+        unavailable_databases: list[str] = []
 
         # §41.13 Safeguard: max_plan_steps
         max_plan_steps_limit = max_plan_steps()
@@ -1124,6 +1319,18 @@ class PipelineRunner:
                     step_results.append(ingest_result)
                     if ingest_result.get("status") != "done":
                         unavailable_ingests.append(action)
+                    continue
+                if action == "query_database":
+                    # §36.7 — the step reads the PostgreSQL source the request
+                    # named. Same rule as ``file_ingest``: an unreadable or empty
+                    # database degrades the step with its reason instead of
+                    # becoming a search for the name of a table.
+                    database_result = _database_step_result(
+                        step, database_material, database_refusal
+                    )
+                    step_results.append(database_result)
+                    if database_result.get("status") != "done":
+                        unavailable_databases.append(action)
                     continue
                 if not is_web_action(action):
                     # §8.4 — the acquisition stage only knows how to search the
@@ -1472,6 +1679,27 @@ class PipelineRunner:
             if document.get("source_id")
         ]
 
+        # §36.7 — the rows read from PostgreSQL join the colis the same way: their
+        # Dataset is delivered, their §11 units are delivered with their row
+        # locator, and the source is listed as a database (never as a web page).
+        if database_material is not None and database_material.has_material:
+            if database_material.dataset:
+                datasets.append(dict(database_material.dataset))
+            for unit in database_material.units:
+                if str(unit.get("information_id")) in delivered_unit_ids:
+                    continue
+                information_units.append(dict(unit))
+            ingested_sources.append(
+                {
+                    "source_id": database_material.source_id,
+                    "name": database_material.target.describe(),
+                    "source_type": "database",
+                    # §0.2/§41.4 — a reference, never a DSN: no user, no secret.
+                    "url": database_material.target.location,
+                    "data_stage": "raw",
+                }
+            )
+
         # -------------------------------------------------------------
         # Stage 4: Confidence Evaluation (with graceful degradation)
         # -------------------------------------------------------------
@@ -1757,6 +1985,17 @@ class PipelineRunner:
             or any(str(step.get("action")) == "file_ingest" for step in steps_to_run)
         ):
             base_limitations.extend(request_material.limitations)
+        # §36.7 — the same rule for the PostgreSQL source the request named: the
+        # colis states why its rows are absent instead of silently delivering none.
+        if database_refusal:
+            base_limitations.append(database_refusal)
+        base_limitations.extend(database_persistence_limits)
+        if database_material is not None and database_material.limitations and (
+            database_material.has_material
+            or request_type in ("data", "source")
+            or any(str(step.get("action")) == "query_database" for step in steps_to_run)
+        ):
+            base_limitations.extend(database_material.limitations)
         # §33.3 « demande ambiguë » — the ambiguity is stated, never hidden.
         missing_information: list[str] = list(clarifications)
         if missing_information:
@@ -1788,6 +2027,16 @@ class PipelineRunner:
                 + " — aucun document n'a été ingéré pour cette requête "
                 "(POST /v1/requests/{request_id}/documents) : l'étape est dégradée, "
                 "aucun contenu de résultat n'est produit (§37)."
+            )
+        if unavailable_databases:
+            # §8.4/§36.7 — wired as well; the source named by ``source_preferences``
+            # simply produced nothing. The step's ``error`` carries the exact cause.
+            base_limitations.append(
+                "Étapes « query_database » sans matière (§8.4/§36.7) : "
+                + ", ".join(sorted(set(unavailable_databases)))
+                + " — la source PostgreSQL nommée par `constraints.source_preferences` "
+                "n'a pas été lue (voir le champ `error` de l'étape) : aucun Dataset "
+                "n'est livré, aucun contenu n'est fabriqué (§37)."
             )
         if degraded_actions:
             base_limitations.append(
@@ -1920,6 +2169,14 @@ class PipelineRunner:
             if request_material.has_material
             else None
         )
+        database_read: dict[str, Any] | None = (
+            {
+                "tool": "postgres_query",
+                **database_material.lineage(),
+            }
+            if database_material is not None and database_material.has_material
+            else None
+        )
         transformations = build_transformations(
             request_id=request_id,
             objective=objective,
@@ -1929,6 +2186,7 @@ class PipelineRunner:
             findings=findings,
             model=self._synthesis_model(request_id),
             ingested=ingested_material,
+            database=database_read,
             delivered_units=information_units,
         )
         if transformations:
@@ -1956,6 +2214,7 @@ class PipelineRunner:
             artifacts=artifact_outcome.artifacts,
             model=self._synthesis_model(request_id),
             ingested=ingested_material,
+            database=database_read,
             delivered_units=information_units,
         )
         if derived:
