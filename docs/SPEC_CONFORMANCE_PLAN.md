@@ -940,9 +940,16 @@ lecture seule ; les tests d'erreur (type refusé, quota, SQL d'écriture) passen
 > - Embeddings du *titre* de la question (aujourd'hui la moitié sémantique n'est utilisée que si
 >   un vecteur est fourni au constructeur : le pipeline n'en produit pas encore, faute de provider
 >   d'embeddings configuré — cf. la liste des variables d'environnement).
-> - Réutilisation « **suffisante** » telle que §17.1 la décrit (`MemoryResult.sufficient` arrête
->   l'acquisition) : aujourd'hui le run **livre** l'unité de mémoire en plus de ce qu'il acquiert ;
->   l'arrêt anticipé de l'acquisition fera l'objet d'un lot dédié (impact sur le nombre d'étapes).
+> - Réutilisation « **suffisante** » telle que §17.1 la décrit : ✅ **fait** (lot §17). `MemoryResult.sufficient`
+>   ne suffit plus à elle seule : `early_stop_decision` (`app/planning/memory_checker.py`) sépare la
+>   réutilisation de l'arrêt, et seules une recherche **hybride sans limitation** concluent. Quand la
+>   décision est prise, les étapes d'acquisition **web** ne sont pas exécutées et figurent dans le colis
+>   en `skipped` ; les sources propres à la requête (fichier, base) ne sont jamais sautées.
+>   *preuves : `tests/unit/planning/test_memory_early_stop_decision.py` (13 cas),
+>   `tests/agentic/test_memory_early_stop_skips_acquisition.py` (9 cas, dont le fournisseur web
+>   **non appelé** et les trois cas négatifs), `tests/unit/governance/test_audit_memory_lookup.py`
+>   (dont 4 cas d'arrêt), `tests/integration/test_memory_early_stop_audit.py` (ligne `audit_events`
+>   relue sur PostgreSQL réel).*
 
 - [x] Insérer l'étape `memory_lookup` (§8.4, §17.1) en tête de plan, avant acquisition :
   appel de `app/planning/memory_checker.py` avec `hybrid_search` **injecté** (l'interface
@@ -1021,6 +1028,31 @@ incohérence produit un colis où ces trois défauts sont **explicitement listé
 « signaler > inventer »).
 
 ---
+
+### §17 — Arrêt de l'acquisition quand la mémoire suffit (§17.1, §8.4) · **fait et prouvé**
+
+> ### ⚙️ État d'avancement §17 au 2026-09-30 — **clos**, commit `e986222`
+>
+> | Ce qui est fait | Preuve |
+> |---|---|
+> | La décision sépare **suffisance** et **arrêt**, avec ses critères (`provenance_complete`, `freshness_acceptable`, `policy_allows_reuse`) et sa raison | `tests/unit/planning/test_memory_early_stop_decision.py` (13 cas) |
+> | Une mémoire suffisante (hybride, sans limitation) ⇒ les étapes d'acquisition **web** ne sont **pas exécutées** et le fournisseur **n'est pas appelé** | `tests/agentic/test_memory_early_stop_skips_acquisition.py::TestASufficientMemoryStopsTheAcquisition::test_the_web_acquisition_is_not_executed` (`assert_not_awaited`) |
+> | Les étapes non exécutées restent dans le colis en `skipped`, avec la raison (§8.4) | `::test_the_skipped_steps_are_the_web_ones_and_say_why` |
+> | **Aucun contenu perdu** : l'unité réutilisée est livrée avec son identifiant d'origine | `::test_the_reused_unit_is_still_delivered` |
+> | La décision voyage dans `provenance.memory` (`stopped_acquisition`, `criteria`, `withheld_reason`) et dans une `limitations` explicite | `::test_the_delivery_carries_the_decision`, `::test_the_delivery_limitations_name_the_stop` |
+> | Elle est **auditable** : événement §20 dont la raison dit l'arrêt et ses critères, relu **en base** | `tests/integration/test_memory_early_stop_audit.py` (2 cas sur PostgreSQL réel), `tests/unit/governance/test_audit_memory_lookup.py` (4 cas) |
+> | **Garde-fou exigé** : mémoire suffisante mais **lexicale seule** ou **limitée** ⇒ réutilisation **sans** arrêt ; mémoire insuffisante ⇒ acquisition **inchangée** | `tests/agentic/test_memory_early_stop_skips_acquisition.py::TestWhatNeverStopsTheAcquisition` (3 cas) |
+>
+> **Décision d'implémentation (documentée)** : seules les actions dont **tous** les outils sont des
+> outils web (`collect_information`, `fetch_page`) sont sautées, et cet ensemble est **dérivé du
+> vocabulaire §8.4** plutôt que codé en dur. Les sources **propres à la requête** (`file_ingest`,
+> `query_database`) ne sont jamais sautées : un arrêt qui les retirerait perdrait du contenu fourni
+> par le demandeur, ce que §17 interdit.
+>
+> **Ce que la preuve ne couvre pas** : le gain en coût/tokens n'est pas mesuré (le fournisseur web
+> n'est plus appelé, mais aucun benchmark de bout en bout n'a été exécuté) — la mesure de charge
+> relève du lot L7/§41.13.
+
 
 ### L6 — Persistance, repositories et cohérence de schéma (§27, §18) (3–4 j) · Devin
 
@@ -1329,5 +1361,7 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 
 
 | 2026-09-30 | Cline (act) | **L5 (suite et fin)** | `check_freshness` et `compare_sources` branchés (Stage 3.9, `app/quality/source_quality.py`) : fraîcheur évaluée par source **et persistée** (colonne `sources.freshness` écrite à `NULL` jusqu'ici), comparaison §14.4 des sources désormais **atteignable** — rien ne produisait le triplet `(subject, predicate, value)` qu'elle lit — avec projection mécanique des enregistrements et déclaration de ce qui reste non comparable ; E2E **réel** fichier → MinIO → PostgreSQL → contrôles → colis (téléversement multipart, vrai `load_request_material`) | `424450f` | `pytest -q` → **2498 passed / 4 skipped** ; 3 checkers OK ; `ruff` clean sur les fichiers du lot ; e2e rejoué seul (2 cas) | ✅ Items L5 2/3/4/5 **prouvés** ; ⚠️ **défaut réel corrigé** : `check_freshness` notait 0.0 (« inconnue ») une source fraîche qui déclarait `retrieved_at`, parce qu'il passait le dict brut à `FreshnessCheck` qui ne lit que `updated_at` ; ⚠️ **constat reproductible** : une cellule CSV qui ne tient pas dans sa colonne n'est pas isolée (les cellules sont stockées en texte, colonne homogène) — le colis le dit mais ne nomme pas la cellule, ce qui exigerait une ingestion typée (item 1 reste `[~]`) |
+
+| 2026-09-30 | Cline (act) | **§17 (arrêt anticipé)** | `early_stop_decision` (`app/planning/memory_checker.py`) sépare **suffisance** et **arrêt** : seule une recherche **hybride sans limitation** conclut, avec ses critères ; quand elle conclut, les étapes d'acquisition **web** ne sont pas exécutées (fournisseur non appelé) et restent dans le colis en `skipped` avec la raison ; les sources propres à la requête (fichier, base) ne sont jamais sautées ; la décision voyage dans `provenance.memory`, dans une `limitations` explicite et dans l'événement §20 | `e986222` | `pytest -q` → **2526 passed / 4 skipped** (241,60 s) ; 3 checkers OK ; `ruff` clean sur les fichiers du lot ; cas d'intégration rejoués seuls (2 cas sur PostgreSQL réel) | ✅ **§17 clos** — 28 nouveaux tests (13 décision, 9 pipeline, 4 audit, 2 intégration). ⚠️ Garde-fou vérifié : une mémoire suffisante mais **lexicale seule** ou **limitée** réutilise **sans arrêter** le run, et une mémoire insuffisante laisse l'acquisition inchangée. ⚠️ Non mesuré : le gain de coût/tokens (relève de L7/§41.13) |
 
 
