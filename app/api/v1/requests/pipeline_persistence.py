@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-import json
 import os
 import time
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import text
-
 from app.domain.value_objects.ulid import ULID
+from app.storage.repositories.evidence_repository import evidence_table
+from app.storage.repositories.information_unit_repository import information_units_table
+from app.storage.repositories.source_repository import sources_table
+from app.storage.repositories.table_repository import insert_rows
+from app.storage.repositories.transformation_repository import TransformationRepository
 
 
 async def persist_pipeline_delivery(
@@ -61,12 +63,12 @@ async def persist_pipeline_delivery(
             now_dt = datetime.now(UTC)
             stored_audit = await AuditWriter().write(audit_payload, session=session)
             await _insert_sources(session, sources, now_dt)
-            inf_ids = await _insert_units(session, information_units, now_dt)
+            await _insert_units(session, information_units, now_dt)
             await _insert_evidence(session, evidence, now_dt)
             await session.commit()
             _observe_postgres_latency(started)
             return True, [], stored_audit
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - §25.2: a degraded write is reported, not raised
         _observe_postgres_latency(started)
         return (
             False,
@@ -82,7 +84,7 @@ def _observe_postgres_latency(started: float) -> None:
         from app.observability.metrics import observe_value
 
         observe_value("postgres_latency", (time.perf_counter() - started) * 1000.0)
-    except Exception:  # noqa: BLE001 - observability never breaks persistence
+    except Exception:  # noqa: BLE001, S110 - observability never breaks persistence
         pass
 
 
@@ -96,25 +98,27 @@ async def _insert_sources(session: Any, sources: list[dict[str, Any]], now_dt: d
             rel_score = float(rel_score) if rel_score is not None else None
         except (TypeError, ValueError):
             rel_score = None
-        await session.execute(
-            text(
-                """
-                INSERT INTO sources (id, url, source_type, reliability_score, freshness, data_stage, created_at, updated_at)
-                VALUES (:id, :url, :source_type, :reliability_score, NULL, :data_stage, :created_at, :updated_at)
-                ON CONFLICT (id) DO UPDATE SET
-                    updated_at = EXCLUDED.updated_at,
-                    reliability_score = COALESCE(EXCLUDED.reliability_score, sources.reliability_score)
-                """
-            ),
-            {
-                "id": src_id,
-                "url": src_url,
-                "source_type": src_type,
-                "reliability_score": rel_score,
-                "data_stage": "derived" if src_type == "internal" else "raw",
-                "created_at": now_dt,
-                "updated_at": now_dt,
-            },
+        # The row is built here, the *definition* of the table lives only in
+        # ``SourceRepository``: the raw ``INSERT`` that used to be typed in this
+        # module was a second schema, and it drifted (§27, L6.1).
+        await insert_rows(
+            session,
+            sources_table,
+            [
+                {
+                    "id": src_id,
+                    "url": src_url,
+                    "source_type": src_type,
+                    "reliability_score": rel_score,
+                    "freshness": None,
+                    "data_stage": "derived" if src_type == "internal" else "raw",
+                    "created_at": now_dt,
+                    "updated_at": now_dt,
+                }
+            ],
+            conflict_columns=("id",),
+            update_columns=("updated_at",),
+            coalesce_columns=("reliability_score",),
         )
 
 
@@ -124,58 +128,48 @@ async def _insert_units(session: Any, information_units: list[dict[str, Any]], n
         inf_id = unit.get("information_id") or ULID.new("INF_")
         inf_ids.append(inf_id)
         unit_source_id = unit.get("source_id") or "SRC_INTERNAL_PIPELINE"
-        await session.execute(
-            text(
-                """
-                INSERT INTO sources (id, url, source_type, data_stage, created_at, updated_at)
-                VALUES (:id, :url, :source_type, :data_stage, :created_at, :updated_at)
-                ON CONFLICT (id) DO NOTHING
-                """
-            ),
-            {
-                "id": unit_source_id,
-                "url": f"internal://{unit_source_id}",
-                "source_type": "internal",
-                "data_stage": "derived",
-                "created_at": now_dt,
-                "updated_at": now_dt,
-            },
+        await insert_rows(
+            session,
+            sources_table,
+            [
+                {
+                    "id": unit_source_id,
+                    "url": f"internal://{unit_source_id}",
+                    "source_type": "internal",
+                    "data_stage": "derived",
+                    "created_at": now_dt,
+                    "updated_at": now_dt,
+                }
+            ],
+            conflict_columns=("id",),
         )
-        content_payload = json.dumps(unit.get("content") or {})
-        await session.execute(
-            text(
-                """
-                INSERT INTO information_units (
-                    id, type, content, source_id, document_id, data_stage,
-                    raw_reference, context, language, epistemic_status, provenance,
-                    created_at, updated_at
-                )
-                VALUES (
-                    :id, :type, CAST(:content AS JSONB), :source_id, NULL, :data_stage,
-                    CAST(:raw_reference AS JSONB), CAST(:context AS JSONB), :language,
-                    :epistemic_status, CAST(:provenance AS JSONB),
-                    :created_at, :updated_at
-                )
-                ON CONFLICT (id) DO NOTHING
-                """
-            ),
-            {
-                "id": inf_id,
-                "type": unit.get("type", "text"),
-                "content": content_payload,
-                "source_id": unit_source_id,
-                "data_stage": unit.get("data_stage", "derived"),
-                # §11 — the persisted row mirrors the delivered unit, so the
-                # provenance survives a restart and /v1/information/{id} can
-                # still explain where the information came from.
-                "raw_reference": json.dumps(unit.get("raw_reference") or {}),
-                "context": json.dumps(unit.get("context") or {}),
-                "language": unit.get("language"),
-                "epistemic_status": unit.get("epistemic_status") or "factual",
-                "provenance": json.dumps(unit.get("provenance") or {}),
-                "created_at": now_dt,
-                "updated_at": now_dt,
-            },
+        content_payload = unit.get("content") or {}
+        # §11 — the persisted row mirrors the delivered unit, so the provenance
+        # survives a restart and /v1/information/{id} can still explain where
+        # the information came from.
+        await insert_rows(
+            session,
+            information_units_table,
+            [
+                {
+                    "id": inf_id,
+                    "type": unit.get("type", "text"),
+                    "content": content_payload,
+                    "source_id": unit_source_id,
+                    "document_id": unit.get("document_id"),
+                    "dataset_id": unit.get("dataset_id"),
+                    "location": unit.get("location"),
+                    "data_stage": unit.get("data_stage", "derived"),
+                    "raw_reference": unit.get("raw_reference") or {},
+                    "context": unit.get("context") or {},
+                    "language": unit.get("language"),
+                    "epistemic_status": unit.get("epistemic_status") or "factual",
+                    "provenance": unit.get("provenance") or {},
+                    "created_at": now_dt,
+                    "updated_at": now_dt,
+                }
+            ],
+            conflict_columns=("id",),
         )
     return inf_ids
 
@@ -188,49 +182,30 @@ async def _insert_evidence(session: Any, evidence: list[dict[str, Any]], now_dt:
             conf_val = float(conf) if conf is not None else None
         except (TypeError, ValueError):
             conf_val = None
-        await session.execute(
-            text(
-                """
-                INSERT INTO evidence (
-                    evidence_id, information_id, source_id, document_id, quote,
-                    confidence, strength, epistemic_status, provenance, created_at
-                )
-                VALUES (
-                    :evidence_id, :information_id, :source_id, NULL, :quote,
-                    :confidence, :strength, :epistemic_status,
-                    CAST(:provenance AS JSONB), :created_at
-                )
-                ON CONFLICT (evidence_id) DO NOTHING
-                """
-            ),
-            {
-                "evidence_id": ev_id,
-                "information_id": ev.get("information_id"),
-                "source_id": ev.get("source_id"),
-                "quote": ev.get("excerpt") or ev.get("quote"),
-                "confidence": conf_val,
-                # §14.2 — strength is the evidence's own signal; it used to be
-                # omitted, so every persisted evidence came back with the
-                # neutral default instead of what the run measured.
-                "strength": conf_val,
-                "epistemic_status": ev.get("epistemic_status") or "fact",
-                "provenance": json.dumps(ev.get("provenance") or {}),
-                "created_at": now_dt,
-            },
+        await insert_rows(
+            session,
+            evidence_table,
+            [
+                {
+                    "evidence_id": ev_id,
+                    "information_id": ev.get("information_id"),
+                    "source_id": ev.get("source_id"),
+                    "document_id": ev.get("document_id"),
+                    "claim_id": ev.get("claim_id"),
+                    "transformation_id": ev.get("transformation_id"),
+                    "quote": ev.get("excerpt") or ev.get("quote"),
+                    "confidence": conf_val,
+                    # §14.2 — strength is the evidence's own signal; it used to be
+                    # omitted, so every persisted evidence came back with the
+                    # neutral default instead of what the run measured.
+                    "strength": conf_val,
+                    "epistemic_status": ev.get("epistemic_status") or "fact",
+                    "provenance": ev.get("provenance") or {},
+                    "created_at": now_dt,
+                }
+            ],
+            conflict_columns=("evidence_id",),
         )
-
-
-def _parse_timestamp(value: Any) -> datetime:
-    """Return *value* as a timezone-aware datetime (ISO 8601 accepted)."""
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=UTC)
-    if isinstance(value, str) and value:
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return datetime.now(UTC)
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-    return datetime.now(UTC)
 
 
 async def persist_transformations(
@@ -261,35 +236,7 @@ async def persist_transformations(
         return False
     try:
         async for session in get_session():
-            for transformation in transformations:
-                await session.execute(
-                    text(
-                        """
-                        INSERT INTO transformations (
-                            transformation_id, input_ids, output_ids, operator, tool,
-                            tool_version, parameters, timestamp, result, justification
-                        ) VALUES (
-                            :transformation_id, CAST(:input_ids AS JSONB),
-                            CAST(:output_ids AS JSONB), :operator, :tool,
-                            :tool_version, CAST(:parameters AS JSONB),
-                            :timestamp, :result, :justification
-                        )
-                        ON CONFLICT (transformation_id) DO NOTHING
-                        """
-                    ),
-                    {
-                        "transformation_id": transformation.get("transformation_id"),
-                        "input_ids": json.dumps(transformation.get("input_ids") or []),
-                        "output_ids": json.dumps(transformation.get("output_ids") or []),
-                        "operator": transformation.get("operator"),
-                        "tool": transformation.get("tool"),
-                        "tool_version": transformation.get("tool_version"),
-                        "parameters": json.dumps(transformation.get("parameters") or {}),
-                        "timestamp": _parse_timestamp(transformation.get("timestamp")),
-                        "result": transformation.get("result") or "success",
-                        "justification": transformation.get("justification"),
-                    },
-                )
+            await TransformationRepository.insert_many_in(session, transformations)
             await session.commit()
             return True
     except Exception:  # noqa: BLE001 - §25.2: the delivery outlives its lineage

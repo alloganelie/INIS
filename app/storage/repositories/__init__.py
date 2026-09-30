@@ -11,8 +11,12 @@ from app.storage.repositories.information_package_repository import (
     InformationPackageRepository,
 )
 from app.storage.repositories.information_unit_repository import InformationUnitRepository
+from app.storage.repositories.plan_repository import PlanRepository
+from app.storage.repositories.request_repository import RequestRepository
 from app.storage.repositories.session_repository import SessionRepository
 from app.storage.repositories.source_repository import SourceRepository
+from app.storage.repositories.transformation_repository import TransformationRepository
+from app.storage.repositories.version_repository import InformationVersionRepository
 
 __all__ = [
     "AccountRepository",
@@ -24,7 +28,11 @@ __all__ = [
     "EvidenceRepository",
     "InformationPackageRepository",
     "InformationUnitRepository",
+    "InformationVersionRepository",
+    "PlanRepository",
+    "RequestRepository",
     "SessionRepository",
     "SourceRepository",
+    "TransformationRepository",
 ]
 
