@@ -28,13 +28,15 @@ from app.tools.files.dataset_inspector import (
     check_consistency,
     check_missing_values,
     detect_duplicates,
+    inspect_schema,
     profile_dataset,
+    validate_schema,
 )
 
 __all__ = ["DatasetQualityReport", "assess_datasets"]
 
 #: §13.3 metric names, in the order they are reported.
-CHECK_NAMES = ("completeness", "uniqueness", "consistency")
+CHECK_NAMES = ("completeness", "uniqueness", "consistency", "validity")
 
 
 class DatasetQualityReport:
@@ -147,6 +149,35 @@ async def _assess_one(
     results["consistency"] = float(consistency.score)
     issues.extend(consistency.issues)
     details["consistency"] = consistency.details
+
+    # §13.2 — the inferred schema of the payload is what makes an incoherent
+    # *cell* visible: a column that is a number everywhere else but carries
+    # ``beaucoup`` in one row is a schema violation, not a detail. Without this
+    # control the value was stored as text and the colis never said so.
+    schema = await inspect_schema(rows)
+    validation = await validate_schema(rows, schema)
+    violations = list(getattr(validation, "violations", []) or [])
+    results["validity"] = max(0.0, 1.0 - (len(violations) / float(len(rows))))
+    details["validity"] = {
+        "schema": schema.model_dump() if hasattr(schema, "model_dump") else {},
+        "violations": [
+            {
+                "row_index": getattr(violation, "row_index", None),
+                "field": getattr(violation, "field", None),
+                "expected": getattr(violation, "expected", None),
+                "observed": getattr(violation, "observed", None),
+            }
+            for violation in violations
+        ],
+    }
+    for violation in violations:
+        field = getattr(violation, "field", "?")
+        expected = getattr(violation, "expected", "?")
+        observed = getattr(violation, "observed", "?")
+        row_index = getattr(violation, "row_index", "?")
+        issues.append(
+            f"ligne {row_index} : '{field}' attendu {expected}, observé {observed}"
+        )
 
     profile = await profile_dataset(rows)
     score_report = await report(dict(dataset), results)

@@ -1972,6 +1972,29 @@ class PipelineRunner:
             )
 
         # -------------------------------------------------------------
+        # Stage 3.9: §13.2/§41.5 freshness + §14.4 source contradictions
+        # -------------------------------------------------------------
+        # ``check_freshness`` was never called: ``sources[].freshness`` stayed
+        # empty and the column was persisted as NULL. ``compare_sources`` was
+        # never called either: a file and a web page disagreeing produced a
+        # delivery that looked unanimous. Both now run on the material the run
+        # holds, and what cannot be compared is stated instead of arbitrated.
+        source_quality = None
+        source_quality_limits: list[str] = []
+        try:
+            from app.quality.source_quality import assess_sources
+
+            source_quality = await assess_sources(
+                [*web_sources, *ingested_sources], information_units
+            )
+            source_quality_limits = list(source_quality.limitations)
+        except Exception as source_error:  # noqa: BLE001 - §25.2: the colis outlives it
+            source_quality_limits.append(
+                "Fraîcheur §13.2 / comparaison §14.4 non exécutées : "
+                f"({type(source_error).__name__}: {source_error})."
+            )
+
+        # -------------------------------------------------------------
         # Stage 4: Confidence Evaluation (with graceful degradation)
         # -------------------------------------------------------------
         lifecycle.set_step("CONFIDENCE_ASSESSMENT")
@@ -2221,6 +2244,12 @@ class PipelineRunner:
         # subject/predicate triple, so nothing is flagged; the slot exists so
         # ``assess_conflicts`` output drops straight into the delivery.
         conflicts: list[Any] = []
+        if source_quality is not None:
+            # §14.4 — les contradictions détectées entre les sources livrées
+            # (fichier↔web comprises) entrent dans le colis au lieu de laisser
+            # un emplacement vide qui se lisait comme « tout le monde est
+            # d'accord ».
+            conflicts = list(source_quality.conflicts)
 
         # §1.3 — the status is decided by app.core.statuses, never inline.
         delivery_status = resolve_delivery_status(
@@ -2265,6 +2294,9 @@ class PipelineRunner:
         # valeurs manquantes, colonnes incohérentes) et, le cas échéant, la raison
         # pour laquelle ils n'ont pas pu tourner.
         base_limitations.extend(dataset_quality_limits)
+        # §13.2/§14.4 — fraîcheur évaluée de chaque source livrée et résultat de
+        # la comparaison entre sources (y compris ce qui n'a pas pu être croisé).
+        base_limitations.extend(source_quality_limits)
         # §12/§25.2 — what the enrichment of Stage 3.7 could not read: a date
         # whose convention is unknown, an amount behind an ambiguous ``$``, a
         # duplicate that was kept and named. Stating it is the point.
@@ -2397,6 +2429,13 @@ class PipelineRunner:
                 dataset_quality.to_dict()
                 if dataset_quality is not None
                 else {"datasets": {}, "checks": [], "not_a_probability": True}
+            ),
+            # §13.2/§14.4 — fraîcheur évaluée par source et compte des conflits
+            # détectés entre elles (le détail des conflits est dans `conflicts`).
+            "source_quality": (
+                source_quality.to_dict()
+                if source_quality is not None
+                else {"freshness": {}, "conflicts": 0, "not_a_probability": True}
             ),
             "limitations": base_limitations,
             "assumptions": assumptions_from_llm,

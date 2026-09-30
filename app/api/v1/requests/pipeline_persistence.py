@@ -110,7 +110,11 @@ async def _insert_sources(session: Any, sources: list[dict[str, Any]], now_dt: d
                     "url": src_url,
                     "source_type": src_type,
                     "reliability_score": rel_score,
-                    "freshness": None,
+                    # §13.2/§41.5 — la fraîcheur *évaluée* par le run (ou celle
+                    # déclarée par la source) est persistée : la colonne restait
+                    # à NULL, donc une source relue ne disait jamais depuis quand
+                    # INIS la connaît.
+                    "freshness": src.get("freshness"),
                     "data_stage": "derived" if src_type == "internal" else "raw",
                     "created_at": now_dt,
                     "updated_at": now_dt,

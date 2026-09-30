@@ -100,7 +100,14 @@ async def check_freshness(source: Source) -> QualityResult:
             }
         )
 
-    evaluation = await FreshnessCheck(max_age_days=max_age_days).run(freshness)
+    # ``FreshnessCheck`` reads ``updated_at``; this tool accepts five key names
+    # (§9.2 declarations vary by connector). Without the normalization below, a
+    # source that declared ``retrieved_at`` — what the file ingestion writes —
+    # was scored 0.0 as if it had declared nothing: the timestamp was found and
+    # then dropped.
+    evaluation = await FreshnessCheck(max_age_days=max_age_days).run(
+        {**freshness, "updated_at": timestamp.isoformat()}
+    )
     details = dict(evaluation["details"])
     details.update(
         {

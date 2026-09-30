@@ -150,7 +150,12 @@ class TestTheThreeDefectsAreListed:
 
         block = delivery["quality"]["datasets"][DATASET_ID]
         assert block["rows_examined"] == len(DIRTY_ROWS)
-        assert set(block["checks"]) == {"completeness", "uniqueness", "consistency"}
+        assert set(block["checks"]) == {
+            "completeness",
+            "uniqueness",
+            "consistency",
+            "validity",
+        }
 
     @pytest.mark.asyncio
     async def test_limitations_name_the_three_defects(
