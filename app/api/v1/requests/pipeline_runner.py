@@ -31,6 +31,9 @@ from app.governance.budget.quotas import (
     BudgetGuard,
 )
 from app.knowledge.enrichment.enricher import enrich_units, resolved_dataset_stages
+from app.knowledge.memory import HybridMemorySearch, memory_audit_payload
+from app.planning.memory_checker import MemoryRequirements
+from app.planning.memory_checker import memory_lookup as lookup_memory
 from app.knowledge.ingestion.database_material import (
     DatabaseMaterial,
     load_database_material_for_request,
@@ -381,6 +384,27 @@ def _database_step_result(
         }
     )
     return result
+
+
+def _memory_step() -> dict[str, Any]:
+    """Return the §17.1 ``memory_lookup`` step that opens a plan (§8.4).
+
+    §17.1 is a *pre-acquisition* question — « le run sait-il déjà ? » — so the
+    step is built by the pipeline, not by the planner: the plan must carry it
+    **before** its first acquisition step, whatever the LLM proposed. Its
+    ``order`` is ``0`` so the rest of the plan keeps the numbering it was built
+    with; renumbering the planner's steps to make room would rewrite a decision
+    that was not ours to take.
+    """
+    spec = describe_action("memory_lookup")
+    return {
+        "step_id": ULID.new("STEP_"),
+        "order": 0,
+        "action": "memory_lookup",
+        "description": "Consulter la mémoire (§17.1) avant toute acquisition",
+        "tools_required": list(spec.tools),
+        "inputs": {"question": None},
+    }
 
 
 class PipelineRunner:
@@ -911,6 +935,124 @@ class PipelineRunner:
                 if request_id in self._subscribers and queue in self._subscribers[request_id]:
                     self._subscribers[request_id].remove(queue)
 
+    async def _memory_step_result(
+        self, step: Mapping[str, Any], *, objective: str, request_id: str
+    ) -> dict[str, Any]:
+        """Execute one §17.1 ``memory_lookup`` step and return its result (§8.4).
+
+        The step asks the memory whether the question is already answered, with
+        the §16.2 hybrid search **injected** into ``memory_checker.memory_lookup``
+        (the decision stays where it is testable, the storage stays out of it).
+
+        Returns:
+            A step result. ``status`` is ``degraded`` only when the memory could
+            not be consulted at all (no database): "consulted, nothing reusable"
+            is a **normal, successful** outcome, stated in ``output`` — a run that
+            found nothing in memory has not failed.
+
+        The units found are carried in ``information_units``: the run reuses them
+        with their **existing identifiers** (§17.1 — nothing is duplicated in the
+        database), and ``memory`` describes the mode the search really ran in.
+        """
+        spec = describe_action("memory_lookup")
+        result: dict[str, Any] = {
+            "step_id": step.get("step_id") or ULID.new("STEP_"),
+            "action": "memory_lookup",
+            "tools_required": list(spec.tools),
+        }
+        from app.storage.database.engine import get_default_engine
+
+        search = HybridMemorySearch(engine=get_default_engine())
+        try:
+            # §17.1 — `requirements` starts from the §41.5 default freshness
+            # threshold: an entry of unknown age is not reused.
+            memory = await lookup_memory(objective, MemoryRequirements(), search=search)
+        except Exception as exc:  # noqa: BLE001 - §25.2: the gap is named
+            self._record_metric("cache_hit_rate", failure=True)
+            result.update(
+                {
+                    "status": "degraded",
+                    "output": "",
+                    "error": (
+                        f"Mémoire §17.1 non consultée ({type(exc).__name__}: {exc}) : "
+                        "le run repart d'une acquisition complète."
+                    ),
+                }
+            )
+            return result
+
+        self._record_metric("cache_hit_rate", failure=not memory.sufficient)
+        note = memory.to_dict()
+        note.update({"mode": search.mode, "limitations": list(search.limitations)})
+        result["memory"] = note
+        if search.mode == "unavailable":
+            result.update(
+                {
+                    "status": "degraded",
+                    "output": "",
+                    "error": search.limitations[0]
+                    if search.limitations
+                    else "Mémoire §17.1 indisponible.",
+                }
+            )
+            return result
+        if memory.sufficient:
+            reused = [item.information_id for item in memory.items]
+            result.update(
+                {
+                    "status": "done",
+                    "output": (
+                        f"Mémoire §17.1 ({search.mode}) : {len(reused)} unité(s) "
+                        "relevée(s) d'un run précédent, réutilisée(s) telle(s) quelle(s)."
+                    ),
+                    "information_ids": reused,
+                    "information_units": [
+                        dict(search.units[identifier])
+                        for identifier in reused
+                        if identifier in search.units
+                    ],
+                }
+            )
+            return result
+        result.update(
+            {
+                "status": "done",
+                "output": (
+                    f"Mémoire §17.1 ({search.mode}) consultée : rien de réutilisable — "
+                    f"{memory.reason or 'aucun candidat'}"
+                ),
+            }
+        )
+        return result
+
+    async def _audit_memory_lookup(
+        self, request_id: str, result: dict[str, Any]
+    ) -> None:
+        """Write the §20 audit event of a memory lookup, never raising (§17.1).
+
+        A database that cannot be written to is not a reason to lose the
+        delivery: the failure is stated by the caller instead of being thrown.
+        """
+        from app.governance.audit.audit_writer import AuditWriter
+        from app.storage.database.session import ensure_session_maker, get_session
+
+        if result.get("action") != "memory_lookup" or not ensure_session_maker():
+            return
+        payload = memory_audit_payload(
+            request_id,
+            result.get("memory"),
+            mode=str((result.get("memory") or {}).get("mode") or "unknown"),
+        )
+        try:
+            async for session in get_session():
+                await AuditWriter().write(payload, session=session)
+                await session.commit()
+                break
+        except Exception as exc:  # noqa: BLE001 - §25.2: the gap is named
+            logger.warning(
+                "memory lookup audit event not written", error=str(exc)
+            )
+
     async def run(self, request_id: str, payload: Any) -> dict[str, Any]:
         """Run the end-to-end pipeline with graceful degradation if modules are missing."""
         start_time = time.monotonic()
@@ -1264,6 +1406,9 @@ class PipelineRunner:
         #: §8.4/§36.7 — ``query_database`` steps whose source could not be read
         #: (absent vault entry, unreachable host, empty table, no table named).
         unavailable_databases: list[str] = []
+        #: §17.1 — ``memory_lookup`` steps whose memory could not be consulted at
+        #: all (no database): « rien de réutilisable » n'est pas une dégradation.
+        unavailable_memory: list[str] = []
 
         # §41.13 Safeguard: max_plan_steps
         max_plan_steps_limit = max_plan_steps()
@@ -1291,6 +1436,14 @@ class PipelineRunner:
         tool_gate = ConcurrencyLimiter(max_tool_calls)
         self._last_tool_gate = tool_gate
 
+        # §17.1 — the memory step is inserted **after** the §41.13 safeguard, so
+        # the bound keeps measuring what the *planner* produced, and then at the
+        # head of the plan: before this lot, `memory_checker` was never called by
+        # any run, so every request re-acquired what it already knew (C13).
+        steps_to_run.insert(0, _memory_step())
+        if isinstance(plan, dict):
+            plan["steps"] = steps_to_run
+
 
         try:
             from app.connectors.web.extractors.wikipedia_extractor import WikipediaExtractor
@@ -1311,6 +1464,19 @@ class PipelineRunner:
                     break
                 action = step.get("action", "")
                 inputs = step.get("inputs", {})
+                if action == "memory_lookup":
+                    # §17.1 — la mémoire est consultée avant toute acquisition :
+                    # le run sait-il déjà ? La recherche §16.2 est **injectée**
+                    # dans `memory_checker.memory_lookup`, et le résultat dit ce
+                    # qui a réellement tourné (hybride, lexical seul, indisponible).
+                    memory_result = await self._memory_step_result(
+                        step, objective=objective, request_id=request_id
+                    )
+                    step_results.append(memory_result)
+                    if memory_result.get("status") != "done":
+                        unavailable_memory.append(action)
+                    await self._audit_memory_lookup(request_id, memory_result)
+                    continue
                 if action == "file_ingest":
                     # §9.1 — the step reads back the material the request already
                     # ingested. It is `done` only when there is material to read;
@@ -1630,6 +1796,39 @@ class PipelineRunner:
                     "created_at": now_iso,
                 }
             )
+
+        # §17.1 — les unités relevées en mémoire entrent dans le colis **avec leur
+        # identifiant d'origine** : le run les réutilise, il ne les recrée pas
+        # (l'écriture est ``ON CONFLICT (id) DO NOTHING``, donc rien n'est
+        # dupliqué en base, §5.3), et leur contexte dit d'où elles viennent.
+        memory_unit_ids: list[str] = []
+        memory_note: dict[str, Any] = {}
+        memory_limits: list[str] = []
+        for step_result in step_results:
+            if step_result.get("action") != "memory_lookup":
+                continue
+            note = dict(step_result.get("memory") or {})
+            memory_limits.extend(str(line) for line in (note.get("limitations") or []))
+            if note:
+                memory_note = note
+            for unit in step_result.get("information_units") or []:
+                unit_id = str(unit.get("information_id") or "")
+                if not unit_id or any(
+                    str(existing.get("information_id")) == unit_id
+                    for existing in information_units
+                ):
+                    continue
+                reused = dict(unit)
+                context = dict(reused.get("context") or {})
+                context["memory"] = {
+                    "reused": True,
+                    "mode": note.get("mode"),
+                    "question": objective,
+                    "step_id": step_result.get("step_id"),
+                }
+                reused["context"] = context
+                information_units.append(reused)
+                memory_unit_ids.append(unit_id)
 
         if not evidence:
             # Nothing traceable was acquired: the delivery still states that it
@@ -2037,6 +2236,22 @@ class PipelineRunner:
         # whose convention is unknown, an amount behind an ambiguous ``$``, a
         # duplicate that was kept and named. Stating it is the point.
         base_limitations.extend(enrichment_limits)
+        # §17.1 — ce que la mémoire a pu (ou n'a pas pu) donner : mode réel de la
+        # recherche (§16.2) et, à défaut de réutilisation, la raison. Le cas
+        # « base absente » est déjà dit par la phrase ci-dessous, plus précise.
+        if not unavailable_memory:
+            base_limitations.extend(memory_limits)
+        if unavailable_memory:
+            base_limitations.append(
+                "Mémoire §17.1 non consultable (aucune base PostgreSQL configurée) : "
+                "le run a acquis ses informations sans vérifier ce qu'il savait déjà."
+            )
+        elif memory_note and not memory_note.get("sufficient"):
+            base_limitations.append(
+                "Mémoire §17.1 consultée sans réutilisation : "
+                f"{memory_note.get('reason') or 'aucun candidat réutilisable'} — "
+                "les informations livrées viennent de cette acquisition."
+            )
         if database_material is not None and database_material.limitations and (
             database_material.has_material
             or request_type in ("data", "source")
@@ -2155,6 +2370,16 @@ class PipelineRunner:
                 "request_type": request_type,
                 "plan_id": plan.get("plan_id") if isinstance(plan, dict) else None,
                 "steps_executed": len(step_results),
+                # §17.1 — « mémoire utilisée » se lit ici : le mode de recherche
+                # réellement exécuté (§16.2) et les unités réutilisées.
+                "memory": {
+                    **{
+                        key: memory_note.get(key)
+                        for key in ("sufficient", "reason", "information_ids", "mode")
+                        if memory_note
+                    },
+                    "reused_units": len(memory_unit_ids),
+                },
             },
             "audit": {
                 "audit_id": audit_record.get("audit_event_id") or ULID.new("AUD_"),

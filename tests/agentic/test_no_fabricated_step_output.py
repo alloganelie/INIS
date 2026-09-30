@@ -237,5 +237,10 @@ async def test_the_web_path_still_produces_traceable_material(
     _, _ = await _run("collect_information")
 
     assert web_doubles["search"].await_count >= 1
-    assert captured_steps[0]["status"] == "done"
-    assert captured_steps[0]["output"], "a successful search reports what it found"
+    # §17.1 — la mémoire est désormais consultée en tête de plan (lot L4) : le
+    # pas qui a cherché sur le web est celui de l'action, pas le premier du plan.
+    web_step = next(
+        step for step in captured_steps if step["action"] == "collect_information"
+    )
+    assert web_step["status"] == "done"
+    assert web_step["output"], "a successful search reports what it found"

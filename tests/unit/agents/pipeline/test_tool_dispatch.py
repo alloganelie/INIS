@@ -32,17 +32,25 @@ from app.tools.registry import ToolRegistry
 #: §8.4 actions the pipeline can execute today. ``file_ingest`` joined them in
 #: L2.4 (it re-reads the §11 units of the documents already ingested for the
 #: request) and ``query_database`` in L2.5 (it reads the PostgreSQL source named
-#: by ``constraints.source_preferences``). Both are executable and *conditional*:
-#: without the material they need, the step is degraded with the reason, never
-#: turned into a web search.
-EXECUTABLE_ACTIONS = {"collect_information", "fetch_page", "file_ingest", "query_database"}
+#: by ``constraints.source_preferences``). ``memory_lookup`` and
+#: ``retrieve_context`` joined them in L4: the §17.1 memory is consulted at the
+#: head of every plan, with the §16.2 hybrid search injected. Each is executable
+#: and *conditional*: without the material it needs, the step is degraded with
+#: the reason, never turned into a web search.
+EXECUTABLE_ACTIONS = {
+    "collect_information",
+    "fetch_page",
+    "file_ingest",
+    "query_database",
+    "memory_lookup",
+    "retrieve_context",
+}
 
 #: §8.4 actions that are declared but not wired yet, with the reason why.
 KNOWN_GAPS = {
     "analyze_dataset",
     "extract_image_content",
     "compare_sources",
-    "retrieve_context",
     "persist_results",
     "classify_sensitivity",
     "check_permission",

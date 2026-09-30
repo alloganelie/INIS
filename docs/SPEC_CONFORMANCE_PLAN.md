@@ -848,22 +848,72 @@ lecture seule ; les tests d'erreur (type refusé, quota, SQL d'écriture) passen
 **Objectif** : une requête réutilise réellement la mémoire. Aujourd'hui `memory_checker` et
 `HybridSearch` existent et sont testés en unitaire mais **aucun pipeline ne les appelle** (C13).
 
-- [ ] Insérer l'étape `memory_lookup` (§8.4, §17.1) en tête de plan, avant acquisition :
+> ### ⚙️ État d'avancement L4 au 2026-09-30 — **clos** (C13 fermé pour la mémoire)
+>
+> **Fait et prouvé**
+>
+> | Sous-lot | Preuve |
+> |---|---|
+> | ``memory_lookup`` ouvre le plan, **avant** toute acquisition, et c'est `memory_checker.memory_lookup` qui décide avec la recherche §16.2 **injectée** | `tests/unit/planning/test_memory_checker_wired_in_pipeline.py::TestTheStepOpensThePlan` (8 cas) |
+> | Une unité retrouvée entre dans le colis **avec son identifiant d'origine** (aucune recréation), son `context.memory` et sa provenance de run | `tests/unit/planning/test_memory_checker_wired_in_pipeline.py::TestAReusedUnitJoinsTheColis` |
+> | Poids ADR 004 **0.6 / 0.4 au chiffre près** sur données pgvector réelles (1.0 / 0.6 / 0.4 attendus) | `tests/integration/test_hybrid_search_weights_real.py` (6 cas) |
+> | Sous-scores normalisés dans ``[0, 1]`` et exposés : la formule est recalculable sur la ligne | `tests/integration/test_hybrid_search.py::TestFusion::test_final_score_is_the_adr_004_weighted_sum` |
+> | Table ``embeddings`` vide ou vecteur absent ⇒ **lexical seul**, dit dans `limitations` | `tests/unit/planning/test_memory_lookup_lexical_only_degrade.py` (8 cas), `tests/integration/test_hybrid_search.py::TestDegradedMode` |
+> | Déduplication §17.1 : réutiliser une unité **n'en crée pas une seconde** en base | `tests/integration/test_idempotency_integration.py::TestMemoryReuseIsIdempotent` |
+> | Audit §20 : événement ``memory_lookup`` (`success`/`degraded`) + mode réel, accepté tel quel par l'`AuditWriter` | `tests/unit/governance/test_audit_memory_lookup.py` (10 cas) |
+> | Contexte reconstruit par ``retrieve_context(ids)`` : ids de la recherche, contenu/provenance relus, échec **nommé** | `tests/unit/knowledge/test_retrieve_context_wired.py` (4 cas) |
+> | **Critère de sortie L4** : deux requêtes successives sur le même sujet ⇒ la seconde porte une unité de mémoire, tracée, sans doublon | `test_memory_checker_wired_in_pipeline.py` (colis + provenance) + `TestMemoryReuseIsIdempotent` (base) |
+>
+> **Décisions prises en L4**
+>
+> 1. L'étape est construite par le **pipeline**, pas par le planificateur : `order: 0`, insérée
+>    *après* le garde-fou §41.13 (qui continue de mesurer ce que le LLM a produit) et **avant** le
+>    premier pas d'acquisition. Aucun plan ne peut donc « oublier » de consulter la mémoire.
+> 2. « Rien de réutilisable » n'est **pas** une dégradation : le pas est `done`, la raison est dans
+>    `output` et dans `limitations`. Seule une mémoire *inconsultable* (pas de base) dégrade le pas.
+> 3. Les poids viennent de l'ADR 004 (0.6/0.4) et chaque moitié est **normalisée par le maximum de
+>    son propre jeu de candidats** : sans cela, un `ts_rank` non borné écrasait la similarité cosinus.
+> 4. Le mode réel de la recherche (`hybrid` / `lexical_only` / `unavailable`) est exposé et audité :
+>    une réponse lexicale ne doit jamais ressembler à une réponse hybride (§16.2).
+> 5. `source_freshness` = `sources.freshness` si la source en déclare une, sinon `created_at` de
+>    l'unité — l'instant où INIS a appris l'information. Une fraîcheur inconnue **n'est pas** supposée
+>    récente : le seuil §17.1 refuse alors le candidat.
+> 6. `HybridSearch` accepte désormais un **engine déjà construit** et rend un outcome
+>    (mode + limitations + sous-scores) ; `search()` garde son ancien contrat pour les appelants
+>    qui n'ont besoin que des lignes.
+>
+> ⚠️ **Fichiers touchés hors zone Codex** (nécessaires au lot) :
+> `app/storage/search/hybrid_search.py` (§16.2, zone Devin) — normalisation + exposition des
+> sous-scores + dégradation dite ; `app/agents/pipeline/tool_dispatch.py` (vocabulaire §8.4 :
+> `memory_lookup` et `retrieve_context` deviennent exécutables) ;
+> `app/api/v1/requests/pipeline_runner.py` (câblage de l'étape).
+>
+> **Reste ouvert dans §16/§17 (hors périmètre L4)**
+>
+> - Embeddings du *titre* de la question (aujourd'hui la moitié sémantique n'est utilisée que si
+>   un vecteur est fourni au constructeur : le pipeline n'en produit pas encore, faute de provider
+>   d'embeddings configuré — cf. la liste des variables d'environnement).
+> - Réutilisation « **suffisante** » telle que §17.1 la décrit (`MemoryResult.sufficient` arrête
+>   l'acquisition) : aujourd'hui le run **livre** l'unité de mémoire en plus de ce qu'il acquiert ;
+>   l'arrêt anticipé de l'acquisition fera l'objet d'un lot dédié (impact sur le nombre d'étapes).
+
+- [x] Insérer l'étape `memory_lookup` (§8.4, §17.1) en tête de plan, avant acquisition :
   appel de `app/planning/memory_checker.py` avec `hybrid_search` **injecté** (l'interface
   d'injection existe déjà : `memory_checker.py:67`).
   *preuve : `tests/unit/planning/test_memory_checker_wired_in_pipeline.py`*
-- [ ] Poids §16.2 **0.6 sémantique / 0.4 lexical** appliqués par `HybridSearch` (ADR
+- [x] Poids §16.2 **0.6 sémantique / 0.4 lexical** appliqués par `HybridSearch` (ADR
   `004_hybrid_search_weights.md`) et vérifiés sur données réelles pgvector.
   *preuve : `tests/integration/test_hybrid_search_weights_real.py`*
-- [ ] Si la table `embeddings` est vide (L3.3 non livré) : **dégrader en lexical seul** et le
+- [x] Si la table `embeddings` est vide (L3.3 non livré) : **dégrader en lexical seul** et le
   dire dans le colis (`limitations`) plutôt que de prétendre à une recherche hybride.
   *preuve : `tests/unit/planning/test_memory_lookup_lexical_only_degrade.py`*
-- [ ] Déduplication (§17.1) : une unité déjà en mémoire **n'est pas dupliquée** ; le run
-  référence l'unité existante. *preuve : `tests/integration/test_idempotency_integration.py::TestReplayIdempotence` (cas mémoire)*
-- [ ] Tracer le hit : `audit_event` + métrique (§20, §34) — « mémoire utilisée » doit être
+- [x] Déduplication (§17.1) : une unité déjà en mémoire **n'est pas dupliquée** ; le run
+  référence l'unité existante. *preuve : `tests/integration/test_idempotency_integration.py::TestMemoryReuseIsIdempotent` (cas mémoire)*
+- [x] Tracer le hit : `audit_event` + métrique (§20, §34) — « mémoire utilisée » doit être
   auditable. *preuve : `tests/unit/governance/test_audit_memory_lookup.py`*
-- [ ] `retrieve_context(ids)` branché pour reconstruire le contexte des unités retrouvées.
+- [x] `retrieve_context(ids)` branché pour reconstruire le contexte des unités retrouvées.
   *preuve : `tests/unit/knowledge/test_retrieve_context_wired.py`*
+
 
 **Critère de sortie L4 (N2)** : deux requêtes successives sur le même sujet ⇒ la seconde
 contient une unité issue de la mémoire, tracée en audit, sans doublon en base.
@@ -1033,6 +1083,7 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 2026-09-30 | Cline (act) | **L2.1 (fin)** | Variante protocole §5.2 : `InformationRequestCreate.source_ref` n'accepte que `s3://bucket/cle` (chemin local / URL HTTP refusés, §19) et `app/knowledge/ingestion/object_intake.py` ingère l'objet nommé **avant** la planification du run — lecture en flux (plafond §41.2), type par le contenu, `sources`/`documents`/`Dataset`/unités §11, la référence du client restant le `storage_ref`. Une source illisible **refuse la création** (422 nommant la cause). `create_request` devient `async` | `9677305` | `pytest -q` → **2144 passed / 4 skipped** (229,30 s) ; checkers OK ; ruff : 0 nouvelle erreur sur les fichiers du lot (2 préexistantes dans `router.py`) | ⚠️ Le run est planifié **après** l'ingestion : sans cela le plan ignorerait la source que la requête vient de nommer (P27) |
 | 2026-09-30 | Cline (act) | **L3.1** | Étape ENRICHED : `app/knowledge/enrichment/enricher.py` (chaîne §12 `advance_stage`/`can_transition` — saut refusé ; dates ISO + `offset` du texte d'origine ; unités de mesure ; devises ; langue par mots-outils ; empreinte §17.1 ; doublons **nommés** ; `resolved_dataset_stages`), producteurs estampillés `normalized` (`FactExtractor`, `DocumentIngestor`), étape 3.7 du pipeline (`enrich_units` pur, locale par unité, limitations remontées au colis) et lignage §12.1 `Enricher.enrich` **distinct** de la synthèse | `51ca9a1` | `pytest -q` → **2253 passed / 4 skipped** (201,17 s) ; `check_architecture` + `check_contracts` OK ; `ruff` clean sur les fichiers du lot | ✅ LOT L3.1 — 109 nouveaux tests (79 `test_enricher.py`, 14 `test_data_stage_transitions.py`, 10 `test_delivery_exposes_stages.py`, 6 `TestEnrichmentIsItsOwnStage`) ; 3 tests existants mis à jour (`data_stage` du fact extractor/ingestor : `raw` → `normalized`). ⚠️ Deux pièges corrigés pendant le lot : un nombre illisible dans la locale déclarée (`3.5` en `fr-FR`) était **reconverti** en 35 → désormais refusé et listé (`_valid_grouping`) ; `$500` (symbole **avant** le montant) n'était pas signalé comme ambigu → détecté dans les deux notations |
 | 2026-09-30 | Cline (act) | **L3.2 + L3.3** | Fin du lot L3 : §12.1 projeté dans le colis (structure exacte de `Transformation.to_dict()`, une ligne par producteur et par étape, aucun `operator` fourre-tout) et embeddings §16 réellement écrits — `ModelRouter.embed` (sans stub : sans `LLM_API_KEY` l'appel **lève**), `app/knowledge/embedding/embeddings_generator.py` (texte = `unit_text` de L3.1, métadonnée = empreinte, `embedding_id` UUID, largeur vérifiée contre la colonne), `app/storage/repositories/embedding_repository.py` (littéral pgvector + `CAST`, `ON CONFLICT DO NOTHING`, `vector_dims`), `scripts/backfill_embeddings.py` (`--dry-run`, `--request-id`, `--report`, codes de sortie 0/1/2), `llm_decision_trace.task_type = "embedding"` | `536cc9d` + `02583ea` | `pytest -q` → **2313 passed / 4 skipped** (196,32 s) ; `check_architecture` + `check_contracts` + `check_invariants` OK ; `ruff` clean sur les fichiers du lot | ✅ **L3 clos** (C10, C11, C13-écriture). 60 nouveaux tests : 9 `test_delivery_transformations_shape.py`, 8 `test_transformations_are_real.py`, 16 `test_embeddings_generator.py`, 12 `test_embeddings_no_provider_degrades.py`, 8+7 d'intégration **sur PostgreSQL/pgvector réel** (dont `vector_search` qui retrouve l'unité vectorisée et un rattrapage relancé deux fois). ⚠️ Trois pièges : `check_architecture` refuse le littéral `vector(1536)` dans `app/` (la largeur vient d'une constante) ; la base testcontainers est **partagée par la session**, donc le rattrapage est testé `--request-id` scopé (sinon les unités des autres tests rendent le résultat dépendant de l'ordre) ; `asyncio.run` du script impose des tests **synchrones**. Reste pour L4 : brancher `HybridSearch`/`memory_lookup` dans le pipeline |
+| 2026-09-30 | Cline (act) | **L4** | Recherche hybride et mémoire : `app/knowledge/memory/hybrid_memory.py` (recherche §17.1 injectable, mode réel + limitations, candidates depuis `retrieve_context`), `HybridSearch` réécrit (§16.2 : sous-scores **normalisés** dans [0,1] par le maximum de chaque moitié, poids ADR 004 exposés, `search_outcome` qui dit `hybrid`/`lexical_only`/`unavailable`, engine partagé), vocabulaire §8.4 (`memory_lookup` et `retrieve_context` **exécutables**), étape `memory_lookup` en **tête de plan** (`order: 0`, après le garde-fou §41.13), unités réutilisées livrées avec leur identifiant d'origine + `context.memory`, audit §20 (`memory_lookup` success/degraded) et métrique `cache_hit_rate`, `limitations` explicites | (à ancrer) | `pytest -q` → **2354 passed / 4 skipped** (206,15 s) ; `check_architecture` + `check_contracts` + `check_invariants` OK ; `ruff` clean sur les fichiers du lot | ✅ **L4 clos** (C13 fermé pour la mémoire). 41 nouveaux tests + 4 tests existants ajustés (l'étape de mémoire précède désormais les pas d'acquisition). ⚠️ Trois pièges : `:source_id IS NULL` en paramètre asyncpg ⇒ « could not determine data type » (`HybridSearch` rendait [] en silence) → `CAST(:source_id AS text)` ; `pgvector` stocke des `float4`, donc comparaison au chiffre près à `1e-6` (et clamp `LEAST(1.0, …)`) ; la base testcontainers est partagée, donc le corpus de poids sème des **mots rares** et se nettoie pour rester déterministe |
 
 
 ---
