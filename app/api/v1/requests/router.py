@@ -13,9 +13,11 @@ from app.api.v1.requests.schemas import (
     InformationRequestCreate,
     InformationRequestResponse,
 )
-from app.domain.value_objects.ulid import ULID
+from app.core.errors import InisError
 from app.core.statuses import CANCELLED_STATUS
+from app.domain.value_objects.ulid import ULID
 from app.governance.budget.quotas import GLOBAL_USAGE
+from app.knowledge.ingestion.object_intake import intake_source_ref
 
 router = APIRouter(prefix="/requests", tags=["requests"])
 usage_router = APIRouter(prefix="/usage", tags=["usage"])
@@ -29,12 +31,39 @@ _REQUESTS_STORE: dict[str, InformationRequestResponse] = {}
     status_code=status.HTTP_201_CREATED,
     summary="Create a new Information Request",
 )
-def create_request(
+async def create_request(
     payload: InformationRequestCreate,
     background_tasks: BackgroundTasks = BackgroundTasks(),
 ) -> InformationRequestResponse:
-    """Create a new information request, trigger the pipeline runner, and return generated request_id."""
+    """Create a new information request, trigger the pipeline runner, and return generated request_id.
+
+    When the payload names a ``source_ref`` (§5.2), the object is **ingested
+    before** the run is scheduled: the plan must know the document the request
+    owns, otherwise the source it named would be invisible to its own run. A
+    source that cannot be read is a refusal naming the cause, not a request
+    created around a source that does not exist (§25.2).
+
+    Raises:
+        HTTPException: 422 when the named source cannot be ingested.
+    """
     req_id = ULID.new("REQ_")
+
+    if payload.source_ref:
+        try:
+            await intake_source_ref(
+                request_id=req_id,
+                source_ref=payload.source_ref,
+                budget=payload.budget,
+            )
+        except InisError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"Source '{payload.source_ref}' refusée : "
+                    f"{type(exc).__name__} — {exc}"
+                ),
+            ) from exc
+
     created_at = datetime.now(timezone.utc).isoformat()
     item = InformationRequestResponse(
         request_id=req_id,
