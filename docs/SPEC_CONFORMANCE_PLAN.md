@@ -402,9 +402,9 @@ est identique, et dont le `storage_ref` existe dans S3.
 
 #### L2.2 — Dispatch d'outils réel dans le pipeline (Codex)
 
-> ### ⚙️ État d'avancement L2.2 au 2026-09-29 — items 1-2 faits (C5/C6 fermés), items 3-4 ouverts
+> ### ⚙️ État d'avancement L2.2 au 2026-09-30 — **L2.2 clos** (items 1-4 faits, C4/C5/C6 fermés)
 >
-> **Fait et prouvé** (commit `066ac1b`) :
+> **Fait et prouvé** (commits `066ac1b`, `8b13da2`, `3fde944`) :
 >
 > | Sous-lot | Preuve |
 > |---|---|
@@ -413,6 +413,10 @@ est identique, et dont le `storage_ref` existe dans S3.
 > | `StepExecutor` : `InfrastructureError` → `degraded`, autre erreur → `failed`, aucun `output` inventé | `tests/unit/agents/test_step_executor_dispatch.py` |
 > | Suppression des **deux** fabrications (`_ToolAdapter` + « Fallback execution output ») | `tests/agentic/test_no_fabricated_step_output.py` |
 > | Une action non-web ne devient **plus** une recherche web (elle était cherchée par son propre nom) | `tests/agentic/test_no_fabricated_step_output.py::test_a_non_web_action_never_becomes_a_web_search` |
+> | **Plan refusé en amont** si une action est hors vocabulaire (client **et** LLM) | `tests/unit/planning/test_plan_action_vocabulary.py`, `tests/agentic/test_no_fabricated_step_output.py` (plan client + plan LLM refusés) |
+> | La prose d'une étape LLM n'est plus promue en action | `tests/unit/llm/test_plan_parser.py::TestStepNormalization::test_prose_never_becomes_an_action` |
+> | Le prompt de planification énonce le vocabulaire fermé (§22.3) | `tests/unit/llm/test_planning_prompt_vocabulary.py` |
+> | **C4** — `request_type` oriente le plan, et `file_ingest` est branché | `tests/agentic/test_file_ingest_delivery.py`, `tests/integration/test_request_file_ingestion_e2e.py` |
 >
 > **Décisions prises en L2.2**
 >
@@ -423,16 +427,21 @@ est identique, et dont le `storage_ref` existe dans S3.
 > 2. Un `output` vide + une raison dans `error` remplacent tout texte de remplissage (§37). Les
 >    `step_results` partent en persistance (C11) : c'est **là** que la fabrication entrait en base.
 > 3. `is_web_action(unknown) == False` : une action inconnue ne doit jamais déclencher d'acquisition.
+> 4. **Un plan invalide se refuse, il ne se répare pas** (`8b13da2`) : `PlanBuilder.validate_steps`
+>    lève `InvalidPlanAction` en nommant l'action, sa position et le vocabulaire admis. Le plan du
+>    client **et** le plan LLM passent par ce filtre ; un plan refusé n'est pas exécuté et son refus
+>    est écrit dans `limitations`, le plan déterministe prenant sa place.
+> 5. **La prose n'est pas une action** : `parse_plan` ne rapporte que l'`action` **déclarée** par le
+>    LLM. Avant, `step.get("description") or step.get("action")` faisait d'une phrase l'action
+>    exécutée — c'était le dernier chemin par lequel du texte décidait de l'exécution (C4/§0.2).
+> 6. **Une action exécutable peut être conditionnelle** (`3fde944`) : `file_ingest` est `executable=True`
+>    avec un champ `requires` (« un document déjà ingéré pour la requête ») et une raison qui décrit le
+>    cas où elle ne peut pas tourner. Passer une action à « exécutable » reste un acte explicite
+>    (`tests/unit/agents/pipeline/test_tool_dispatch.py` mis à jour dans le même commit).
 >
-> **Reste ouvert dans L2.2**
->
-> - [ ] Le **planificateur** (`PlanBuilder` + `planning_prompt.py`) n'est pas encore contraint par le
->   vocabulaire fermé : `_build_step` copie `step["action"]` sans le valider. Le pipeline dégrade
->   proprement une action inconnue, mais le plan devrait être refusé en amont.
-> - [ ] `request_type` (C4) n'oriente toujours pas le plan. ⚠️ Router naïvement `data`/`source` vers
->   `file_ingest` **casserait** `tests/api/test_pipeline_e2e.py` (une requête `data` sans document
->   téléversé y attend une acquisition web). Le routage correct suppose que le planificateur voie les
->   documents téléversés de la requête : c'est le lot **L2.3**.
+> **Reste ouvert dans L2.2** — **néant** : les items 3 et 4 sont faits (voir ci-dessous).
+> ⚠️ Le routage `postgres_query` par `request_type` reste dû, mais il appartient à **L2.5** :
+> `file_ingest` ne peut pas être étendu à une base sans le connecteur lecture seule de ce lot.
 
 > C'est ici que se joue le passage N0 → N1. Aujourd'hui le seul « dispatch » est un stub (C6).
 
@@ -446,13 +455,32 @@ est identique, et dont le `storage_ref` existe dans S3.
 - [x] `step_executor.py` : exécuter l'outil résolu et **propager les erreurs** (`InfrastructureError`
   → `status="degraded"` + `limitations`), sans jamais substituer de texte inventé.
   *preuve : `tests/unit/agents/test_step_executor_dispatch.py`*
-- [ ] Ajouter au vocabulaire du plan l'action `file_ingest` (§8.4 `file_ingest_step`) :
-  `app/planning/plan_builder.py` + `app/planning/step_selector.py` + prompt de planification
-  (`app/llm/prompts/planning_prompt.py`) ; le planificateur ne peut proposer que des actions
-  présentes dans un **vocabulaire fermé** (défini côté `app/planning/`).
-  *preuve : `tests/unit/planning/test_plan_actions_vocabulary.py`*
-- [ ] `request_type` devient **opérant** (C4) : `"data"`/`"source"` orientent le plan vers
-  `file_ingest`/`postgres_query`. *preuve : `tests/api/test_request_type_routing.py`*
+- [x] Le **planificateur** (`PlanBuilder` + `planning_prompt.py`) est contraint par le vocabulaire
+  fermé : `PlanBuilder.validate_step`/`validate_steps` refuse (`InvalidPlanAction`) toute action hors
+  vocabulaire, en nommant l'action, sa position et les actions admises ; `parse_plan` ne conserve que
+  l'`action` déclarée (la prose n'est plus promue) et `planning_prompt.build` énonce le vocabulaire.
+  *preuve : `tests/unit/planning/test_plan_action_vocabulary.py`, `tests/unit/llm/test_plan_parser.py`,
+  `tests/unit/llm/test_planning_prompt_vocabulary.py`, `tests/agentic/test_no_fabricated_step_output.py`
+  (un plan client **et** un plan LLM hors vocabulaire sont refusés avant exécution)* — commit `8b13da2`
+- [x] Ajouter au vocabulaire du plan l'action `file_ingest` (§8.4 `file_ingest_step`) : `ACTIONS`
+  (`app/agents/pipeline/tool_dispatch.py`) la déclare `executable=True` avec `requires`
+  (« un document déjà ingéré pour la requête ») et la raison du cas où elle ne peut pas tourner ; le
+  pipeline l'exécute réellement (relit les unités §11 du document, statut `done` + sortie factuelle).
+  ⚠️ `app/planning/step_selector.py` n'a **pas** été modifié : il sélectionne une étape par ses
+  dépendances, pas par son action — la case citait un fichier qui n'avait rien à changer.
+  *preuve : `tests/unit/agents/pipeline/test_tool_dispatch.py::TestActionVocabulary::test_a_conditional_action_declares_what_it_needs`,
+  `tests/agentic/test_file_ingest_delivery.py::TestADataRequestIsPlannedAroundItsFile::test_the_file_ingest_step_is_done_and_names_what_it_read`*
+- [x] `request_type` devient **opérant** (C4) : `"data"`/`"source"` orientent le plan vers
+  `file_ingest` **quand la requête a ingéré un document** (sinon le plan reste inchangé, ce qui
+  préserve `tests/api/test_pipeline_e2e.py` : une requête `data` sans fichier cherche toujours sur le
+  web) ; les autres types gardent leur plan et gagnent l'ingestion du fichier.
+  ⚠️ Correction de preuve (le plan citait `tests/api/test_request_type_routing.py`, **ce fichier
+  n'existe pas**) : la preuve réelle est
+  `tests/agentic/test_file_ingest_delivery.py::TestTheOtherRequestTypesKeepTheirPlan` (unitaire, sans
+  Docker) et `tests/integration/test_request_file_ingestion_e2e.py::test_a_data_request_does_not_search_the_web_for_its_own_file`
+  (PostgreSQL réel : **zéro** appel de recherche pour une requête `data` dont le fichier est ingéré).
+  ⚠️ `postgres_query` reste dû (**L2.5**) : `request_type="data"` oriente vers `file_ingest` tant que la
+  base lecture seule n'existe pas.
 
 #### L2.3 — Datasets réels et traçabilité (§11, §12, §27)
 
@@ -554,6 +582,20 @@ est identique, et dont le `storage_ref` existe dans S3.
 produit un colis §24.1 contenant `datasets[]` non vide, des unités localisables dans le fichier,
 `transformations[]` non vide, et une provenance complète ; idem avec une requête PostgreSQL
 lecture seule ; les tests d'erreur (type refusé, quota, SQL d'écriture) passent.
+
+> ### ✅ Moitié « fichier » du critère de sortie L2 — prouvée le 2026-09-30 (`3fde944`)
+>
+> | Exigence | Preuve |
+> |---|---|
+> | `datasets[]` non vide | `tests/integration/test_request_file_ingestion_e2e.py::test_the_delivery_of_a_data_request_carries_its_csv` (dataset réel, `row_count`, `storage_ref`) |
+> | unités localisables dans le fichier | idem : `location.kind == "row"`, `row ∈ {1, 2}`, `dataset_id` lié, `provenance.extracted_from` = l'objet stocké (§11) |
+> | `transformations[]` non vide | idem : étage `raw` (`read_csv`) + `normalized` (`DocumentIngestor.ingest`) de l'ingestion, en plus des étages web |
+> | provenance complète | idem : `provenance.request_type`, sources du document dans `sources[]`, `document_id`/`dataset_id` sur chaque unité |
+> | type refusé / quota | `tests/integration/test_document_upload_s3.py::test_an_unsupported_document_never_reaches_the_bucket` (+ tests de quota §41.2 du lot L2.1) |
+>
+> ⚠️ Reste dû pour **clore** L2 : la branche « requête PostgreSQL lecture seule » (lot **L2.5**),
+> le mode « cible explicite » des connecteurs fichiers et le téléchargement S3 en streaming
+> (lot **L2.4**), ainsi que l'extraction PDF/image (lot **L2.6**).
 
 ---
 
@@ -775,6 +817,8 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 2026-09-29 | Cline (act) | L2.2 | Deux défauts trouvés en lisant le vrai chemin d'exécution : toute action déclenchait une recherche web (avec le **nom de l'action** comme requête) et la seconde fabrication (`Fallback execution output`) jetait l'erreur réelle | `066ac1b` | `tests/agentic/test_no_fabricated_step_output.py::test_a_non_web_action_never_becomes_a_web_search` | ✅ corrigés ; reste L2.2 items 3-4 (validation du plan en amont, `request_type`), bloqués par L2.3 (cf. encadré L2.2) |
 | 2026-09-29 | Cline (act) | **L2.3** | Ingestion d'un document en unités §11 localisées + `Dataset` persisté : `document_ingestor.py`, `DatasetRepository`, migration `0015` (`datasets.storage_ref`/`request_id`, `information_units.dataset_id`/`location`) | `a6921ab` | `python -m pytest -q` → **1772 passed / 4 skipped** (183,63 s) ; 3 checkers OK ; BC **0 breaking** (31 warnings) ; `ruff` clean (10 corrections auto) ; `0015` appliquée **et** annulée sur la base docker | ✅ — 17 nouveaux tests ; le champ `information_units` de l'upload n'est plus vide. Reste : découpage ADR 007, `Transformation` par étape (§12.1/C11), granularité page/feuille, `artifact_lineage` |
 | 2026-09-29 | Cline (act) | **C11/C10** | Une `Transformation` **par étape réelle** (Section 12.1) : `stage_transformations.py`, plus de `transformations: []` codé en dur, `persist_transformations` remplace la `TRF_` unique | `3b7d327` | `pytest -q` -> **1783 passed / 4 skipped** (168,76 s) ; 3 checkers OK ; `ruff` sur `pipeline_runner.py` : 34 -> 22 erreurs préexistantes (aucune nouvelle) | OK - 11 tests unitaires + 2 tests d'intégration renforcés. Une étape qui n'a rien produit est **absente** (jamais inventée). Reste : les étages d'un run d'ingestion, `artifact_lineage` |
+| 2026-09-30 | Cline (act) | **L2.2 (fin)** | Le plan est **contraint par le vocabulaire fermé §8.4** : `InvalidPlanAction` + `PlanBuilder.validate_step(s)`, plan client **et** plan LLM validés avant exécution, `parse_plan` ne promeut plus la prose en action, le prompt énonce le vocabulaire | `8b13da2` | `pytest -q` → **1802 passed / 4 skipped** (168,95 s) ; 3 checkers OK ; `ruff` sans nouvelle erreur | ✅ 19 nouveaux tests. ⚠️ 4 tests existants documentaient l'ancien contrat et devaient bouger (**acte explicite**) : `test_plan_builder` (actions `search`/`verify` hors vocabulaire), `test_pipeline_guards` (plan `web_search`), `test_plan_parser` (forme exacte d'une étape), `test_no_fabricated_step_output` (un plan inconnu était *exécuté* puis dégradé) — il est désormais **refusé en amont** |
+| 2026-09-30 | Cline (act) | **L2.2 (fin) / L2.4** | `file_ingest` branché et `request_type` **opérant** (C4) : `request_material.py` relit la matière ingérée (documents/datasets/unités localisées), le pipeline exécute l'étape, remplit `datasets[]`, ajoute les sources fichiers, oriente le plan `data`/`source` vers le fichier, et enregistre les étages `raw`/`normalized` de l'ingestion | `3fde944` | `pytest -q` → **1842 passed / 4 skipped** (152,48 s) ; 3 checkers OK ; `ruff` : `pipeline_runner.py` à 22 erreurs préexistantes (aucune nouvelle) | ✅ **C4 fermé** ; moitié « fichier » du critère de sortie L2 prouvée sur PostgreSQL réel (`tests/integration/test_request_file_ingestion_e2e.py`). ⚠️ Fabrication découverte **dans le lignage** : l'unité agrégée du run était attribuée au `FactExtractor` (deux étages `normalized` dès qu'un fichier était livré) → corrigé par un paramètre `delivered_units` distinct ; `test_b4bis_persistence` verrouillait cette attribution et a été corrigé ; `entity.requires` introduit pour les actions exécutables conditionnelles |
 
 ---
 
@@ -794,6 +838,9 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | P10 | `frontend/src/api/artifacts.ts` **avale les erreurs** (`catch { return [] }`) | l'UI affichera « aucun artefact » même si l'API est cassée — ✅ **corrigé en L1** (seul un 404 devient `[]`) |
 | P11 | Aucun moteur PDF en écriture (C22) | ne pas promettre `.pdf` sans ADR + dépendance — ✅ **traité en L1 (option A)** : refus explicite, aucune substitution de format |
 | P12 | `git status` est sale sur la branche courante | diffs de lot illisibles : committer/stasher d'abord (L0) — ✅ **traité en L0** (branche `feat/conformance-v1`, snapshot `5c3c60f`) |
+| P13 | `POST /v1/requests` lance **aussi** un run en tâche de fond (`BackgroundTasks`), et `TestClient` l'exécute de façon **synchrone** | un test qui compte les appels d'un provider voit le run de création *et* le sien : compter après `reset_mock()`, sinon la mesure ne dit rien — ⚠️ **rencontré en L2.4** (`test_request_file_ingestion_e2e.py`) |
+| P14 | L'engine de `get_default_engine()` est **caché par URL** et lié à sa boucle d'événements | un test synchrone (`TestClient`) puis `asyncio.run(...)` réutilisent le même pool à travers deux boucles : `RuntimeError: Event loop is closed` ou un pool qui rend des connexions mortes — poser `INIS_NULL_POOL=1`, `set_default_engine(None)` et créer l'engine **dans la boucle qui l'utilise** — ⚠️ **rencontré en L2.4** |
+| P15 | Une seule ligne de `transformations` par étape §12 n'est **pas** garanti : deux producteurs d'une même étape (acquisition web + lecteur d'un fichier ingéré) produisent légitimement **deux** lignes | un test qui compte « une ligne par étape » interdit la vérité ; vérifier l'unicité par `(stage, tool)` — ⚠️ **découvert en L2.4** (`test_b4bis_persistence.py` verrouillait l'attribution erronée de l'unité agrégée du run au `FactExtractor`) |
 
 ---
 

@@ -22,16 +22,25 @@ utiliser pour toute nouvelle ligne de couverture.
 | L2.2 — dispatch réel des outils §21, fin des fabrications de step (C5/C6) | `066ac1b` | `pytest -q` → **1755 passed / 4 skipped** ; 3 checkers OK ; `ruff` clean sur le lot (et `pipeline_runner.py` : 35 erreurs préexistantes → 34) |
 | L2.3 — un document ingéré devient des unités §11 localisées + un `Dataset` persisté | `a6921ab` | `pytest -q` → **1772 passed / 4 skipped** ; 3 checkers OK ; BC 0 breaking ; `ruff` clean ; `0015` up/down vérifiée |
 | C11/C10 - une `Transformation` par etape reelle (Section 12.1) et fin du `transformations: []` code en dur | `3b7d327` | `pytest -q` -> **1783 passed / 4 skipped** ; 3 checkers OK ; aucune nouvelle erreur ruff |
+| L2.2 (fin) — le plan est contraint par le vocabulaire fermé §8.4 (plan client et plan LLM refusés en amont, la prose n'est plus une action) | `8b13da2` | `pytest -q` → **1802 passed / 4 skipped** ; 3 checkers OK ; `ruff` sans nouvelle erreur |
+| L2.4 — `file_ingest` branché, `request_type` opérant (C4) : la matière ingérée entre dans le colis (`datasets[]`, unités localisées, étages §12.1 de l'ingestion) | `3fde944` | `pytest -q` → **1842 passed / 4 skipped** ; 3 checkers OK ; `ruff` : aucune nouvelle erreur ; critère de sortie L2 (branche fichier) prouvé sur PostgreSQL réel |
 
 L1 est **N2 sur le chemin nominal** : `required_output.format="xlsx"` produit un fichier réellement
 stocké dans le conteneur S3, listé par `GET /v1/artifacts?request_id=`, et téléchargé avec un
 `sha256` recalculé identique (`tests/integration/test_artifacts_object_storage.py`).
+
+L2 est **N2 sur la branche fichier** : un CSV ingéré pour une requête ressort dans le colis §24.1
+(`datasets[]` non vide, unités §11 localisables, `transformations[]` de l'ingestion avec le lecteur
+§21 qui a lu, provenance complète) et une requête `request_type="data"` n'explore plus le web pour
+un fichier qu'elle a fourni (§7/C4) — `tests/integration/test_request_file_ingestion_e2e.py`.
+
 Détail des cases, preuves, décisions et du reste à faire : `docs/SPEC_CONFORMANCE_PLAN.md` §4 (encadrés L1,
 L2.1, L2.2 et L2.3) et §6 (journal). **Prochain lot : fin de L2 puis L3** — dans l'ordre de valeur :
-(1) `Transformation` **par étape réelle** (§12.1, C11) et `artifact_lineage` (maintenant que les datasets
-existent) ; (2) `ChunkedDatasetProcessor` (ADR 007) ; (3) items L2.2 restants (validation du plan par le
-vocabulaire fermé, `request_type` opérant) ; (4) **L3** — cycle de vie RAW→DERIVED et embeddings (§12, §16,
-C12 : la table `embeddings` est vide).
+(1) `artifact_lineage` (le colis porte désormais de vrais `DATA_`/`TRF_` à référencer) ; (2) items
+**L2.4** restants (cible explicite des connecteurs fichiers, S3 en streaming, `content_type`/`location`
+dans `RawSource.metadata`) ; (3) **L2.5** PostgreSQL lecture seule (`postgres_query`, route depuis
+`request_type="data"`) puis **L2.6** PDF/image ; (4) `ChunkedDatasetProcessor` (ADR 007) ; (5) **L3** —
+cycle de vie RAW→DERIVED et embeddings (§12, §16, C12 : la table `embeddings` est vide).
 
 ## PHASE-05.4 — Temporary ownership exception
 
