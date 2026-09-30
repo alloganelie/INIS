@@ -58,6 +58,10 @@ requests_table = Table(
     Column("last_committed_at", DateTime(timezone=True), nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=True),
     Column("updated_at", DateTime(timezone=True), nullable=True),
+    # Revision 0016 — §7: the whole request body (question, context,
+    # required_information, required_output, permissions, budget…), so a request
+    # read back after a restart is the one that was asked, not a subset.
+    Column("payload", JSON_TYPE, nullable=True),
 )
 
 #: Default lifetime of a request in seconds (the 0007 server default).
@@ -101,6 +105,9 @@ def to_request_row(request: Mapping[str, Any]) -> dict[str, Any]:
         "last_committed_at": as_datetime(item.get("last_committed_at")),
         "created_at": created_at,
         "updated_at": as_datetime(item.get("updated_at"), now),
+        # §7/0016 — stored as-is when the caller brings it: the repository never
+        # re-shapes the request, and ``None`` means "this row predates 0016".
+        "payload": as_json_value(item.get("payload")),
     }
 
 
@@ -120,6 +127,9 @@ def to_request_response(row: Mapping[str, Any]) -> dict[str, Any]:
         "last_committed_at": as_iso(data.get("last_committed_at")),
         "created_at": as_iso(data.get("created_at")),
         "updated_at": as_iso(data.get("updated_at")),
+        # ``None`` for a row written before revision 0016: the caller falls back
+        # to the durable columns instead of inventing the missing §7 fields.
+        "payload": as_dict(data.get("payload")) or None,
     }
 
 

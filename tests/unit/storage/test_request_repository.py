@@ -19,6 +19,7 @@ from app.storage.repositories.request_repository import (
     RequestRepository,
     as_json_value,
     requests_table,
+    to_request_response,
     to_request_row,
 )
 
@@ -33,8 +34,8 @@ async def engine(tmp_path: Path) -> AsyncIterator[object]:
         await built.dispose()
 
 
-def test_table_mirrors_revision_0007() -> None:
-    """The repository declares exactly the columns revision 0007 created."""
+def test_table_mirrors_revision_0007_plus_0016() -> None:
+    """Revision 0007 plus the ``payload`` column of revision 0016."""
     assert set(requests_table.columns.keys()) == {
         "request_id",
         "request_type",
@@ -48,7 +49,21 @@ def test_table_mirrors_revision_0007() -> None:
         "last_committed_at",
         "created_at",
         "updated_at",
+        "payload",
     }
+
+
+def test_payload_round_trip() -> None:
+    """§7 — the whole request body is stored and read back unchanged."""
+    body = {
+        "question": "Quelle est la population de Paris ?",
+        "context": {"langue": "fr"},
+        "budget": {"max_cost_usd": 1.5},
+    }
+    row = to_request_row({"request_id": "REQ_L7_PAY", "objective": "o", "payload": body})
+    assert row["payload"] == body
+    assert to_request_response({**row, "payload": body})["payload"] == body
+    assert to_request_response({**row, "payload": None})["payload"] is None
 
 
 def test_row_defaults() -> None:

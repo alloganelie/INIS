@@ -73,6 +73,9 @@ artifacts_table = Table(
     # Revision 0013 — the request an artifact was delivered for.
     Column("request_id", String(64), nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=True),
+    # Revision 0016 — §18.2: set when the record is soft-deleted; a read
+    # filters on ``deleted_at IS NULL`` (partial index of the same name).
+    Column("deleted_at", DateTime(timezone=True), nullable=True),
 )
 
 artifact_id_sequences_table = Table(

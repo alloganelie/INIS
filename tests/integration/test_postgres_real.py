@@ -214,6 +214,10 @@ _PRIMARY_KEYS = {
     "plans": "plan_id",
     "plan_steps": "step_id",
     "information_versions": "information_version_id",
+    "documents": "id",
+    "datasets": "dataset_id",
+    "artifacts": "artifact_id",
+    "conflicts": "conflict_id",
 }
 
 
@@ -281,6 +285,10 @@ async def test_source_repository_matches_migration(db_url, alembic_upgrade):
 async def test_every_repository_table_is_keyed_as_declared(db_url, alembic_upgrade):
     """Every repository table exists and its primary key is the declared one."""
     from app.storage.database.engine import create_engine
+    from app.storage.repositories.artifact_repository import artifacts_table
+    from app.storage.repositories.conflict_repository import conflicts_table
+    from app.storage.repositories.dataset_repository import datasets_table
+    from app.storage.repositories.document_repository import documents_table
     from app.storage.repositories.evidence_repository import evidence_table
     from app.storage.repositories.information_unit_repository import (
         information_units_table,
@@ -300,6 +308,10 @@ async def test_every_repository_table_is_keyed_as_declared(db_url, alembic_upgra
         plans_table,
         plan_steps_table,
         information_versions_table,
+        documents_table,
+        datasets_table,
+        artifacts_table,
+        conflicts_table,
     )
     engine = create_engine(db_url)
     problems: dict[str, dict[str, list[str]]] = {}

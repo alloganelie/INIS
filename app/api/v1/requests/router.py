@@ -60,6 +60,10 @@ async def _persist_request(item: InformationRequestResponse) -> None:
                 "constraints": item.constraints,
                 "status": item.status,
                 "created_at": item.created_at,
+                # §7/0016 — the whole request, so the restart restores what was
+                # asked (question, context, required_information, budget…) and
+                # not only the subset the columns carry.
+                "payload": item.model_dump(mode="json"),
             },
         )
     except Exception:  # noqa: BLE001 - §25.2: an unstored request is still a request
@@ -69,10 +73,15 @@ async def _persist_request(item: InformationRequestResponse) -> None:
 async def _restore_request(request_id: str) -> InformationRequestResponse | None:
     """Rebuild a request from the ``requests`` table, or return ``None``.
 
-    Fields the table does not carry (question, context, required_information,
-    required_output, permissions, budget) are left at their defaults instead of
-    being invented: the durable subset is what §7 stored, and ``pipeline_state``
-    stays ``None`` because the live state of a past run is genuinely gone.
+    Two cases, and the delivery says which one applies:
+
+    * the row carries its §7 ``payload`` (written since revision ``0016``): the
+      request is restored **whole** — question, context, required_information,
+      required_output, permissions and budget included;
+    * the row predates ``0016`` (``payload`` is NULL): only the durable columns
+      come back, and the fields the table never carried stay at their defaults
+      instead of being invented (``pipeline_state`` stays ``None`` in both
+      cases: the live state of a past run is genuinely gone).
     """
     from app.storage.database.engine import get_default_engine
     from app.storage.repositories.request_repository import RequestRepository
@@ -87,6 +96,17 @@ async def _restore_request(request_id: str) -> InformationRequestResponse | None
         return None
     if row is None:
         return None
+
+    payload = row.get("payload")
+    if isinstance(payload, dict) and payload:
+        try:
+            item = InformationRequestResponse(**payload)
+        except Exception:  # noqa: BLE001 - a payload from another version: use the columns
+            _LOGGER.warning("request %s: payload illisible, repli sur les colonnes", request_id)
+        else:
+            _REQUESTS_STORE[item.request_id] = item
+            return item
+
     item = InformationRequestResponse(
         request_id=str(row["request_id"]),
         request_type=str(row["request_type"] or "research"),

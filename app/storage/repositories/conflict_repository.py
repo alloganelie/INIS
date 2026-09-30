@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from sqlalchemy import Column, MetaData, String, Table, Text, insert, select
+from sqlalchemy import Column, DateTime, MetaData, String, Table, Text, insert, select
 
 from app.domain.value_objects.ulid import ULID
 from app.storage.database.engine import get_default_engine
@@ -33,6 +33,9 @@ conflicts_table = Table(
     Column("severity", String(32), nullable=False),
     Column("resolution_status", String(32), nullable=False),
     Column("resolution_evidence", JSON_TYPE, nullable=False),
+    # Revision 0016 — §18.2: set when the record is soft-deleted; a read
+    # filters on ``deleted_at IS NULL`` (partial index of the same name).
+    Column("deleted_at", DateTime(timezone=True), nullable=True),
 )
 
 

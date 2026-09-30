@@ -1,28 +1,30 @@
 """Inventory of §18.2 (suppression logique) and §18.3 (temporalité) in the schema.
 
-The plan asks to *verify* that the tables and columns landing since L1.3 respect
-§18.2/§18.3, not to assume it. This test is that verification, done statically
-(the migrations are the schema of record) so it needs no database.
+The plan asks to *verify* that the tables and columns respect §18.2/§18.3, not to
+assume it. This test is that verification, done statically (the migrations are
+the schema of record) so it needs no database.
 
-Verdict it records, honestly:
+Verdict it records, after revision ``0016``:
 
+* **§18.2 — yes, on the content records**: ``accounts`` (0006) plus the seven
+  content tables a requester can remove (``sources``, ``documents``,
+  ``datasets``, ``information_units``, ``evidence``, ``artifacts``, ``conflicts``)
+  carry ``deleted_at``. Each column is paired with a partial index on
+  ``deleted_at IS NULL``, which is what a §18.2 read filters on.
+* **§18.2 — deliberately not on the append-only tables**: ``transformations``
+  (§12.1 lineage), ``information_versions`` (§18.1 — a version is superseded,
+  never deleted) and ``audit_events`` (§20) must keep their history readable; a
+  soft-delete column there would let a deletion contradict the lineage and the
+  trail. The second half of the test enforces that absence, so removing the
+  decision would require editing this file.
 * **§18.3 — yes, where it matters**: every table created by revision ``0007``
   carries ``created_at`` with a server default, and the mutable ones carry
   ``updated_at``.
-* **§18.2 — partly**: ``accounts`` (revision ``0006``) is the only table with a
-  ``deleted_at`` column. The content tables (``sources``, ``documents``,
-  ``information_units``, ``datasets``, ``artifacts``, …) have **no** soft-delete
-  column: archiving them today means a hard ``DELETE`` or an application-level
-  convention, which §18.2 does not accept.
-
-Closing that gap means adding columns to existing tables, i.e. a **migration**
-(revision ``0016``): it changes the data schema, so it is a decision to be taken
-explicitly. Until then, this test pins the gap instead of hiding it — and fails
-the day a migration adds the columns without updating the inventory below.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import re
 from pathlib import Path
 
@@ -31,21 +33,22 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MIGRATIONS = REPO_ROOT / "migrations" / "versions"
 
-#: Tables the schema gives a soft-delete column today (revision 0006).
-SOFT_DELETE_TABLES = {"accounts"}
-
-#: Content tables that §18.2 would cover and that still have no such column.
-#: Adding a migration is what removes an entry from this set (revision 0016).
-SOFT_DELETE_GAP = {
+#: Tables with a §18.2 soft-delete column: caller-owned content plus accounts.
+SOFT_DELETE_TABLES = {
+    "accounts",
     "sources",
     "documents",
     "datasets",
     "information_units",
-    "information_versions",
     "evidence",
     "artifacts",
     "conflicts",
+}
+
+#: Append-only tables: lineage, versions and audit stay readable forever.
+APPEND_ONLY_TABLES = {
     "transformations",
+    "information_versions",
     "audit_events",
 }
 
@@ -66,11 +69,12 @@ def _migration_sources() -> dict[str, str]:
 
 
 def _tables_with_column(column: str) -> set[str]:
-    """Return the tables some ``op.create_table`` block gives *column* to.
+    """Return the tables some migration gives *column* to.
 
-    The block split is enough for this inventory: ``create_table`` blocks are
-    flat in this repository, and the alternative (importing the migrations)
-    would require a database context.
+    Two shapes are read: a column declared inside an ``op.create_table`` block,
+    and a column added later with ``op.add_column("<table>", sa.Column(...))``
+    (that is how revision ``0016`` extends the content tables). Both are schema
+    changes, so both belong in the inventory.
     """
     found: set[str] = set()
     for text in _migration_sources().values():
@@ -78,6 +82,10 @@ def _tables_with_column(column: str) -> set[str]:
             name = re.match(r'\s*\n?\s*"([a-z_]+)"', block)
             if name and re.search(rf'sa\.Column\(\s*"{column}"', block):
                 found.add(name.group(1))
+        for added in re.finditer(
+            rf'op\.add_column\(\s*\n?\s*"([a-z_]+)"\s*,\s*sa\.Column\(\s*"{column}"', text
+        ):
+            found.add(added.group(1))
     return found
 
 
@@ -96,28 +104,63 @@ def _tables_without_created_at_after(revision: str) -> set[str]:
     return late_tables
 
 
-def test_accounts_is_the_only_soft_deleted_table_today() -> None:
-    """§18.2 is implemented for accounts, and only there."""
-    tables = _tables_with_column("deleted_at")
-    assert tables == SOFT_DELETE_TABLES, (
-        "l'inventaire §18.2 a changé : mettre à jour SOFT_DELETE_TABLES "
-        f"(deleted_at trouvé sur {sorted(tables)})"
-    )
+def _revision_module(revision: str):
+    """Import a migration module by revision id (its declarations are data)."""
+    path = next(MIGRATIONS.glob(f"{revision}_*.py"))
+    spec = importlib.util.spec_from_file_location(f"revision_{revision}", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def test_soft_delete_gap_is_explicit() -> None:
-    """The content tables still lack a soft-delete column — stated, not hidden.
+def test_accounts_carries_soft_delete_since_0006() -> None:
+    """``accounts`` got its ``deleted_at`` in revision 0006."""
+    assert "accounts" in _tables_with_column("deleted_at")
 
-    Closing it requires adding columns to existing tables (migration ``0016``),
-    a schema change that must be decided and reviewed as such.
+
+def test_the_content_tables_declared_by_0016_are_the_expected_ones() -> None:
+    """§18.2 covers exactly the content records a requester can remove.
+
+    The list is read from the migration itself: the schema of record declares
+    it, and this test is what makes a change to that list a deliberate edit.
     """
-    with_soft_delete = _tables_with_column("deleted_at")
-    still_missing = SOFT_DELETE_GAP - with_soft_delete
-    assert still_missing, (
-        "toutes les tables de SOFT_DELETE_GAP ont un deleted_at : "
-        "retirer les colonnes de SOFT_DELETE_GAP et documenter la migration 0016"
-    )
-    assert len(still_missing) >= 5, "le périmètre §18.2 attendu a été réduit sans décision"
+    module = _revision_module("0016")
+    assert set(module._CONTENT_TABLES) == SOFT_DELETE_TABLES - {"accounts"}
+
+
+def test_append_only_tables_are_never_in_the_soft_delete_list() -> None:
+    """Lineage, versions and audit are never soft-deleted — enforced, not hoped.
+
+    A ``deleted_at`` on those tables would let a deletion contradict §12.1
+    (lineage), §18.1 (a version is superseded) and §20 (the trail stays
+    readable). The two tuples come from the migration, so adding
+    ``transformations`` to the content list would fail here.
+    """
+    module = _revision_module("0016")
+    assert set(module._APPEND_ONLY_TABLES) == APPEND_ONLY_TABLES
+    overlap = sorted(set(module._APPEND_ONLY_TABLES) & set(module._CONTENT_TABLES))
+    assert overlap == [], f"tables append-only dans la liste §18.2 : {overlap}"
+    for table in sorted(APPEND_ONLY_TABLES):
+        assert table not in _tables_with_column("deleted_at")
+
+
+def test_each_soft_delete_column_has_its_partial_index() -> None:
+    """§18.2 reads filter on ``deleted_at IS NULL``: the index follows.
+
+    The migration names the indexes through a template (``ix_{table}_not_deleted``),
+    so the check is on the declared intent: a template, a partial predicate and
+    an iteration over the content tables. Whether PostgreSQL really created them
+    is asserted on a migrated database by
+    ``tests/integration/test_migrations.py::TestRevision0016``.
+    """
+    text = "\n".join(_migration_sources().values())
+    assert "_NOT_DELETED_INDEX = \"ix_{table}_not_deleted\"" in text
+    assert "postgresql_where=sa.text(\"deleted_at IS NULL\")" in text
+    assert "for table in _CONTENT_TABLES:" in text
+    for table in sorted(SOFT_DELETE_TABLES):
+        if table != "accounts":
+            assert f'"{table}"' in text, f"table §18.2 absente de la migration : {table}"
 
 
 def test_new_tables_created_after_0007_carry_created_at() -> None:

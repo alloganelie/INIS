@@ -40,6 +40,8 @@ EXPECTED_COLUMNS = {
     "trust_level",
     "status",
     "metadata",
+    # Revision 0016 — §18.2 soft delete on the content records.
+    "deleted_at",
 }
 
 

@@ -38,6 +38,8 @@ def test_table_mirrors_the_migrations() -> None:
         "created_at",
         "storage_ref",
         "request_id",
+        # Revision 0016 — §18.2 soft delete on the content records.
+        "deleted_at",
     }
 
 
