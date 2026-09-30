@@ -29,6 +29,9 @@ TASK_TYPES = frozenset(
         "classification",
         "conflict_detection",
         "confidence_signal",
+        # §16.1 — an embeddings call goes through the Model Router too, so it is
+        # traced like every other model call (§41.12).
+        "embedding",
     }
 )
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,8 +31,20 @@ ENV_BASE_URL = "LLM_BASE_URL"
 ENV_FALLBACK_MODELS = "LLM_MODEL_FALLBACKS"
 #: §41.8 total tries per model, overriding ``DEFAULT_RETRY_ATTEMPTS``.
 ENV_RETRY_ATTEMPTS = "LLM_RETRY_ATTEMPTS"
+#: §16.1 embeddings model (an OpenAI-compatible ``/embeddings`` endpoint).
+ENV_EMBEDDING_MODEL = "LLM_EMBEDDING_MODEL"
+#: §16.1 input texts per embeddings request.
+ENV_EMBEDDING_BATCH = "LLM_EMBEDDING_BATCH"
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_TIMEOUT_SECONDS = 30.0
+#: §16.1 — the width of ``embeddings.vector`` (migration ``0003``). A provider
+#: answering another width is refused rather than truncated: a truncated vector
+#: is not the embedding of anything.
+EMBEDDING_DIMENSION = 1536
+#: Model used when neither the caller nor ``LLM_EMBEDDING_MODEL`` names one.
+DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+#: How many texts one embeddings request carries.
+DEFAULT_EMBEDDING_BATCH = 32
 
 #: Total tries per model, including the first one (§41.8 retry policy).
 #: Three tries absorb the transient ``:free`` gateway overloads without
@@ -128,6 +141,23 @@ class LLMResponse:
     stub: bool = False
     input_tokens: int = 0
     output_tokens: int = 0
+    latency_ms: int = 0
+    raw: dict[str, Any] | None = None
+
+
+@dataclass
+class EmbeddingResponse:
+    """Result of a routed embeddings call (§16.1).
+
+    ``vectors`` follow the order of the texts submitted, and ``model`` names the
+    model that really answered. There is deliberately **no stub**: a fabricated
+    vector would be indistinguishable from a real one once stored (§0.2), so an
+    unconfigured provider raises instead.
+    """
+
+    vectors: list[list[float]]
+    model: str
+    input_tokens: int = 0
     latency_ms: int = 0
     raw: dict[str, Any] | None = None
 
@@ -388,6 +418,200 @@ class ModelRouter:
             if owns_client:
                 await client.aclose()
         raise InfrastructureError("all LLM models failed (§22.2): " + " | ".join(failures))
+
+    def embedding_model(self) -> str:
+        """Return the §16.1 embeddings model (``LLM_EMBEDDING_MODEL`` or default)."""
+        configured = os.environ.get(ENV_EMBEDDING_MODEL, "").strip()
+        return configured or DEFAULT_EMBEDDING_MODEL
+
+    @property
+    def embedding_batch_size(self) -> int:
+        """Return the effective number of texts carried by one request (§16.1)."""
+        return _env_positive_int(ENV_EMBEDDING_BATCH) or DEFAULT_EMBEDDING_BATCH
+
+    async def embed(
+        self,
+        texts: Sequence[str],
+        *,
+        model: str | None = None,
+        dimension: int = EMBEDDING_DIMENSION,
+        batch_size: int | None = None,
+        **kwargs: Any,
+    ) -> EmbeddingResponse:
+        """Return the embeddings of *texts*, in the order they were submitted (§16.1).
+
+        Unlike :meth:`complete`, this method has **no stub**: a fabricated vector
+        is indistinguishable from a real one once it is stored, so an
+        unconfigured provider raises :class:`InfrastructureError` naming the
+        missing variable instead of returning a silent zero vector (§0.2).
+
+        Args:
+            texts: Texts to embed, in order. Each must be non-blank.
+            model: Embeddings model; ``LLM_EMBEDDING_MODEL`` then
+                :data:`DEFAULT_EMBEDDING_MODEL` when omitted.
+            dimension: Expected width of every vector, checked before returning.
+                It defaults to the width of ``embeddings.vector`` (migration
+                ``0003``) and is only ever overridden by a caller owning a
+                different column.
+            batch_size: Texts per request; :attr:`embedding_batch_size` when ``None``.
+            **kwargs: Optional ``client`` (injected ``httpx.AsyncClient``, e.g.
+                with ``MockTransport`` in tests), ``base_url`` and
+                ``timeout_seconds``.
+
+        Returns:
+            An :class:`EmbeddingResponse` carrying the vectors, the model that
+            answered and the provider token usage.
+
+        Raises:
+            ValueError: If *texts* is empty or holds a blank text, or if
+                *dimension* / *batch_size* is not strictly positive.
+            InfrastructureError: Without ``LLM_API_KEY``, when every attempt
+                failed, when the payload is malformed, or when a vector width
+                differs from *dimension*.
+        """
+        if not texts:
+            raise ValueError("texts must not be empty")
+        for index, text in enumerate(texts):
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError(f"texts[{index}] must be a non-blank string")
+        if dimension < 1:
+            raise ValueError("dimension must be >= 1")
+        if batch_size is not None and batch_size < 1:
+            raise ValueError("batch_size must be >= 1")
+
+        api_key = os.environ.get(ENV_API_KEY)
+        if not api_key:
+            raise InfrastructureError(
+                f"embeddings require {ENV_API_KEY}: without a provider no vector is "
+                "produced, and none is fabricated (§16.1, §0.2)"
+            )
+        active_model = (model or "").strip() or self.embedding_model()
+
+        base_url = (
+            kwargs.get("base_url")
+            or self._default_base_url
+            or os.environ.get(ENV_BASE_URL, DEFAULT_BASE_URL)
+        )
+        timeout = kwargs.get("timeout_seconds", self._timeout_seconds)
+        client = kwargs.get("client")
+        owns_client = client is None
+        if owns_client:
+            client = httpx.AsyncClient(timeout=timeout)
+
+        size = batch_size or self.embedding_batch_size
+        vectors: list[list[float]] = []
+        input_tokens = 0
+        latency_ms = 0
+        last_raw: dict[str, Any] | None = None
+        try:
+            for start in range(0, len(texts), size):
+                batch = list(texts[start : start + size])
+                batch_vectors, tokens, elapsed, raw = await self._call_embeddings(
+                    active_model,
+                    base_url=base_url,
+                    api_key=api_key,
+                    texts=batch,
+                    client=client,
+                    dimension=dimension,
+                )
+                vectors.extend(batch_vectors)
+                input_tokens += tokens
+                latency_ms += elapsed
+                last_raw = raw
+        finally:
+            if owns_client:
+                await client.aclose()
+        return EmbeddingResponse(
+            vectors=vectors,
+            model=active_model,
+            input_tokens=input_tokens,
+            latency_ms=latency_ms,
+            raw=last_raw,
+        )
+
+    async def _call_embeddings(
+        self,
+        model: str,
+        *,
+        base_url: str,
+        api_key: str,
+        texts: Sequence[str],
+        client: httpx.AsyncClient,
+        dimension: int,
+    ) -> tuple[list[list[float]], int, int, dict[str, Any] | None]:
+        """Call ``/embeddings`` once, with the §41.8 retry policy.
+
+        Args:
+            model: Embeddings model identifier.
+            base_url: OpenAI-compatible base URL.
+            api_key: Provider credential.
+            texts: One batch of non-blank texts.
+            client: HTTP client owned by the caller.
+            dimension: Expected width of every returned vector.
+
+        Returns:
+            ``(vectors, input_tokens, latency_ms, raw)``, vectors in input order.
+
+        Raises:
+            InfrastructureError: Once every attempt failed, or when the provider
+                answers a payload whose vectors are missing or mis-sized.
+        """
+        payload: dict[str, Any] = {"model": model, "input": list(texts)}
+        attempts = self.retry_attempts
+        data: Any = None
+        failure: str | None = None
+        started = time.perf_counter()
+        for attempt in range(1, attempts + 1):
+            try:
+                response = await client.post(
+                    f"{base_url.rstrip('/')}/embeddings",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+                response.raise_for_status()
+                data = response.json()
+            except Exception as exc:  # noqa: BLE001 - transport and JSON errors
+                failure = f"embeddings call failed (model {model}): {exc}"
+            else:
+                failure = upstream_error(data)
+                if failure is None:
+                    break
+                failure = f"embeddings call failed (model {model}): {failure}"
+            if attempt < attempts and self.retry_backoff_seconds:
+                await asyncio.sleep(self.retry_backoff_seconds * attempt)
+        if failure is not None:
+            raise InfrastructureError(failure)
+        latency_ms = int((time.perf_counter() - started) * 1000)
+
+        rows = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(rows, list) or len(rows) != len(texts):
+            got = len(rows) if isinstance(rows, list) else None
+            raise InfrastructureError(
+                f"embeddings call returned an unexpected payload (model {model}): "
+                f"{got} vector(s) for {len(texts)} input(s)"
+            )
+        ordered = sorted(
+            rows, key=lambda row: row.get("index", 0) if isinstance(row, dict) else 0
+        )
+        vectors: list[list[float]] = []
+        for row in ordered:
+            vector = row.get("embedding") if isinstance(row, dict) else None
+            if not isinstance(vector, list) or not vector:
+                raise InfrastructureError(
+                    f"embeddings call returned no vector (model {model})"
+                )
+            if len(vector) != dimension:
+                raise InfrastructureError(
+                    f"embeddings model {model} answered a {len(vector)}-dimension vector "
+                    f"where {dimension} is required (§16.1): it is refused rather than "
+                    "stored truncated"
+                )
+            vectors.append([float(value) for value in vector])
+        usage = data.get("usage") or {}
+        return vectors, int(usage.get("prompt_tokens", 0)), latency_ms, data
 
     def _latency_budget_spent(self, task: LLMTask, chain_started: float) -> bool:
         """Return True when the §22.2 latency budget is already consumed.

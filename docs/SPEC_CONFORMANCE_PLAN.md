@@ -744,9 +744,8 @@ lecture seule ; les tests d'erreur (type refusé, quota, SQL d'écriture) passen
 >    pour la notation, `ModelRouter` pour la synthèse — créditer l'un du travail de l'autre était
 >    précisément le défaut C11.
 >
-> **Reste ouvert dans L3** : L3.2 (projection §12.1 par étape : la `TRF_` unique de
-> `pipeline_persistence.py` n'est pas encore remplacée *en base*, même si `transformations[]` porte
-> déjà les étapes) et L3.3 (embeddings §16) — non commencés.
+> **Suite du lot** : L3.2 (projection §12.1 par étape et dans le colis) et L3.3 (embeddings §16)
+> sont livrés dans la foulée — voir leurs encadrés ci-dessous (§4 de ce plan).
 
 - [x] `enricher.py` : normalisation d'unités (dates, unités de mesure, devise), détection de
   langue (`language_policy` existe), déduplication par empreinte (`record_hash` / `sha256_hex`).
@@ -759,28 +758,88 @@ lecture seule ; les tests d'erreur (type refusé, quota, SQL d'écriture) passen
 
 #### L3.2 — Projection des transformations dans le colis
 
-- [ ] Remplacer la `TRF_` unique de `pipeline_persistence.py:223-262` par des enregistrements
+> ### ⚙️ État d'avancement L3.2 au 2026-09-30 — **clos** (C10/C11 fermés)
+>
+> **Fait et prouvé** (commit à ancrer)
+>
+> | Sous-lot | Preuve |
+> |---|---|
+> | Une ligne §12.1 par étape **réellement exécutée** (plus de `TRF_` unique, plus de `PipelineRunner` fourre-tout) | `tests/agentic/test_transformations_are_real.py::TestNothingIsInvented::test_no_generic_operator_is_left` |
+> | Aucun `output_id` qui n'existe pas dans le colis | `tests/agentic/test_transformations_are_real.py::TestNothingIsInvented::test_every_output_id_exists_in_the_colis` |
+> | Un producteur = une ligne par étape (pas de doublon d'écriture) | `tests/agentic/test_transformations_are_real.py::TestNothingIsInvented::test_one_row_per_producer_and_per_stage` |
+> | `transformations[]` = projection **exacte** de §12.1 (les dix clés de `Transformation.to_dict()`) | `tests/api/test_delivery_transformations_shape.py::TestEveryTransformationIsARealSpec121Row::test_every_entry_has_exactly_the_ten_keys_of_the_spec` |
+> | `TRF_{ULID}`, horodatage ISO 8601 UTC, `result` du contrat, `parameters.stage` connu | mêmes fichiers, `test_every_identifier_is_a_trf_ulid`, `test_every_timestamp_is_iso_8601_utc` |
+> | Le colis HTTP (`GET /v1/requests/{id}`) expose la même structure | `tests/api/test_delivery_transformations_shape.py::TestTheHttpColisCarriesTheSameShape` |
+>
+> **Décisions prises en L3.2**
+>
+> 1. La **structure** §12.1 est celle de l'entité `Transformation.to_dict()` : le colis et la
+>    table `transformations` ne peuvent pas diverger, l'un est la sérialisation de l'autre.
+> 2. Le champ `transformations` n'est **jamais** une liste vide déguisée : quand aucune étape
+>    n'a produit d'output, il reste `[]` et c'est la vérité du run (l'unité de synthèse du run
+>    n'est pas attribuée aux extracteurs).
+> 3. Deux lignes pour un même stade sont **légitimes** (§12.1) : `Enricher.enrich` (notation) et
+>    `ModelRouter` (synthèse) atteignent tous deux `enriched` par des opérations différentes ;
+>    la borne testée est « un producteur, une ligne par étape », pas « un stade, une ligne ».
+
+- [x] Remplacer la `TRF_` unique de `pipeline_persistence.py:223-262` par des enregistrements
   par étape, et projeter `transformations[]` dans le colis §24.1 (structure §12.1 exacte).
   *preuve : `tests/api/test_delivery_transformations_shape.py`*
-- [ ] Vérifier la borne : `transformations[]` ne contient **que** des transformations réelles
+- [x] Vérifier la borne : `transformations[]` ne contient **que** des transformations réelles
   (aucune liste vide déguisée, aucun `operator` générique inventé).
   *preuve : `tests/agentic/test_transformations_are_real.py`*
 
+
 #### L3.3 — Génération d'embeddings (§16)
 
-- [ ] `app/knowledge/embedding/embeddings_generator.py` : produit les vecteurs `vector(1536)`
+> ### ⚙️ État d'avancement L3.3 au 2026-09-30 — **clos** (C13 fermé pour l'écriture)
+>
+> **Fait et prouvé** (commit à ancrer)
+>
+> | Sous-lot | Preuve |
+> |---|---|
+> | Vecteurs produits par le Model Router (§22), modèle tracé et largeur vérifiée contre la colonne | `tests/unit/knowledge/test_embeddings_generator.py::TestGeneration`, `tests/unit/knowledge/test_embeddings_no_provider_degrades.py::TestAProviderThatAnswersBadlyIsRefused` |
+> | Une trace §41.12 par étape (`task_type=embedding`), l'entrée **hachée**, jamais stockée | `tests/unit/knowledge/test_embeddings_generator.py::TestTheCallIsTraced` |
+> | Écriture réelle dans `embeddings` (`owner_type`/`owner_id`, `vector_dims = 1536`, HNSW) | `tests/integration/test_embeddings_persistence.py::TestTheVectorIsStoredAsTheColumnExpects` |
+> | L'unité vectorisée est **retrouvée par `vector_search`** (§16.2) | `tests/integration/test_embeddings_persistence.py::TestTheIndexIsReallyUsable::test_the_semantic_search_finds_the_indexed_unit` |
+> | `owner_type` aligné sur `vector_searcher.OWNER_TYPE` | `tests/unit/knowledge/test_embeddings_generator.py::TestRecordShape::test_the_owner_type_is_the_one_the_searcher_reads` |
+> | Rattrapage idempotent (`ON CONFLICT DO NOTHING`), `--dry-run`, rapport JSON de métriques | `tests/integration/test_backfill_embeddings.py` (7 cas : dry-run, deux passes, compteurs) |
+> | Sans provider : **aucun vecteur** (jamais de vecteur nul) et la variable manquante est nommée | `tests/unit/knowledge/test_embeddings_no_provider_degrades.py::TestNoProviderMeansNoVector`, `tests/integration/test_backfill_embeddings.py::TestTheScriptSaysWhatItCouldNotDo` |
+>
+> **Décisions prises en L3.3**
+>
+> 1. `ModelRouter.embed` **n'a pas de stub**, contrairement à `complete` : un vecteur inventé est
+>    indiscernable d'un vrai une fois stocké, et §16.2 renverrait alors du bruit comme s'il
+>    s'agissait de similarités mesurées. Sans clé, l'appel **lève**.
+> 2. La largeur est celle de la colonne (`EMBEDDING_DIMENSION` = 1536, migration `0003`) : une
+>    réponse d'une autre largeur est **refusée**, jamais tronquée ni complétée. Le littéral
+>    `vector(...)` n'est jamais écrit en dur dans `app/` (règle vérifiée par `check_architecture`).
+> 3. Le texte vectorisé est celui du colis : `unit_text` de L3.1 est réutilisé, et les
+>    métadonnées portent l'**empreinte** du texte, pas le texte.
+> 4. `embedding_id` est un **UUID** (type de la colonne `0003`), pas un `ULID`.
+> 5. Le rattrapage est un **outil**, pas un chemin de requête : il trace ses appels dans le
+>    writer §41.12 en mémoire et le dit dans son rapport (`traces.persisted = false`) ; la
+>    persistance des traces reste le fait du chemin applicatif.
+> 6. Aucune métrique §34 n'a été inventée : l'appel d'embeddings alimente `llm_latency`, et le
+>    script publie ses propres compteurs dans son rapport JSON.
+>
+> **Reste ouvert dans §16** (hors L3.3) : le branchement de `HybridSearch`/`memory_lookup` dans
+> le pipeline est le lot **L4** (critère `tests/unit/planning/test_memory_checker_wired_in_pipeline.py`).
+
+- [x] `app/knowledge/embedding/embeddings_generator.py` : produit les vecteurs `vector(1536)`
   (dimension figée par la migration `0003`), modèle tracé, passage par le Model Router (§22)
   et les traces LLM (§41.12).
   *preuve : `tests/unit/knowledge/test_embeddings_generator.py`*
-- [ ] Persistance dans `embeddings` (`owner_type`/`owner_id`, index HNSW existant) :
+- [x] Persistance dans `embeddings` (`owner_type`/`owner_id`, index HNSW existant) :
   `owner_type="information_unit"` par défaut, `owner_type` aligné sur `app/tools/knowledge/vector_searcher.py::OWNER_TYPE`.
   *preuve : `tests/integration/test_embeddings_persistence.py`*
-- [ ] `scripts/backfill_embeddings.py` : rattrapage des unités existantes, idempotent
+- [x] `scripts/backfill_embeddings.py` : rattrapage des unités existantes, idempotent
   (`ON CONFLICT DO NOTHING`), avec `--dry-run` et métriques.
   *preuve : `tests/integration/test_backfill_embeddings.py`*
-- [ ] Si aucun provider d'embeddings n'est configuré : **dégradation explicite** (pas de vecteur
+- [x] Si aucun provider d'embeddings n'est configuré : **dégradation explicite** (pas de vecteur
   nul silencieux) + `limitations` — sinon le volet sémantique de §16.2 devient mensonger.
   *preuve : `tests/unit/knowledge/test_embeddings_no_provider_degrades.py`*
+
 
 ---
 
@@ -972,7 +1031,8 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 2026-09-30 | Cline (act) | **L2.5b** | La source PostgreSQL **nommée par la requête** entre dans le pipeline : `constraints.source_preferences=["postgres:<ref>[#table]"]` (nouveau `app/connectors/database/source_target.py`, une entrée malformée **lève** au lieu de disparaître), lecture → `Dataset` + une unité §11 par ligne localisée en `row` (`app/knowledge/ingestion/database_material.py`), étape `query_database` **exécutable** et conditionnelle (`tool_dispatch.py`), orientation du plan `data`/`source` (aucune recherche web), sources `database`, étages §12.1 `PostgresConnector`/`DatabaseMaterial`, `Dataset` persisté (`DatasetRepository`) pour que le `DATA_` livré soit consultable | `4f2a0eb` | `pytest -q` → **2067 passed / 4 skipped** (148,75 s) ; `check_architecture` + `check_contracts` + `check_invariants` OK ; BC **0 breaking** (31 warnings BC005) ; `ruff` : **0 nouvelle erreur** (`pipeline_runner.py` reste à 22 erreurs préexistantes, dont 14 E501 — comptes identiques avant/après vérifiés par `git stash`) | ✅ **critère §36/7 fermé** — 92 nouveaux tests : 8 d'intégration sur PostgreSQL réel (`test_request_database_read_e2e.py`), 24 agentiques (`test_database_read_delivery.py`), 32 unitaires matériau, 28 sur la cible. ⚠️ Trois pièges : lire la base du client **avec l'engine d'INIS** (P19), publier un `DATA_` absent de la table `datasets` (P20), et **jeter le `file_ingest`** d'une requête `data` qui nomme *aussi* une base (P21) — les trois sont écartés et verrouillés par un test |
 | 2026-09-30 | Cline (act) | **L2.6** | **L2 clos** : PDF/DOCX rendus **localisables** (`extract_document_blocks` : une page, un paragraphe ou un tableau par bloc, `char_offset` vérifiable dans le texte extrait), `FactExtractor` branché sur le texte extrait (`content["sentences"]`, texte intégral conservé), images **PNG/JPEG** acceptées et ingérées via `extract_image_content` (Pillow optionnel D6, `pillow_available=False` nommé, aucun OCR §9.2), seuil de l'ADR 007 **réellement appliqué** (`app/knowledge/normalization/limits.py`, `_chunked_units`, miroir `configs/*.toml`), feuille de classeur nommée dans le locator (les autres feuilles listées en `limitations`). `ingest_document` devient `async` (P25) | `93e4722` | `pytest -q` → **2120 passed / 4 skipped** (184,19 s) ; `check_architecture` + `check_contracts` OK ; ruff : **0 erreur nouvelle** sur les fichiers du lot | ADR 007 porte désormais sa section « Mise en œuvre » et ses limites assumées ; 53 tests neufs (dont 9 sur les blocs de document, 11 sur l'image/OCR, 13 sur le chunking, 3 d'intégration PDF/tronçons) |
 | 2026-09-30 | Cline (act) | **L2.1 (fin)** | Variante protocole §5.2 : `InformationRequestCreate.source_ref` n'accepte que `s3://bucket/cle` (chemin local / URL HTTP refusés, §19) et `app/knowledge/ingestion/object_intake.py` ingère l'objet nommé **avant** la planification du run — lecture en flux (plafond §41.2), type par le contenu, `sources`/`documents`/`Dataset`/unités §11, la référence du client restant le `storage_ref`. Une source illisible **refuse la création** (422 nommant la cause). `create_request` devient `async` | `9677305` | `pytest -q` → **2144 passed / 4 skipped** (229,30 s) ; checkers OK ; ruff : 0 nouvelle erreur sur les fichiers du lot (2 préexistantes dans `router.py`) | ⚠️ Le run est planifié **après** l'ingestion : sans cela le plan ignorerait la source que la requête vient de nommer (P27) |
-| 2026-09-30 | Cline (act) | **L3.1** | Étape ENRICHED : `app/knowledge/enrichment/enricher.py` (chaîne §12 `advance_stage`/`can_transition` — saut refusé ; dates ISO + `offset` du texte d'origine ; unités de mesure ; devises ; langue par mots-outils ; empreinte §17.1 ; doublons **nommés** ; `resolved_dataset_stages`), producteurs estampillés `normalized` (`FactExtractor`, `DocumentIngestor`), étape 3.7 du pipeline (`enrich_units` pur, locale par unité, limitations remontées au colis) et lignage §12.1 `Enricher.enrich` **distinct** de la synthèse | (à ancrer) | `pytest -q` → **2253 passed / 4 skipped** (201,17 s) ; `check_architecture` + `check_contracts` OK ; `ruff` clean sur les fichiers du lot | ✅ LOT L3.1 — 109 nouveaux tests (79 `test_enricher.py`, 14 `test_data_stage_transitions.py`, 10 `test_delivery_exposes_stages.py`, 6 `TestEnrichmentIsItsOwnStage`) ; 3 tests existants mis à jour (`data_stage` du fact extractor/ingestor : `raw` → `normalized`). ⚠️ Deux pièges corrigés pendant le lot : un nombre illisible dans la locale déclarée (`3.5` en `fr-FR`) était **reconverti** en 35 → désormais refusé et listé (`_valid_grouping`) ; `$500` (symbole **avant** le montant) n'était pas signalé comme ambigu → détecté dans les deux notations |
+| 2026-09-30 | Cline (act) | **L3.1** | Étape ENRICHED : `app/knowledge/enrichment/enricher.py` (chaîne §12 `advance_stage`/`can_transition` — saut refusé ; dates ISO + `offset` du texte d'origine ; unités de mesure ; devises ; langue par mots-outils ; empreinte §17.1 ; doublons **nommés** ; `resolved_dataset_stages`), producteurs estampillés `normalized` (`FactExtractor`, `DocumentIngestor`), étape 3.7 du pipeline (`enrich_units` pur, locale par unité, limitations remontées au colis) et lignage §12.1 `Enricher.enrich` **distinct** de la synthèse | `51ca9a1` | `pytest -q` → **2253 passed / 4 skipped** (201,17 s) ; `check_architecture` + `check_contracts` OK ; `ruff` clean sur les fichiers du lot | ✅ LOT L3.1 — 109 nouveaux tests (79 `test_enricher.py`, 14 `test_data_stage_transitions.py`, 10 `test_delivery_exposes_stages.py`, 6 `TestEnrichmentIsItsOwnStage`) ; 3 tests existants mis à jour (`data_stage` du fact extractor/ingestor : `raw` → `normalized`). ⚠️ Deux pièges corrigés pendant le lot : un nombre illisible dans la locale déclarée (`3.5` en `fr-FR`) était **reconverti** en 35 → désormais refusé et listé (`_valid_grouping`) ; `$500` (symbole **avant** le montant) n'était pas signalé comme ambigu → détecté dans les deux notations |
+| 2026-09-30 | Cline (act) | **L3.2 + L3.3** | Fin du lot L3 : §12.1 projeté dans le colis (structure exacte de `Transformation.to_dict()`, une ligne par producteur et par étape, aucun `operator` fourre-tout) et embeddings §16 réellement écrits — `ModelRouter.embed` (sans stub : sans `LLM_API_KEY` l'appel **lève**), `app/knowledge/embedding/embeddings_generator.py` (texte = `unit_text` de L3.1, métadonnée = empreinte, `embedding_id` UUID, largeur vérifiée contre la colonne), `app/storage/repositories/embedding_repository.py` (littéral pgvector + `CAST`, `ON CONFLICT DO NOTHING`, `vector_dims`), `scripts/backfill_embeddings.py` (`--dry-run`, `--request-id`, `--report`, codes de sortie 0/1/2), `llm_decision_trace.task_type = "embedding"` | (à ancrer) | `pytest -q` → **2313 passed / 4 skipped** (196,32 s) ; `check_architecture` + `check_contracts` + `check_invariants` OK ; `ruff` clean sur les fichiers du lot | ✅ **L3 clos** (C10, C11, C13-écriture). 60 nouveaux tests : 9 `test_delivery_transformations_shape.py`, 8 `test_transformations_are_real.py`, 16 `test_embeddings_generator.py`, 12 `test_embeddings_no_provider_degrades.py`, 8+7 d'intégration **sur PostgreSQL/pgvector réel** (dont `vector_search` qui retrouve l'unité vectorisée et un rattrapage relancé deux fois). ⚠️ Trois pièges : `check_architecture` refuse le littéral `vector(1536)` dans `app/` (la largeur vient d'une constante) ; la base testcontainers est **partagée par la session**, donc le rattrapage est testé `--request-id` scopé (sinon les unités des autres tests rendent le résultat dépendant de l'ordre) ; `asyncio.run` du script impose des tests **synchrones**. Reste pour L4 : brancher `HybridSearch`/`memory_lookup` dans le pipeline |
 
 
 ---

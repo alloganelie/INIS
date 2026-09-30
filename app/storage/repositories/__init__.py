@@ -5,6 +5,7 @@ from app.storage.repositories.artifact_repository import ArtifactRepository
 from app.storage.repositories.conflict_repository import ConflictRepository
 from app.storage.repositories.dataset_repository import DatasetRepository
 from app.storage.repositories.document_repository import DocumentRepository
+from app.storage.repositories.embedding_repository import EmbeddingRepository
 from app.storage.repositories.evidence_repository import EvidenceRepository
 from app.storage.repositories.information_package_repository import (
     InformationPackageRepository,
@@ -19,6 +20,7 @@ __all__ = [
     "ConflictRepository",
     "DatasetRepository",
     "DocumentRepository",
+    "EmbeddingRepository",
     "EvidenceRepository",
     "InformationPackageRepository",
     "InformationUnitRepository",
