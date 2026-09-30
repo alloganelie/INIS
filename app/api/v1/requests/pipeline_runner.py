@@ -72,6 +72,11 @@ PIPELINE_STEPS_TOTAL = 22
 CACHE_NS_WEB_SEARCH = "web_search"
 CACHE_NS_PAGE_FETCH = "page_fetch"
 
+#: §41.8 — attempts for a **repeatable read** on an external web dependency.
+#: A search or a page fetch can be retried; a write never is (see
+#: :func:`app.connectors.resilience.circuit_breaker.guard`).
+WEB_SEARCH_ATTEMPTS = 3
+
 #: §41.13 Safeguards on execution complexity — thresholds and the
 #: ``ConcurrencyLimiter`` live in :mod:`app.planning.limits`; the names below
 #: are re-exported so existing importers keep working.
@@ -536,23 +541,39 @@ class PipelineRunner:
     async def _search_with_cache(
         self, provider_router: Any, query: str, limit: int
     ) -> list[Any]:
-        """Run ``ProviderRouter.search`` behind the §41.5 L1 cache."""
+        """Run ``ProviderRouter.search`` behind §41.5 cache and §41.8 resilience."""
+        from app.connectors.resilience.circuit_breaker import guard
+
         provider_id = getattr(provider_router, "_default_provider_id", None) or "default"
         parts = self._cache_parts(query, provider_id, limit)
         cached = await self._cache_get(CACHE_NS_WEB_SEARCH, *parts)
         if cached is not None:
             return cached
-        results = await provider_router.search(query=query, limit=limit)
+        # §41.8 — the web provider is an external dependency: a breaker per
+        # provider, and a retry **only** because a search is repeatable (it
+        # reads, it does not write). An exhausted retry raises: no false result.
+        results = await guard(
+            f"provider:{provider_id}",
+            lambda: provider_router.search(query=query, limit=limit),
+            max_attempts=WEB_SEARCH_ATTEMPTS,
+        )
         await self._cache_set(CACHE_NS_WEB_SEARCH, parts, results)
         return results
 
     async def _extract_with_cache(self, extractor: Any, url: str) -> dict[str, Any]:
-        """Run ``WikipediaExtractor.extract`` behind the §41.5 L1 cache."""
+        """Run ``WikipediaExtractor.extract`` behind §41.5 cache and §41.8."""
+        from app.connectors.resilience.circuit_breaker import guard
+
         parts = self._cache_parts(url)
         cached = await self._cache_get(CACHE_NS_PAGE_FETCH, *parts)
         if cached is not None:
             return cached
-        page = await extractor.extract(url)
+        # §41.8 — fetching a page is also a repeatable read.
+        page = await guard(
+            "connector:web_fetch",
+            lambda: extractor.extract(url),
+            max_attempts=WEB_SEARCH_ATTEMPTS,
+        )
         await self._cache_set(
             CACHE_NS_PAGE_FETCH, parts, page, source_id=f"URL:{url}"[:64]
         )

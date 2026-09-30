@@ -1,0 +1,57 @@
+### L7 — Résilience, cache et reprise (§41.5, §41.6, §41.8, §41.1) (3 j) · Devin + OpenCode
+
+- [ ] **Dette n°6 — cache L2 PostgreSQL** : brancher `cache_entries` (`0008`) derrière
+  `app/storage/cache/cache_store.py` (L1 conservé comme premier niveau), TTL par entrée,
+  invalidation par `request_id`/`source_id`. *preuve : `tests/integration/test_cache_l2_postgres.py`*
+- [ ] **Cache L3 pgvector** : réutilisation d'embeddings déjà calculés (clé = `sha256` du texte
+  normalisé) — évite de recalculer un vecteur identique. *preuve : `tests/integration/test_cache_l3_embeddings.py`*
+- [x] §41.6 : `ChunkedDatasetProcessor` branché au seuil de l'ADR 007 **dans le chemin réel** —
+  ✅ **branché en L2.6** (`document_ingestor._chunked_units` + `app/knowledge/normalization/limits.py`).
+  ⚠️ Ce qui reste de ce lot : valider la **borne mémoire** sous charge et la reprise (§41.1), pas le
+  branchement lui-même.
+  *preuve du branchement : `tests/integration/test_chunked_ingestion.py` ; reste dû ici : le test de
+  borne mémoire sous charge (`performance/test_chunked_threshold.py`, **non créé à ce jour**)*
+- [ ] §41.1 : reprise après redémarrage pour une requête longue (checkpoints `0005`
+  `execution_checkpoints` + `progress`), testée avec un kill de processus.
+  *preuve : `tests/integration/test_resume_after_restart.py`*
+- [ ] §41.8 : vérifier que la politique retry/circuit breaker (ADR `006`) couvre **les nouveaux
+  chemins** (S3, PostgreSQL, fichiers), et pas seulement le web.
+  *preuve : `tests/unit/connectors/test_circuit_breaker_new_paths.py`*
+
+---
+
+### L8 — Sécurité, gouvernance, i18n, charge (§19, §41.3, §41.9, §41.13) (4–5 j) · Devin + OpenCode + Cursor
+
+- [ ] **Dette n°2 — validateur mTLS** : implémenter `app/security/certificates/` (chaîne X.509,
+  expiration, révocation) et l'exposer comme dépendance d'authn service-à-service (§19.2).
+  *preuve : `tests/security/test_mtls_validator.py`* (`scripts/generate_certs.sh` fournit les matériaux)
+- [ ] Rate limiting persistant (aujourd'hui in-memory) : s'appuyer sur Redis/Valkey.
+  *preuve : `tests/security/test_rate_limit_persistent.py`*
+- [ ] §41.4 : authentification des sources (credential vault) branchée sur `RESTConnector`/
+  `PostgresConnector` (le vault existe, l'usage réel est à câbler).
+  *preuve : `tests/integration/test_authenticated_source_e2e.py`*
+- [ ] §41.3 : politique de langue effective sur les sorties (`language_policy` déjà appelée par le
+  runner) : langue des unités tracée, pas de mélange silencieux.
+  *preuve : `tests/unit/knowledge/test_language_policy_applied.py`*
+- [ ] §41.9 : vérifier `right to forget`/portabilité/rectification sur les **nouvelles**
+  données (datasets, artefacts, embeddings) — un artefact RGPD-supprimé ne doit plus être
+  téléchargeable. *preuve : `tests/security/test_gdpr_new_data_types.py`*
+- [ ] §41.13 : harnais de charge (k6 ou locust, à trancher) sur le chemin complet
+  `upload → ingestion → livraison → download`, avec seuils chiffrés dans `docs/performance_tuning.md`.
+  *preuve : `tests/load/` exécuté en CI manuelle + résultats archivés*
+- [ ] **Dettes d'exploitation** : Redis → Valkey, runtime Python 3.12, `gitleaks`
+  (`AGENT_STATUS.md` dettes n°1/7/8). *preuve : `python -m pytest -q` + CI verte*
+
+---
+
+### L9 — Extensions et extensibilité (§9.2, §23, Phase 9) (2 j pour le socle) · Devin
+
+> La spec n'exige pas l'OCR/audio/vidéo en V1, mais exige qu'ils soient **prévus comme plugins**.
+
+- [ ] Mécanisme de plugin : `entry_points` (groupe `inis.connectors`) dans `pyproject.toml` +
+  registre de chargement paresseux (`app/connectors/plugins.py`), contrat = `SourceConnector`
+  existant (`app/connectors/base.py`). Un connecteur externe doit pouvoir s'enregistrer sans
+  modifier le cœur. *preuve : `tests/unit/connectors/test_plugin_discovery.py`*
+- [ ] Plugin factice de test (fixture) démontrant l'ajout d'un type de source `ocr` non
+  implémenté, exposé comme capacité mais **refusant** tant qu'il n'est pas installé.
+  *preuve : `tests/integration/te

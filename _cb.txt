@@ -1,0 +1,60 @@
+"""Circuit breaker per connector / provider / external agent (§41.8).
+
+Implements the ``circuit_breaker`` ``[CONFIG]`` structure of the spec:
+
+    failure_threshold        consecutive failures that open the breaker
+    recovery_timeout_seconds wait before probing again
+    half_open_max_calls      probes allowed while half-open
+
+The state machine is pure logic over an **injectable clock**, so every
+transition is unit-testable without sleeping. The module-level
+:data:`registry` keys breakers by scope (``provider:*``, ``connector:*``,
+``agent:*``) and is the source of truth for the ``/v1/health`` exposure
+required by §41.8.
+"""
+
+from __future__ import annotations
+
+import time
+from collections.abc import Awaitable
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+from typing import TypeVar
+
+from app.domain.enums.circuit_breaker_state import CircuitBreakerState
+
+T = TypeVar("T")
+
+#: Default ``[CONFIG]`` values of §41.8.
+DEFAULT_FAILURE_THRESHOLD = 5
+DEFAULT_RECOVERY_TIMEOUT_SECONDS = 30
+DEFAULT_HALF_OPEN_MAX_CALLS = 2
+
+
+class CircuitOpenError(RuntimeError):
+    """Raised when a call is refused because the breaker is open."""
+
+    def __init__(self, scope: str) -> None:
+        super().__init__(f"circuit breaker open for {scope!r} (§41.8)")
+        self.scope = scope
+
+
+@dataclass(frozen=True)
+class CircuitBreakerConfig:
+    """The three ``circuit_breaker`` ``[CONFIG]`` thresholds."""
+
+    failure_threshold: int = DEFAULT_FAILURE_THRESHOL
+=== INIT ===
+"""Resilience patterns: circuit breaker + retry policy (§41.8).
+
+The retry policy (``RetryPolicy``, backoff, dead-letter) has its canonical
+implementation in :mod:`app.messaging.amqp.dead_letter_handler` and is
+re-exported here so connectors share one import site for §41.8.
+"""
+
+from app.connectors.resilience.circuit_breaker import CircuitBreaker
+from app.connectors.resilience.circuit_breaker import CircuitBreakerConfig
+from app.connectors.resilience.circuit_breaker import CircuitBreakerRegistry
+from app.connectors.resilience.circuit_breaker import CircuitOpenError
+from app.connectors.resilien

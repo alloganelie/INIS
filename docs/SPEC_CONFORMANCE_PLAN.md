@@ -1143,9 +1143,14 @@ incohérence produit un colis où ces trois défauts sont **explicitement listé
 
 ### L7 — Résilience, cache et reprise (§41.5, §41.6, §41.8, §41.1) (3 j) · Devin + OpenCode
 
-- [ ] **Dette n°6 — cache L2 PostgreSQL** : brancher `cache_entries` (`0008`) derrière
-  `app/storage/cache/cache_store.py` (L1 conservé comme premier niveau), TTL par entrée,
-  invalidation par `request_id`/`source_id`. *preuve : `tests/integration/test_cache_l2_postgres.py`*
+- [x] **Dette n°6 — cache L2 PostgreSQL** : `cache_entries` (`0008`) est branché derrière
+  `app/storage/cache/cache_store.py` (L1 conservé comme premier niveau), via
+  `CacheEntryRepository` + `PostgresCacheBackend` (voie asynchrone `aget`/`aset`),
+  TTL par entrée, invalidation par `source_id`/namespace, purge des périmés.
+  ✅ **Une entrée survit au redémarrage du processus** (relue par un autre interpréteur) et
+  une valeur servie depuis L2 est promue en L1 ; l'étape web du pipeline utilise ce chemin
+  (le fournisseur n'est pas rappelé après vidage de L1).
+  *preuve : `tests/integration/test_cache_l2_postgres.py`*
 - [ ] **Cache L3 pgvector** : réutilisation d'embeddings déjà calculés (clé = `sha256` du texte
   normalisé) — évite de recalculer un vecteur identique. *preuve : `tests/integration/test_cache_l3_embeddings.py`*
 - [x] §41.6 : `ChunkedDatasetProcessor` branché au seuil de l'ADR 007 **dans le chemin réel** —
@@ -1154,11 +1159,28 @@ incohérence produit un colis où ces trois défauts sont **explicitement listé
   branchement lui-même.
   *preuve du branchement : `tests/integration/test_chunked_ingestion.py` ; reste dû ici : le test de
   borne mémoire sous charge (`performance/test_chunked_threshold.py`, **non créé à ce jour**)*
-- [ ] §41.1 : reprise après redémarrage pour une requête longue (checkpoints `0005`
-  `execution_checkpoints` + `progress`), testée avec un kill de processus.
-  *preuve : `tests/integration/test_resume_after_restart.py`*
-- [ ] §41.8 : vérifier que la politique retry/circuit breaker (ADR `006`) couvre **les nouveaux
-  chemins** (S3, PostgreSQL, fichiers), et pas seulement le web.
+- [x] §41.1 : reprise après redémarrage pour une requête longue (checkpoints `0005`)
+  ✅ **Révision `0017`** (additive) : `execution_checkpoints` porte `step_index` et le
+  `payload` des étapes validées — sans quoi une reprise ne pouvait que tout refaire et
+  perdre ce qui avait été acquis. Le pipeline écrit le point de reprise **avant** chaque
+  étape, le marque `resumable=false` quand le run aboutit, et expose
+  `resume_interrupted(request_id)` (distinct de la reprise par jeton) qui **rejoue** le
+  préfixe validé au lieu de le ré-exécuter.
+  ⚠️ Découvert par la preuve : les résultats d'étape contiennent des `datetime`, donc
+  l'écriture du point de reprise échouait silencieusement (`to_json_safe` corrige).
+  *preuve : `tests/integration/test_resume_after_restart.py`* (processus enfant tué net
+  `os._exit(137)` en pleine exécution, puis reprise : préfixe non ré-exécuté, colis complet
+  sans doublon, point de reprise clos après reprise)
+- [x] §41.8 : la politique retry/disjoncteur (ADR `006`) couvre **les nouveaux chemins**.
+  ✅ Constat de départ : le disjoncteur existait mais **aucun chemin de `app/` ne l'appelait**
+  — le brancher était le vrai travail, pas l'étendre. `guard`/`guard_sync` composent retry
+  et disjoncteur en documentant la règle : le disjoncteur compte les **appels logiques**
+  (un retry qui réussit est une dépendance saine ; compter chaque tentative ouvrait le
+  circuit sur le retry censé l'éviter — défaut trouvé par les tests). Retry réservé aux
+  **lectures rejouables** (recherche web `provider:*`, fetch `connector:web_fetch`, 3
+  tentatives) ; le disjoncteur seul sur l'**écriture** d'artefact (`connector:s3`, §24.2) ;
+  PostgreSQL/fichiers **volontairement** hors disjoncteur (écriture non rejouable, risque de
+  doublon) — décision écrite dans le test.
   *preuve : `tests/unit/connectors/test_circuit_breaker_new_paths.py`*
 
 ---

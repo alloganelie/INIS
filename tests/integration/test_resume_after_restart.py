@@ -21,7 +21,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import AsyncMock
 
 import pytest
@@ -203,8 +203,8 @@ class TestTheResumeContinuesWithoutLosingAnything:
             """Le premier pas (memory_lookup) est rejoué : il ne doit pas partir."""
 
             mode = "hybrid"
-            limitations: list[str] = []
-            units: dict[str, Any] = {}
+            limitations: ClassVar[list[str]] = []
+            units: ClassVar[dict[str, Any]] = {}
 
             async def __call__(self, question: str, requirements: Any) -> list[Any]:
                 calls.append(question)
