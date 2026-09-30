@@ -149,3 +149,53 @@ class TestTheWriterAcceptsItAsItIs:
 
         assert connection.executions[-1]["result"] == "degraded"
         assert "lexical_only" in connection.executions[-1]["reason"]
+class TestThePayloadCarriesTheEarlyStopDecision:
+    """§17.1/§8.4 — l'arrêt de l'acquisition est un fait auditable."""
+
+    def _stopped(self) -> dict[str, Any]:
+        """Return the note of a lookup that stopped the acquisition."""
+        return _sufficient() | {
+            "stopped_acquisition": True,
+            "criteria": [
+                "provenance_complete",
+                "freshness_acceptable",
+                "policy_allows_reuse",
+            ],
+            "withheld_reason": None,
+            "mode": "hybrid",
+        }
+
+    def test_a_stopped_acquisition_says_so_and_names_its_criteria(self) -> None:
+        payload = memory_audit_payload(REQUEST_ID, self._stopped(), mode="hybrid")
+
+        assert payload["result"] == "success"
+        assert "acquisition arrêtée" in payload["reason"]
+        assert "provenance_complete" in payload["reason"]
+        assert UNIT_ID in payload["reason"]
+
+    def test_the_event_is_still_accepted_by_the_writer(self) -> None:
+        """La trace ne doit pas disparaître au moment de l'écriture (§20)."""
+        payload = memory_audit_payload(REQUEST_ID, self._stopped(), mode="hybrid")
+        writer = AuditWriter()
+        assert writer is not None
+        assert payload["action"] == "memory_lookup"
+        assert payload["request_id"] == REQUEST_ID
+
+    def test_a_withheld_stop_says_why_the_acquisition_continued(self) -> None:
+        note = _sufficient() | {
+            "stopped_acquisition": False,
+            "withheld_reason": "recherche « lexical_only » : la suffisance §17.1 n'est pas conclue",
+            "mode": "lexical_only",
+        }
+        payload = memory_audit_payload(REQUEST_ID, note, mode="lexical_only")
+
+        assert "acquisition maintenue" in payload["reason"]
+        assert "lexical_only" in payload["reason"]
+
+    def test_an_insufficient_lookup_still_reports_a_degraded_result(self) -> None:
+        payload = memory_audit_payload(REQUEST_ID, _insufficient(), mode="hybrid")
+        assert payload["result"] == "degraded"
+        assert "acquisition" not in payload["reason"], (
+            "un run qui acquiert normalement n'a pas à parler d'arrêt"
+        )
+

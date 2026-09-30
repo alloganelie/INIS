@@ -37,8 +37,10 @@ from app.domain.entities.memory_result import MemoryCandidate, MemoryResult
 
 __all__ = [
     "DEFAULT_FRESHNESS_THRESHOLD_HOURS",
+    "EarlyStopDecision",
     "MemoryRequirements",
     "MemorySearch",
+    "early_stop_decision",
     "freshness_acceptable",
     "memory_lookup",
     "policy_allows_reuse",
@@ -46,6 +48,13 @@ __all__ = [
 
 #: §41.5 ``freshness_threshold_hours`` default, reused as the §17 default.
 DEFAULT_FRESHNESS_THRESHOLD_HOURS = 24
+
+#: §17.1 filters a candidate had to pass to be reused. Named here so the decision
+#: can state *which* criteria carried it instead of asserting "it is sufficient".
+SUFFICIENCY_CRITERIA = ("provenance_complete", "freshness_acceptable", "policy_allows_reuse")
+
+#: §16.2 mode a lookup must have run in to conclude sufficiency (see below).
+SUFFICIENT_MODE = "hybrid"
 
 
 @dataclass(frozen=True)
@@ -138,3 +147,111 @@ async def memory_lookup(
     else:
         reason = "; ".join(rejected) or "no reusable candidate"
     return MemoryResult(sufficient=False, items=(), reason=reason, question=question)
+
+
+@dataclass(frozen=True)
+class EarlyStopDecision:
+    """The §17.1 early-stop decision: what was concluded and why (§8.4)."""
+
+    #: ``True`` when the memory holds a reusable answer (the §17.1 algorithm).
+    sufficient: bool
+    #: ``True`` only when the run may **stop acquiring** on that basis.
+    stopped_acquisition: bool
+    #: The §17.1 filters the reused candidate passed.
+    criteria: tuple[str, ...] = ()
+    #: Why the acquisition was *not* stopped although the memory was sufficient.
+    withheld_reason: str | None = None
+    #: The §16.2 mode the search really ran in.
+    mode: str = "unknown"
+    #: The identifiers the run reuses as-is.
+    information_ids: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the projection the delivery, the audit and the UI share."""
+        return {
+            "sufficient": self.sufficient,
+            "stopped_acquisition": self.stopped_acquisition,
+            "criteria": list(self.criteria),
+            "withheld_reason": self.withheld_reason,
+            "mode": self.mode,
+            "information_ids": list(self.information_ids),
+        }
+
+
+def early_stop_decision(
+    result: MemoryResult,
+    *,
+    mode: str,
+    limitations: Sequence[str] = (),
+) -> EarlyStopDecision:
+    """Decide whether *result* may stop the acquisition (§17.1, §8.4).
+
+    Sufficiency alone is **not** enough, and this is the point of the function:
+
+    * a lookup that ran in a **degraded mode** (lexical-only, i.e. the §16.2
+      semantic half was unavailable) cannot conclude that the run already knows
+      the answer: a handful of units that merely share words with the question
+      must never stop a run;
+    * a lookup that declared **limitations** (candidates without a vector, a
+      partial comparison…) is treated the same way.
+
+    In both cases the units are still reused — nothing is thrown away — but the
+    acquisition keeps running: ``sufficient=True`` with
+    ``stopped_acquisition=False`` and a ``withheld_reason`` that says why.
+
+    Args:
+        result: The §17.1 lookup outcome.
+        mode: The §16.2 mode the search reported (``hybrid``, ``lexical_only``,
+            ``unavailable``).
+        limitations: What the search said it could not do.
+
+    Returns:
+        The decision, carrying its criteria and its reason.
+    """
+    identifiers = tuple(item.information_id for item in result.items)
+
+    if not result.sufficient:
+        return EarlyStopDecision(
+            sufficient=False,
+            stopped_acquisition=False,
+            criteria=(),
+            withheld_reason=result.reason or "mémoire insuffisante : aucun candidat réutilisable",
+            mode=mode,
+            information_ids=(),
+        )
+
+    if mode != SUFFICIENT_MODE:
+        # §16.2 — a lexical hit is a guess about relevance, not a conclusion.
+        return EarlyStopDecision(
+            sufficient=True,
+            stopped_acquisition=False,
+            criteria=SUFFICIENCY_CRITERIA,
+            withheld_reason=(
+                f"recherche « {mode} » : la suffisance §17.1 n'est conclue qu'en mode "
+                f"« {SUFFICIENT_MODE} » (une correspondance lexicale ne dit pas que la "
+                "question est déjà répondue)"
+            ),
+            mode=mode,
+            information_ids=identifiers,
+        )
+
+    if limitations:
+        return EarlyStopDecision(
+            sufficient=True,
+            stopped_acquisition=False,
+            criteria=SUFFICIENCY_CRITERIA,
+            withheld_reason=(
+                "recherche limitée (" + "; ".join(str(item) for item in limitations) + ")"
+            ),
+            mode=mode,
+            information_ids=identifiers,
+        )
+
+    return EarlyStopDecision(
+        sufficient=True,
+        stopped_acquisition=True,
+        criteria=SUFFICIENCY_CRITERIA,
+        withheld_reason=None,
+        mode=mode,
+        information_ids=identifiers,
+    )

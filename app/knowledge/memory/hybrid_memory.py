@@ -295,11 +295,25 @@ def memory_audit_payload(
     """
     note: Mapping[str, Any] = memory_note if isinstance(memory_note, Mapping) else {}
     sufficient = bool(note.get("sufficient"))
+    stopped = bool(note.get("stopped_acquisition"))
     reused = [str(identifier) for identifier in (note.get("information_ids") or [])]
-    if sufficient:
+    if stopped:
+        # §8.4/§17.1 — an early-stop is an auditable decision, not a side effect:
+        # the event says the acquisition was stopped *and* on which criteria.
+        criteria = ", ".join(str(item) for item in (note.get("criteria") or [])) or "n/a"
+        reason = (
+            f"Mémoire §17.1 suffisante en mode « {mode} » sur {limit} candidat(s) "
+            f"(critères : {criteria}) : acquisition arrêtée, unité(s) réutilisée(s) {reused}"
+        )
+    elif sufficient:
         reason = (
             f"Mémoire §17.1 consultée en mode « {mode} » sur {limit} candidat(s) : "
             f"unité(s) réutilisée(s) {reused}"
+            + (
+                f" — acquisition maintenue ({note.get('withheld_reason')})"
+                if note.get("withheld_reason")
+                else ""
+            )
         )
     else:
         reason = (

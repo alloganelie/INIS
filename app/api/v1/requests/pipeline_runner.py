@@ -33,6 +33,7 @@ from app.governance.budget.quotas import (
 from app.knowledge.enrichment.enricher import enrich_units, resolved_dataset_stages
 from app.knowledge.memory import HybridMemorySearch, memory_audit_payload
 from app.planning.memory_checker import MemoryRequirements
+from app.planning.memory_checker import early_stop_decision
 from app.planning.memory_checker import memory_lookup as lookup_memory
 from app.knowledge.ingestion.database_material import (
     DatabaseMaterial,
@@ -84,6 +85,30 @@ _SNIPPET_CONFIDENCE = 0.6
 #: ``data`` request is planned around its sources, and a file it sent is one of
 #: them. The web acquisition steps are the ones removed, never these.
 OWNED_SOURCE_ACTIONS = frozenset({"file_ingest", "query_database"})
+
+
+def _web_acquisition_actions() -> frozenset[str]:
+    """§17.1 — the actions the early-stop may skip: external web acquisition.
+
+    Derived from the §8.4 vocabulary rather than hard-coded: an action is *web
+    acquisition* when **every** tool it declares is a web tool (``web_search``,
+    ``open_url``, ``follow_link``). The request's **own** material
+    (``file_ingest``, ``query_database``) is deliberately not in this set: when
+    the memory already answers the question, the run still delivers the file or
+    the table the requester named — skipping those would lose delivered content,
+    which §17 forbids.
+    """
+    from app.agents.pipeline.tool_dispatch import ACTIONS, WEB_TOOLS
+
+    return frozenset(
+        name
+        for name, spec in ACTIONS.items()
+        if spec.tools and set(spec.tools) <= set(WEB_TOOLS)
+    )
+
+
+#: Actions a sufficient memory makes pointless (§17.1 early-stop).
+WEB_ACQUISITION_ACTIONS = _web_acquisition_actions()
 
 
 def _fact_confidence(fact: dict[str, Any], full_text: bool) -> float:
@@ -984,6 +1009,13 @@ class PipelineRunner:
         self._record_metric("cache_hit_rate", failure=not memory.sufficient)
         note = memory.to_dict()
         note.update({"mode": search.mode, "limitations": list(search.limitations)})
+        # §8.4/§17.1 — la suffisance ne suffit pas : la décision (et sa raison)
+        # vient de `early_stop_decision`, qui refuse d'arrêter l'acquisition sur
+        # une recherche dégradée ou limitée.
+        decision = early_stop_decision(
+            memory, mode=search.mode, limitations=search.limitations
+        )
+        note.update(decision.to_dict())
         result["memory"] = note
         if search.mode == "unavailable":
             result.update(
@@ -1409,6 +1441,10 @@ class PipelineRunner:
         #: §17.1 — ``memory_lookup`` steps whose memory could not be consulted at
         #: all (no database): « rien de réutilisable » n'est pas une dégradation.
         unavailable_memory: list[str] = []
+        #: §17.1/§8.4 — ``True`` dès qu'une mémoire suffisante arrête l'acquisition,
+        #: et les actions qui, en conséquence, n'ont pas été exécutées.
+        acquisition_stopped = False
+        skipped_actions: list[str] = []
 
         # §41.13 Safeguard: max_plan_steps
         max_plan_steps_limit = max_plan_steps()
@@ -1476,6 +1512,32 @@ class PipelineRunner:
                     if memory_result.get("status") != "done":
                         unavailable_memory.append(action)
                     await self._audit_memory_lookup(request_id, memory_result)
+                    # §17.1 — la décision d'arrêter l'acquisition est celle de
+                    # `early_stop_decision`, pas la simple suffisance : une
+                    # recherche dégradée ou limitée ne l'arrête pas.
+                    if (memory_result.get("memory") or {}).get("stopped_acquisition"):
+                        acquisition_stopped = True
+                    continue
+                if acquisition_stopped and action in WEB_ACQUISITION_ACTIONS:
+                    # §17.1/§8.4 — l'acquisition n'est pas seulement « inutile
+                    # d'après le plan » : elle n'est pas exécutée. L'étape reste
+                    # dans le colis en `skipped`, avec la raison, pour que la
+                    # relecture montre ce qui n'a pas tourné (et pourquoi) plutôt
+                    # que de laisser croire qu'un plan plus court était prévu.
+                    skipped_actions.append(str(action))
+                    step_results.append(
+                        {
+                            "step_id": step.get("step_id") or ULID.new("STEP_"),
+                            "action": str(action),
+                            "status": "skipped",
+                            "output": (
+                                "Acquisition non exécutée (§17.1) : la mémoire consultée "
+                                "répond déjà à la question."
+                            ),
+                            "error": "",
+                            "memory_sufficient": True,
+                        }
+                    )
                     continue
                 if action == "file_ingest":
                     # §9.1 — the step reads back the material the request already
@@ -2297,6 +2359,27 @@ class PipelineRunner:
         # §13.2/§14.4 — fraîcheur évaluée de chaque source livrée et résultat de
         # la comparaison entre sources (y compris ce qui n'a pas pu être croisé).
         base_limitations.extend(source_quality_limits)
+        # §17.1 — l'arrêt de l'acquisition, ou son refus malgré une mémoire
+        # suffisante, est dit dans le colis : une décision invisible serait une
+        # décision qu'on ne peut pas contester.
+        if isinstance(memory_note, dict) and memory_note.get("stopped_acquisition"):
+            stopped_detail = (
+                " étape(s) non exécutée(s) : " + ", ".join(sorted(set(skipped_actions))) + "."
+                if skipped_actions
+                else ""
+            )
+            base_limitations.append(
+                "Acquisition arrêtée (§17.1) : la mémoire consultée répond déjà à la "
+                "question (critères : "
+                + ", ".join(str(item) for item in (memory_note.get("criteria") or []))
+                + ")."
+                + stopped_detail
+            )
+        elif isinstance(memory_note, dict) and memory_note.get("sufficient"):
+            base_limitations.append(
+                "Mémoire suffisante mais acquisition maintenue (§17.1) : "
+                + str(memory_note.get("withheld_reason") or "suffisance non conclue")
+            )
         # §12/§25.2 — what the enrichment of Stage 3.7 could not read: a date
         # whose convention is unknown, an amount behind an ambiguous ``$``, a
         # duplicate that was kept and named. Stating it is the point.
@@ -2458,7 +2541,18 @@ class PipelineRunner:
                 "memory": {
                     **{
                         key: memory_note.get(key)
-                        for key in ("sufficient", "reason", "information_ids", "mode")
+                        for key in (
+                            "sufficient",
+                            "reason",
+                            "information_ids",
+                            "mode",
+                            # §17.1/§8.4 — la décision d'arrêt et sa raison voyagent
+                            # avec la provenance : le colis dit *pourquoi* il s'est
+                            # arrêté (ou pourquoi il ne s'est pas arrêté).
+                            "stopped_acquisition",
+                            "criteria",
+                            "withheld_reason",
+                        )
                         if memory_note
                     },
                     "reused_units": len(memory_unit_ids),
