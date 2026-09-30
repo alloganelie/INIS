@@ -945,23 +945,79 @@ incohérence produit un colis où ces trois défauts sont **explicitement listé
 
 ### L6 — Persistance, repositories et cohérence de schéma (§27, §18) (3–4 j) · Devin
 
-- [ ] **Dette n°3 — unifier `SourceRepository`** avec la migration `0002`
-  (choix à trancher : aligner le repository sur `id`/`url`/`reliability_score`/`data_stage`, ou
-  migrer la table). Cible : plus aucun `INSERT ... source_id` qui échoue sur PostgreSQL, et
-  `pipeline_persistence.py` cesse d'écrire en SQL direct (`:102`, `:130`).
-  *preuve : `tests/integration/test_postgres_real.py::test_source_repository_matches_migration` + `tests/unit/storage/test_source_repository.py`*
-- [ ] Repositories manquants pour ce que le pipeline écrit désormais :
-  `dataset_repository`, `transformation_repository`, `plan_repository` (tables `0007`/`0004`).
-  *preuve : `tests/unit/storage/test_dataset_repository.py`, `test_transformation_repository.py`, `test_plan_repository.py`*
-- [ ] **Dette n°5 — `VersionStore` persistant** (§18.1) : le store en mémoire ne survit pas à un
-  redémarrage ; le persister (table dédiée ⇒ migration `0014` si nécessaire).
-  *preuve : `tests/integration/test_version_store_persistence.py`*
-- [ ] **`_REQUESTS_STORE` en mémoire** (`app/api/v1/requests/router.py:23`) : le remplacer par une
-  lecture de la table `requests` (`0007`) ou assumer explicitement le caractère volatil
-  (⚠️ tout redémarrage/rebuild d'image efface l'historique — c'est le cas aujourd'hui).
-  *preuve : `tests/api/test_requests_survive_restart.py`*
-- [ ] Vérifier que §18.2 (suppression logique) et §18.3 (champs de temporalité) sont respectés
-  par les nouvelles tables/colonnes de L1.3. *preuve : `tests/unit/migrations/test_soft_delete_columns.py`*
+> ### ⚙️ État d'avancement L6 au 2026-09-30 — **clos au niveau N2 (chemin nominal)**, sur
+> `docker compose up -d` + `alembic upgrade head` réels (`0015`, 38 tables, 289 colonnes)
+>
+> **Réalisé et prouvé**
+>
+> | Ce qui est fait | Preuve |
+> |---|---|
+> | `pipeline_persistence` n'écrit **plus une seule ligne de SQL** : lignes construites puis confiées aux tables Core (`sources`, `information_units`, `evidence`, `transformations`) | `tests/integration/test_b4bis_persistence.py`, `tests/integration/test_idempotency_integration.py` |
+> | `SourceRepository` == migration (`0002` + §9 de `0011`) : colonnes **et** clé primaire comparées au schéma **migré** | `tests/integration/test_postgres_real.py::test_source_repository_matches_migration` |
+> | Les 8 tables Core des repositories existent dans le schéma migré et sont clefées comme déclaré | `tests/integration/test_postgres_real.py::test_every_repository_table_is_keyed_as_declared` |
+> | Repositories ajoutés : `transformation`, `plan`/`plan_steps`, `request`, `information_versions` ; `dataset` prouvé aussi | `tests/unit/storage/test_*_repository.py` (38 cas) |
+> | **Critère utilisateur** : *write → restart → read* — le colis est écrit par ce process puis relu par un **autre interpréteur** (`subprocess`) ; ids, provenance, contexte, demande et lignée comparés | `tests/integration/test_restart_durability.py` |
+> | `DurableVersionStore` : la chaîne §18.1 survit à un nouveau store/engine ; outils §21 compatibles avec les deux stores | `tests/integration/test_version_store_persistence.py` |
+> | `requests` : écriture au POST, relecture depuis la table après redémarrage, `404` conservé, volatilité assumée sans base | `tests/api/test_requests_survive_restart.py` |
+> | Chargement `.env` en dev/test (jamais en production, l'environnement du process gagne) + suite **hermétique** : la politique retire par défaut services/sécurité/live/configuration, `INIS_LIVE_LLM=1` et `INIS_TEST_USE_ENV=1` étant les deux seuls opt-in | `tests/unit/core/test_env_loader.py`, `test_env_policy.py`, `test_env_example_matches_code.py` |
+>
+> **Décisions prises en L6**
+>
+> 1. **Le schéma de référence est la migration**, et le repository s'y aligne (jamais l'inverse, sinon
+>    il faudrait migrer une table pour rattraper un nom inventé côté code).
+> 2. Une seule **définition** de table par table : `app/storage/repositories/*.py` (Core). Les lots
+>    suivants n'ajoutent pas de `text("INSERT ...")` dans `app/`.
+> 3. **Atomicité conservée** : le pipeline garde **une** transaction (`get_session`) ; les
+>    repositories exposent pour cela `insert_many_in(session, ...)` à côté de `create_many(engine, ...)`.
+> 4. `INIS_DATABASE_URL` est la variable canonique : `migrations/env.py` la lit **avant**
+>    `DATABASE_URL` et charge `.env`, pour que `docker compose up -d` + `make migrate` fonctionne
+>    sans rien exporter.
+>
+> **Deux points signalés, non tranchés ici (ils touchent le schéma : décision explicite attendue)**
+>
+> 1. **§18.2 — suppression logique** : seule `accounts` porte `deleted_at`. Archiver une source, un
+>    document ou une unité signifierait aujourd'hui un `DELETE` franc. Fermer l'écart = migration
+>    `0016` (colonnes `deleted_at` + index partiels), donc : *à valider*.
+> 2. **§7 — demande complète** : la table `requests` (`0007`) ne stocke pas `question`, `context`,
+>    `required_information`, `required_output`, `permissions`, `budget`. Après redémarrage, ces
+>    champs reviennent **vides** (c'est dit dans la réponse, pas inventé). Les rendre durables
+>    = même migration `0016` (`payload JSONB` ou colonnes dédiées), donc : *à valider*.
+>
+> **Non couvert par ce lot (assumé)** : `INIS_NULL_POOL`/pool de connexions par worker, cache
+> PostgreSQL `cache_entries` (§41.5, lot L7), reprise d'un run interrompu (§41.1, lot L7).
+
+- [x] **Dette n°3 — unifier `SourceRepository`** avec la migration `0002`
+  (choix tranché : **aligner le repository sur la migration**, pas l'inverse — `id`/`url`/
+  `reliability_score`/`data_stage` + les 5 colonnes §9 de `0011`). Cible atteinte : plus aucun
+  `INSERT ... source_id`, et `pipeline_persistence.py` n'écrit plus une ligne de SQL (les lignes
+  sont construites puis confiées aux tables Core des repositories).
+  *preuve : `tests/integration/test_postgres_real.py::test_source_repository_matches_migration`
+  (colonnes + clé primaire comparées au schéma migré) et `::test_every_repository_table_is_keyed_as_declared` ;
+  `tests/unit/storage/test_source_repository.py` (6 cas hors base)*
+- [x] Repositories manquants pour ce que le pipeline écrit désormais :
+  `transformation_repository` (table `0004`), `plan_repository` (`plans`/`plan_steps`, `0007`),
+  `request_repository` et `information_version_repository` (`0007`) — `dataset_repository`
+  existait déjà (L1.3), sa preuve est ajoutée ici.
+  *preuve : `tests/unit/storage/test_transformation_repository.py`, `test_plan_repository.py`,
+  `test_request_repository.py`, `test_dataset_repository.py` (38 cas)*
+- [x] **Dette n°5 — `VersionStore` persistant** (§18.1) : `DurableVersionStore` (mêmes noms de
+  méthodes, `async`) écrit la chaîne dans `information_versions` (`0007`, **aucune migration
+  supplémentaire**) ; les outils §21 acceptent les deux stores. La marque d'archive est un
+  version du document qui le dit (`action = "archive"`) : une seule table, un seul chemin de
+  lecture. *preuve : `tests/integration/test_version_store_persistence.py` (3 cas, dont « un
+  nouveau store relit la chaîne »)*
+- [x] **`_REQUESTS_STORE` en mémoire** : la demande est **écrite** dans `requests` (`0007`) au POST
+  et **relue** depuis la table quand la mémoire du process ne la connaît plus ; les champs que la
+  table ne porte pas restent vides (jamais inventés) et `pipeline_state` vaut `None` après
+  redémarrage. Le mode « pas de base ⇒ historique volatil » reste assumé et testé.
+  *preuve : `tests/api/test_requests_survive_restart.py` (3 cas)*
+- [x] §18.2/§18.3 vérifiés sur les tables de L1.3+ : §18.3 **oui** (les tables créées après `0007`
+  portent `created_at`, les colonnes temporelles sont horodatées) ; §18.2 **partiellement** :
+  `accounts` est la seule table à `deleted_at`, les tables de contenu n'en ont pas — écart
+  **épinglé** par le test (il échouera le jour où une migration ajoutera les colonnes sans mettre
+  l'inventaire à jour). Fermer l'écart = **changement de schéma** (migration `0016`), décision
+  explicite à prendre, cf. encadré L6.
+  *preuve : `tests/unit/migrations/test_soft_delete_columns.py` (15 cas)*
 
 ---
 
@@ -1084,6 +1140,8 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 2026-09-30 | Cline (act) | **L3.1** | Étape ENRICHED : `app/knowledge/enrichment/enricher.py` (chaîne §12 `advance_stage`/`can_transition` — saut refusé ; dates ISO + `offset` du texte d'origine ; unités de mesure ; devises ; langue par mots-outils ; empreinte §17.1 ; doublons **nommés** ; `resolved_dataset_stages`), producteurs estampillés `normalized` (`FactExtractor`, `DocumentIngestor`), étape 3.7 du pipeline (`enrich_units` pur, locale par unité, limitations remontées au colis) et lignage §12.1 `Enricher.enrich` **distinct** de la synthèse | `51ca9a1` | `pytest -q` → **2253 passed / 4 skipped** (201,17 s) ; `check_architecture` + `check_contracts` OK ; `ruff` clean sur les fichiers du lot | ✅ LOT L3.1 — 109 nouveaux tests (79 `test_enricher.py`, 14 `test_data_stage_transitions.py`, 10 `test_delivery_exposes_stages.py`, 6 `TestEnrichmentIsItsOwnStage`) ; 3 tests existants mis à jour (`data_stage` du fact extractor/ingestor : `raw` → `normalized`). ⚠️ Deux pièges corrigés pendant le lot : un nombre illisible dans la locale déclarée (`3.5` en `fr-FR`) était **reconverti** en 35 → désormais refusé et listé (`_valid_grouping`) ; `$500` (symbole **avant** le montant) n'était pas signalé comme ambigu → détecté dans les deux notations |
 | 2026-09-30 | Cline (act) | **L3.2 + L3.3** | Fin du lot L3 : §12.1 projeté dans le colis (structure exacte de `Transformation.to_dict()`, une ligne par producteur et par étape, aucun `operator` fourre-tout) et embeddings §16 réellement écrits — `ModelRouter.embed` (sans stub : sans `LLM_API_KEY` l'appel **lève**), `app/knowledge/embedding/embeddings_generator.py` (texte = `unit_text` de L3.1, métadonnée = empreinte, `embedding_id` UUID, largeur vérifiée contre la colonne), `app/storage/repositories/embedding_repository.py` (littéral pgvector + `CAST`, `ON CONFLICT DO NOTHING`, `vector_dims`), `scripts/backfill_embeddings.py` (`--dry-run`, `--request-id`, `--report`, codes de sortie 0/1/2), `llm_decision_trace.task_type = "embedding"` | `536cc9d` + `02583ea` | `pytest -q` → **2313 passed / 4 skipped** (196,32 s) ; `check_architecture` + `check_contracts` + `check_invariants` OK ; `ruff` clean sur les fichiers du lot | ✅ **L3 clos** (C10, C11, C13-écriture). 60 nouveaux tests : 9 `test_delivery_transformations_shape.py`, 8 `test_transformations_are_real.py`, 16 `test_embeddings_generator.py`, 12 `test_embeddings_no_provider_degrades.py`, 8+7 d'intégration **sur PostgreSQL/pgvector réel** (dont `vector_search` qui retrouve l'unité vectorisée et un rattrapage relancé deux fois). ⚠️ Trois pièges : `check_architecture` refuse le littéral `vector(1536)` dans `app/` (la largeur vient d'une constante) ; la base testcontainers est **partagée par la session**, donc le rattrapage est testé `--request-id` scopé (sinon les unités des autres tests rendent le résultat dépendant de l'ordre) ; `asyncio.run` du script impose des tests **synchrones**. Reste pour L4 : brancher `HybridSearch`/`memory_lookup` dans le pipeline |
 | 2026-09-30 | Cline (act) | **L4** | Recherche hybride et mémoire : `app/knowledge/memory/hybrid_memory.py` (recherche §17.1 injectable, mode réel + limitations, candidates depuis `retrieve_context`), `HybridSearch` réécrit (§16.2 : sous-scores **normalisés** dans [0,1] par le maximum de chaque moitié, poids ADR 004 exposés, `search_outcome` qui dit `hybrid`/`lexical_only`/`unavailable`, engine partagé), vocabulaire §8.4 (`memory_lookup` et `retrieve_context` **exécutables**), étape `memory_lookup` en **tête de plan** (`order: 0`, après le garde-fou §41.13), unités réutilisées livrées avec leur identifiant d'origine + `context.memory`, audit §20 (`memory_lookup` success/degraded) et métrique `cache_hit_rate`, `limitations` explicites | `038b9aa` | `pytest -q` → **2354 passed / 4 skipped** (206,15 s) ; `check_architecture` + `check_contracts` + `check_invariants` OK ; `ruff` clean sur les fichiers du lot | ✅ **L4 clos** (C13 fermé pour la mémoire). 41 nouveaux tests + 4 tests existants ajustés (l'étape de mémoire précède désormais les pas d'acquisition). ⚠️ Trois pièges : `:source_id IS NULL` en paramètre asyncpg ⇒ « could not determine data type » (`HybridSearch` rendait [] en silence) → `CAST(:source_id AS text)` ; `pgvector` stocke des `float4`, donc comparaison au chiffre près à `1e-6` (et clamp `LEAST(1.0, …)`) ; la base testcontainers est partagée, donc le corpus de poids sème des **mots rares** et se nettoie pour rester déterministe |
+| 2026-09-30 | Cline (act) | **ENV (pré-requis L6)** | Chargement du `.env` en dev/test : `app/core/env.py` (seul lecteur du fichier ; **jamais en production**, l'environnement du process gagne toujours, aucune valeur journalisée), appelé depuis `app/__init__.py` et `migrations/env.py` (qui lit désormais `INIS_DATABASE_URL` avant `DATABASE_URL`) ; `.env.example` complété (toutes les variables lues par `app/` y sont, test de contrat à l'appui) ; `INIS_AUTH_ENABLED=true` par défaut en dev (`.env.example` + `docker compose`) ; `tests/env_policy.py` rend la suite **hermétique** (retrait par défaut des variables services/sécurité/live/configuration, opt-in `INIS_LIVE_LLM=1` et `INIS_TEST_USE_ENV=1`) | `09e7233` | `pytest -q` → **2381 passed / 4 skipped** (208,94 s) ; 3 checkers OK ; `ruff` clean sur les 8 fichiers | ✅ 27 nouveaux tests. ⚠️ **Preuve que la fuite était réelle** : le premier chargement a cassé **7 tests de routage LLM** (`LLM_MODEL_DEFAULT`/`LLM_MODEL_FALLBACKS` du `.env` remplaçaient le défaut attendu) → groupe `configuration` ajouté à la politique, et un test échoue si `.env.example` documente une variable non classée |
+| 2026-09-30 | Cline (act) | **L6** | Persistance réelle : `pipeline_persistence` **sans une ligne de SQL** (lignes confiées aux tables Core via `insert_rows`, `ON CONFLICT` dialecte-aware, `COALESCE` conservé sur `sources.reliability_score`), repositories ajoutés `transformation` (`0004`), `plan`/`plan_steps`, `request`, `information_versions` (`0007`) + preuve `dataset`, routeur `/v1/requests` **adossé à la table `requests`** (écriture au POST, relecture après redémarrage, champs absents laissés vides), `DurableVersionStore` (§18.1) et outils §21 acceptant les deux stores, `migrations/env.py` lance le `.env` | `57cc15c` | `pytest -q` → **2420 passed / 4 skipped** (209,29 s) ; `check_architecture` + `check_contracts` + `check_invariants` OK ; `ruff` clean sur les fichiers du lot ; **stack réelle** `docker compose up -d` + `alembic upgrade head` → `0015 (head)`, 38 tables, 289 colonnes | ✅ **L6 clos (N2)** — 39 nouveaux tests. Critère utilisateur prouvé : *write → restart → read* par un **autre interpréteur** (`tests/integration/test_restart_durability.py`) + non-divergence repository/migration sur 8 tables (`test_postgres_real.py`). ⚠️ Deux points **signalés et non tranchés** car ils changent le schéma (§18.2 : `deleted_at` n'existe que sur `accounts` ; §7 : `requests` ne stocke pas `question`/`context`/`budget`) ⇒ migration `0016` à valider |
 
 
 ---
