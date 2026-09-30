@@ -1092,8 +1092,112 @@ class PipelineRunner:
                 "memory lookup audit event not written", error=str(exc)
             )
 
-    async def run(self, request_id: str, payload: Any) -> dict[str, Any]:
-        """Run the end-to-end pipeline with graceful degradation if modules are missing."""
+    async def _checkpoint_step(
+        self,
+        request_id: str,
+        *,
+        last_committed_step: str | None,
+        step_index: int,
+        payload: list[dict[str, Any]],
+        resumable: bool = True,
+    ) -> None:
+        """Write the §41.1 checkpoint of a run, never raising.
+
+        The checkpoint is a *best effort*: a database that cannot be written to
+        must not stop a delivery that is already in progress. When it cannot be
+        written, the run continues and the resume projection simply stays empty —
+        a run that cannot be resumed is not a run that fails.
+        """
+        from app.storage.database.engine import get_default_engine
+        from app.storage.repositories.checkpoint_repository import CheckpointRepository
+
+        engine = get_default_engine()
+        if engine is None:
+            return
+        try:
+            await CheckpointRepository.save(
+                engine,
+                request_id,
+                last_committed_step=last_committed_step,
+                step_index=step_index,
+                payload=payload,
+                resumable=resumable,
+            )
+        except Exception as exc:  # noqa: BLE001 - §25.2: never lose the colis
+            logger.warning("checkpoint not written", request_id=request_id, error=str(exc))
+
+    async def resume_interrupted(
+        self, request_id: str, payload: Any = None
+    ) -> dict[str, Any] | None:
+        """Continue an interrupted run from its last committed checkpoint (§41.1).
+
+        Distinct from :meth:`resume`, which continues a lifecycle from an opaque
+        **token** held by the caller. This one reads the **persisted** checkpoint:
+        it is what a supervisor calls after a crash, when nobody holds a token
+        anymore.
+
+        Args:
+            request_id: The request to resume.
+            payload: The original §7 payload. When omitted it is rebuilt from the
+                ``requests`` row (revision ``0016`` stores it whole), so a resume
+                started by another process does not need the caller to hold it.
+
+        Returns:
+            The delivery of the resumed run, or ``None`` when there is nothing to
+            resume — no checkpoint, a completed one, or no acquired prefix. The
+            caller decides what to tell the requester; this method never invents a
+            run that cannot be resumed.
+        """
+        from app.storage.database.engine import get_default_engine
+        from app.storage.repositories.checkpoint_repository import CheckpointRepository
+        from app.storage.repositories.request_repository import RequestRepository
+
+        engine = get_default_engine()
+        if engine is None:
+            return None
+        checkpoint = await CheckpointRepository.get(engine, request_id)
+        if not checkpoint or not checkpoint.get("resumable"):
+            return None
+        if not checkpoint.get("payload"):
+            # The position is known but what had been acquired is not: resuming
+            # would silently deliver a run with holes. It is refused instead.
+            return None
+        if payload is None:
+            stored = await RequestRepository.get(engine, request_id)
+            payload = (stored or {}).get("payload")
+            if not payload:
+                return None
+        return await self.run(request_id, payload, resume=checkpoint)
+
+    async def run(
+        self, request_id: str, payload: Any, *, resume: Mapping[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Run the end-to-end pipeline with graceful degradation if modules are missing.
+
+        Args:
+            request_id: The request being served.
+            payload: The §7 request payload.
+            resume: §41.1 checkpoint to continue from. When supplied, the step
+                results it carries are **replayed** (the run does not re-execute
+                the committed steps, so the information acquired before the
+                interruption is delivered without being acquired twice).
+        """
+        resumed_results: list[dict[str, Any]] = [
+            dict(item) for item in ((resume or {}).get("payload") or [])
+        ]
+        replayed_steps = int(
+            (resume or {}).get("step_index")
+            or (len(resumed_results) if resume else 0)
+        )
+        resumed_from: dict[str, Any] | None = (
+            {
+                "last_committed_step": (resume or {}).get("last_committed_step"),
+                "step_index": replayed_steps,
+                "replayed_steps": replayed_steps,
+            }
+            if resume
+            else None
+        )
         start_time = time.monotonic()
         start_iso = datetime.now(UTC).isoformat()
         self._running.add(request_id)
@@ -1427,7 +1531,7 @@ class PipelineRunner:
             "status": "in_progress",
             "request_id": request_id,
         })
-        step_results: list[dict[str, Any]] = []
+        step_results: list[dict[str, Any]] = list(resumed_results)
         # Accumulated facts with real SRC_ provenance (§0.2-compliant)
         web_facts: list[dict[str, Any]] = []
         # Accumulated source entries for the delivery sources[] field
@@ -1499,7 +1603,24 @@ class PipelineRunner:
             fact_extractor = FactExtractor()
             reliability_scorer = SourceReliabilityScorer()
 
-            for step in steps_to_run:
+            for index, step in enumerate(steps_to_run, start=1):
+                if index <= replayed_steps:
+                    # §41.1 — cette étape a déjà été exécutée avant
+                    # l'interruption : son résultat vient du point de reprise, et
+                    # la ré-exécuter acquerrait une seconde fois la même
+                    # information.
+                    continue
+                # §41.1 — le point de reprise est écrit **avant** que l'étape ne
+                # s'exécute : une interruption pendant l'étape N laisse donc un
+                # état qui décrit les étapes 1..N-1 et ce qu'elles ont produit.
+                await self._checkpoint_step(
+                    request_id,
+                    last_committed_step=(
+                        str(step_results[-1].get("step_id")) if step_results else None
+                    ),
+                    step_index=len(step_results),
+                    payload=step_results,
+                )
                 # §1.3 — a cancelled request stops at the next step boundary
                 # instead of continuing acquisition for nobody.
                 if self.is_cancelled(request_id):
@@ -2494,6 +2615,24 @@ class PipelineRunner:
             step_results=step_results,
         )
         base_limitations.extend(persistence_limits)
+        # §41.1 — le run est allé au bout : le point de reprise ne sert plus, et
+        # le laisser « resumable » ferait croire qu'il reste quelque chose à faire.
+        await self._checkpoint_step(
+            request_id,
+            last_committed_step=(
+                str(step_results[-1].get("step_id")) if step_results else None
+            ),
+            step_index=len(step_results),
+            payload=step_results,
+            resumable=False,
+        )
+        if resumed_from is not None:
+            base_limitations.append(
+                "Reprise §41.1 : ce run a continué une exécution interrompue à "
+                f"l'étape « {resumed_from.get('last_committed_step') or 'inconnue'} » ; "
+                f"{resumed_from.get('replayed_steps', 0)} résultat(s) d'étape ont été "
+                "rejoués depuis le point de reprise (aucune ré-acquisition)."
+            )
 
         delivery_response: dict[str, Any] = {
             "response_id": resp_id,
@@ -2545,6 +2684,9 @@ class PipelineRunner:
                 "steps_executed": len(step_results),
                 # §17.1 — « mémoire utilisée » se lit ici : le mode de recherche
                 # réellement exécuté (§16.2) et les unités réutilisées.
+                # §41.1 — la reprise d'un run interrompu se lit ici : d'où l'on
+                # vient et combien de résultats ont été rejoués.
+                "resumed_from": resumed_from,
                 "memory": {
                     **{
                         key: memory_note.get(key)
