@@ -10,7 +10,11 @@ The four stages of §12 are recorded here — but **only those that ran**:
 
 * ``raw`` — the sources acquired for the request;
 * ``normalized`` — the extraction that turned the acquired material into §11 units;
-* ``enriched`` — the synthesis that turned the units into traceable findings;
+* ``enriched`` — the notation the enricher normalised (dates, measures,
+  currencies, language) **and** the synthesis that turned the units into
+  traceable findings: two producers, so two rows (``Enricher.enrich`` and
+  ``ModelRouter``), because crediting one with the other's output would make the
+  lineage a fiction;
 * ``derived`` — the files delivered for the request (§24.2).
 
 A file the request already ingested (§9.1) gets its **own** ``raw``/``normalized``
@@ -101,6 +105,7 @@ def build_transformations(
     model: str | None = None,
     ingested: Mapping[str, Any] | None = None,
     database: Mapping[str, Any] | None = None,
+    enrichment: Mapping[str, Any] | None = None,
     delivered_units: Sequence[dict[str, Any]] = (),
 ) -> list[dict[str, Any]]:
     """Return the §12.1 transformations of the stages that produced something.
@@ -129,6 +134,13 @@ def build_transformations(
         delivered_units: Every unit of the colis, including the ones the run
             synthesised: the ``derived`` stage declares them all as its inputs,
             so a file never contains material its lineage does not mention.
+        enrichment: The §12 ``normalized`` → ``enriched`` step of the colis:
+            ``unit_ids`` (the units that were really promoted), ``locale`` (the
+            locale the enricher used), plus the counters it reported —
+            ``values``, ``languages``, ``duplicates``, ``unresolved``. Recorded
+            as its own ``enriched`` row under ``Enricher.enrich``: the run
+            synthesises findings *and* normalises notation, and crediting one
+            producer with the other's output would break §12.1.
 
     Returns:
         The transformations, in §12 stage order. A stage with no output of its
@@ -149,6 +161,10 @@ def build_transformations(
     database_source_ids = _unique(str(value) for value in (read.get("source_ids") or ()))
     database_unit_ids = _unique(str(value) for value in (read.get("unit_ids") or ()))
     database_tool = str(read.get("tool") or "postgres_query")
+
+    enrich = enrichment or {}
+    enriched_unit_ids = _unique(str(value) for value in (enrich.get("unit_ids") or ()))
+    enrichment_tool = str(enrich.get("tool") or "Enricher.enrich")
 
     candidates = [
         _stage(
@@ -224,6 +240,23 @@ def build_transformations(
             parameters={
                 "information_units": len(database_unit_ids),
                 "origin": "database_query",
+            },
+        ),
+        _stage(
+            stage="enriched",
+            request_id=request_id,
+            objective=objective,
+            input_ids=unit_ids or ingested_unit_ids or database_unit_ids or [request_id],
+            output_ids=enriched_unit_ids,
+            operator="Enricher",
+            tool=enrichment_tool,
+            parameters={
+                "information_units": len(enriched_unit_ids),
+                **{
+                    key: enrich[key]
+                    for key in ("values", "languages", "locale", "duplicates", "unresolved")
+                    if enrich.get(key) is not None
+                },
             },
         ),
         _stage(

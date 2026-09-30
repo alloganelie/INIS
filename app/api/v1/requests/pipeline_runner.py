@@ -30,6 +30,7 @@ from app.governance.budget.quotas import (
     BudgetExceeded,
     BudgetGuard,
 )
+from app.knowledge.enrichment.enricher import enrich_units, resolved_dataset_stages
 from app.knowledge.ingestion.database_material import (
     DatabaseMaterial,
     load_database_material_for_request,
@@ -1701,6 +1702,48 @@ class PipelineRunner:
             )
 
         # -------------------------------------------------------------
+        # Stage 3.7: §12 — the colis is enriched before it is scored
+        # -------------------------------------------------------------
+        # Every unit still at « normalized » gets its notation read: the ISO form
+        # of each date beside the span it came from, canonical unit symbols, the
+        # currency of an amount, the language of the text and a fingerprint that
+        # names the exact duplicates instead of dropping them. A unit at « raw »
+        # is refused — §12 has no shortcut — and the synthesis unit is already
+        # « derived »: neither is relabelled. Nothing is invented: what the
+        # enricher could not read is carried in ``enrichment_limits``.
+        enrichment_policy: Any = None
+        try:
+            from app.knowledge.normalization.language_policy import LanguagePolicy
+
+            enrichment_policy = LanguagePolicy(
+                working_language=str(context.get("working_language", "en")),
+                source_languages_allowed=tuple(
+                    context.get("source_languages_allowed") or ("en", "fr", "es", "de")
+                ),
+                translation_policy=str(context.get("translation_policy", "on_demand")),
+                normalization_locale=str(context.get("normalization_locale", "en-US")),
+            )
+        except (ImportError, TypeError, ValueError):
+            # An unusable policy is not a reason to skip the step: the enricher
+            # falls back to its own declared default, stated in the report.
+            enrichment_policy = None
+
+        enrichment = enrich_units(information_units, policy=enrichment_policy)
+        if enrichment.units:
+            enriched_by_id = {
+                str(unit.get("information_id")): unit for unit in enrichment.units
+            }
+            information_units = [
+                enriched_by_id.get(str(unit.get("information_id")), unit)
+                for unit in information_units
+            ]
+        enrichment_limits: list[str] = list(enrichment.limitations)
+        # §12 — ``datasets[].data_stage`` is stated from the units read out of
+        # each dataset: the delivery says how far the material of a table went,
+        # instead of leaving the reader to infer it from the units alone.
+        datasets = resolved_dataset_stages(information_units, datasets)
+
+        # -------------------------------------------------------------
         # Stage 4: Confidence Evaluation (with graceful degradation)
         # -------------------------------------------------------------
         lifecycle.set_step("CONFIDENCE_ASSESSMENT")
@@ -1990,6 +2033,10 @@ class PipelineRunner:
         if database_refusal:
             base_limitations.append(database_refusal)
         base_limitations.extend(database_persistence_limits)
+        # §12/§25.2 — what the enrichment of Stage 3.7 could not read: a date
+        # whose convention is unknown, an amount behind an ambiguous ``$``, a
+        # duplicate that was kept and named. Stating it is the point.
+        base_limitations.extend(enrichment_limits)
         if database_material is not None and database_material.limitations and (
             database_material.has_material
             or request_type in ("data", "source")
@@ -2177,6 +2224,24 @@ class PipelineRunner:
             if database_material is not None and database_material.has_material
             else None
         )
+        #: §12.1 — what the « normalized » → « enriched » step of Stage 3.7 really
+        #: did. ``None`` when it promoted no unit: a stage that produced nothing
+        #: is absent from the lineage rather than recorded as if it had run
+        #: (§0.2). The locale is the policy fallback, not the language of each
+        #: unit — those are in the enriched units' own reports.
+        enrichment_report = enrichment.lineage()
+        enrichment_lineage: dict[str, Any] | None = (
+            {
+                "tool": "Enricher.enrich",
+                "locale": (
+                    enrichment_policy.normalization_locale if enrichment_policy else None
+                ),
+                "skipped": len(enrichment.skipped),
+                **enrichment_report,
+            }
+            if enrichment_report
+            else None
+        )
         transformations = build_transformations(
             request_id=request_id,
             objective=objective,
@@ -2187,6 +2252,7 @@ class PipelineRunner:
             model=self._synthesis_model(request_id),
             ingested=ingested_material,
             database=database_read,
+            enrichment=enrichment_lineage,
             delivered_units=information_units,
         )
         if transformations:
@@ -2215,6 +2281,7 @@ class PipelineRunner:
             model=self._synthesis_model(request_id),
             ingested=ingested_material,
             database=database_read,
+            enrichment=enrichment_lineage,
             delivered_units=information_units,
         )
         if derived:

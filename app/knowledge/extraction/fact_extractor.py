@@ -1,4 +1,4 @@
-"""Produce traceable raw InformationUnit payloads from source text."""
+"""Produce traceable normalised InformationUnit payloads from source text."""
 
 from typing import Any
 
@@ -7,7 +7,7 @@ from app.knowledge.extraction.sentence_splitter import split_sentences
 
 
 class FactExtractor:
-    """Extract one factual raw information payload for each source sentence."""
+    """Extract one factual normalised information payload for each source sentence."""
 
     async def extract(
         self, text: str, source_id: str, document_id: str, url: str
@@ -30,7 +30,10 @@ class FactExtractor:
                 "source_id": source_id,
                 "document_id": document_id,
                 "raw_reference": {"url": url, "excerpt": sentence[:200]},
-                "data_stage": "raw",
+                # §12 — the extraction of a sentence into a located, sourced
+                # unit *is* the `normalized` stage; the fetched page it came
+                # from remains the `raw` material.
+                "data_stage": "normalized",
                 "epistemic_status": "factual",
                 "evidence_id": ULID.new("EVID_"),
                 "provenance": {

@@ -137,7 +137,8 @@ async def test_fact_extractor_pipeline() -> None:
         assert unit["evidence_id"].startswith("EVID_")
         assert unit["source_id"] == "SRC_TEST_01"
         assert unit["document_id"] == "DOC_TEST_01"
-        assert unit["data_stage"] == "raw"
+        # §12 — extraction produces the « normalized » stage of the lifecycle.
+        assert unit["data_stage"] == "normalized"
         assert unit["epistemic_status"] == "factual"
         assert unit["provenance"]["method"] == "fact_extractor"
 

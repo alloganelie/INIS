@@ -330,7 +330,11 @@ def _base_unit(
             "request_id": request_id,
         },
         versions=[information_id],
-        data_stage="raw",
+        # §12 — the reader that produced this unit *is* the normalisation step:
+        # it turned a page, a paragraph or a row into a located §11 unit, so the
+        # unit is born « normalized » and never claims to be the untouched
+        # material (the stored bytes are the `raw` stage of §9.1).
+        data_stage="normalized",
         created_at=now,
         updated_at=now,
     )

@@ -45,6 +45,18 @@ INGESTED = {
     "readers": ["read_csv"],
 }
 
+#: §12 — le rapport de l'étape « normalized » → « enriched » du colis : les
+#: unités réellement promues, la locale utilisée et les compteurs de l'enricher.
+ENRICHMENT = {
+    "tool": "Enricher.enrich",
+    "unit_ids": ["INF_01M3Q0000000000000000000AA"],
+    "values": 3,
+    "languages": {"fr": 1},
+    "locale": "fr-FR",
+    "duplicates": 0,
+    "unresolved": 1,
+}
+
 
 def _stages(transformations: list[dict]) -> list[str]:
     """Return the stage of each transformation, in order."""
@@ -271,3 +283,59 @@ class TestDegradedRuns:
         """Guard: the module is importable and the entity really validates (P3)."""
         with pytest.raises(ValueError):
             Transformation(transformation_id="ART_2026_000001", output_ids=["INF_1"])
+
+
+class TestEnrichmentIsItsOwnStage:
+    """§12.1 — l'étape « enriched » de l'enricher a sa propre ligne.
+
+    La synthèse et l'enrichissement atteignent le **même** stade §12 par deux
+    opérations différentes : créditer l'une du travail de l'autre rendrait le
+    lignage faux, exactement ce que L3.1 corrige.
+    """
+
+    def test_the_two_producers_of_the_stage_are_kept_apart(self) -> None:
+        producers = [
+            item["tool"]
+            for item in _build(enrichment=ENRICHMENT)
+            if item["parameters"]["stage"] == "enriched"
+        ]
+
+        assert producers == ["Enricher.enrich", "synthesis"]
+
+    def test_the_enriched_units_are_the_output_of_the_enricher(self) -> None:
+        row = next(
+            item
+            for item in _build(enrichment=ENRICHMENT)
+            if item["tool"] == "Enricher.enrich"
+        )
+
+        assert row["operator"] == "Enricher"
+        assert row["output_ids"] == ["INF_01M3Q0000000000000000000AA"]
+        assert row["input_ids"] == [
+            "INF_01M3Q0000000000000000000AA",
+            "INF_01M3Q0000000000000000000AB",
+        ]
+
+    def test_the_counters_of_the_enricher_are_replayed(self) -> None:
+        row = next(
+            item
+            for item in _build(enrichment=ENRICHMENT)
+            if item["tool"] == "Enricher.enrich"
+        )
+
+        assert row["parameters"]["values"] == 3
+        assert row["parameters"]["languages"] == {"fr": 1}
+        assert row["parameters"]["locale"] == "fr-FR"
+        assert row["parameters"]["unresolved"] == 1
+
+    def test_a_run_that_enriched_nothing_records_no_such_row(self) -> None:
+        assert all(item["tool"] != "Enricher.enrich" for item in _build())
+
+    def test_an_enrichment_without_output_records_nothing(self) -> None:
+        """§0.2 — pas d'unité promue, pas d'étape revendiquée."""
+        assert _stages(_build(enrichment={"unit_ids": []})) == list(DATA_STAGES)
+
+    def test_every_enrichment_row_is_a_valid_spec121_transformation(self) -> None:
+        for item in _build(enrichment=ENRICHMENT):
+            Transformation(**item).validate()
+            assert item["output_ids"]

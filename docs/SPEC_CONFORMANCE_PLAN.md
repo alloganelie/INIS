@@ -712,13 +712,49 @@ lecture seule ; les tests d'erreur (type refusé, quota, SQL d'écriture) passen
 
 #### L3.1 — Étape ENRICHED (`app/knowledge/enrichment/`)
 
-- [ ] `enricher.py` : normalisation d'unités (dates, unités de mesure, devise), détection de
+> ### ⚙️ État d'avancement L3.1 au 2026-09-30 — **étape ENRICHED livrée, branchée au pipeline**
+>
+> **Fait et prouvé** (commit à ancrer : `docs(conformance): ancrer L3.1 sur son commit`)
+>
+> | Sous-lot | Preuve |
+> |---|---|
+> | Notation normalisée (dates ISO + `offset` du texte d'origine, unités de mesure, devises) **sans jamais réécrire** le contenu | `tests/unit/knowledge/test_enricher.py::TestDatesAreReadNotGuessed`, `::TestMeasuresAndAmounts` |
+> | Langue détectée par mots-outils ; `None` (jamais une probabilité) si texte court, tie ou aucun mot-outil | `tests/unit/knowledge/test_enricher.py::TestLanguageDetection` |
+> | Empreinte §17.1 du matériau **source** seul (le bloc d'enrichissement ne change pas l'empreinte) + doublons **nommés** et conservés | `tests/unit/knowledge/test_enricher.py::TestUnitTextAndFingerprint`, `::TestEnrichUnitsStatesWhatItCouldNotRead` |
+> | Producteurs (extraction §21, ingestion §9.1) estampillés `normalized` | `tests/unit/knowledge/test_data_stage_transitions.py::TestTheProducersStampTheStageTheyReach` |
+> | Saut d'étape refusé (`raw`→`enriched`, `raw`→`derived`), marche arrière et stade inconnu refusés | `tests/unit/knowledge/test_data_stage_transitions.py::TestNoStageIsEverSkipped` |
+> | `information_units[].data_stage`, `datasets[].data_stage` et `transformations[]` exposés dans le colis | `tests/api/test_delivery_exposes_stages.py` (10 cas) |
+> | Deux producteurs pour « enriched » (`Enricher.enrich` / synthèse), étape **absente** si rien n'est promu | `tests/unit/knowledge/test_transformation_records_per_stage.py::TestEnrichmentIsItsOwnStage` |
+>
+> **Décisions prises en L3.1** (à ne pas redécouvrir)
+>
+> 1. La convention de lecture (ordre jour/mois, séparateur décimal) vient de la **langue de l'unité**
+>    (déclarée, sinon détectée) et seulement en dernier recours de `normalization_locale` : lire un
+>    « 15/01/2024 » français en `en-US` inverserait le jour et le mois (§0.2).
+> 2. Aucune valeur n'est **convertie** ni **complétée** : `kg` ne devient jamais `lb`, et un nombre
+>    illisible (`3.5` en `fr-FR`) ou un symbole ambigu (`$`, `kr`) n'est pas normalisé mais **listé**
+>    dans `unresolved` puis dans `limitations`.
+> 3. Une unité n'est promue que si l'enrichissement a **trouvé** quelque chose (langue ou valeur) ;
+>    sinon elle reste `normalized` et la raison est dans `skipped` + `limitations`.
+> 4. Le `data_stage` d'un `Dataset` n'existe pas en base et **n'est pas ajouté** : il est dérivé du
+>    stade le plus avancé de ses unités (`resolved_dataset_stages`), donc déclaré sans migration.
+> 5. `enrich_units` est **pur** (aucune I/O, aucun LLM) : c'est le pipeline (étape 3.7) qui applique
+>    le résultat, et seules les unités promues remplacent celles du colis.
+> 6. Le lignage garde les deux producteurs du stade `enriched` séparés (§12.1) : `Enricher.enrich`
+>    pour la notation, `ModelRouter` pour la synthèse — créditer l'un du travail de l'autre était
+>    précisément le défaut C11.
+>
+> **Reste ouvert dans L3** : L3.2 (projection §12.1 par étape : la `TRF_` unique de
+> `pipeline_persistence.py` n'est pas encore remplacée *en base*, même si `transformations[]` porte
+> déjà les étapes) et L3.3 (embeddings §16) — non commencés.
+
+- [x] `enricher.py` : normalisation d'unités (dates, unités de mesure, devise), détection de
   langue (`language_policy` existe), déduplication par empreinte (`record_hash` / `sha256_hex`).
   *preuve : `tests/unit/knowledge/test_enricher.py`*
-- [ ] Marquer chaque unité du `data_stage` correct (`app/core/constants.py::DATA_STAGES`) et
+- [x] Marquer chaque unité du `data_stage` correct (`app/core/constants.py::DATA_STAGES`) et
   refuser tout saut d'étape (RAW→DERIVED direct interdit, §12).
   *preuve : `tests/unit/knowledge/test_data_stage_transitions.py`*
-- [ ] Exposer la progression de stage dans le colis (`datasets[].data_stage`, `transformations[]`).
+- [x] Exposer la progression de stage dans le colis (`datasets[].data_stage`, `transformations[]`).
   *preuve : `tests/api/test_delivery_exposes_stages.py`*
 
 #### L3.2 — Projection des transformations dans le colis
@@ -936,6 +972,8 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 2026-09-30 | Cline (act) | **L2.5b** | La source PostgreSQL **nommée par la requête** entre dans le pipeline : `constraints.source_preferences=["postgres:<ref>[#table]"]` (nouveau `app/connectors/database/source_target.py`, une entrée malformée **lève** au lieu de disparaître), lecture → `Dataset` + une unité §11 par ligne localisée en `row` (`app/knowledge/ingestion/database_material.py`), étape `query_database` **exécutable** et conditionnelle (`tool_dispatch.py`), orientation du plan `data`/`source` (aucune recherche web), sources `database`, étages §12.1 `PostgresConnector`/`DatabaseMaterial`, `Dataset` persisté (`DatasetRepository`) pour que le `DATA_` livré soit consultable | `4f2a0eb` | `pytest -q` → **2067 passed / 4 skipped** (148,75 s) ; `check_architecture` + `check_contracts` + `check_invariants` OK ; BC **0 breaking** (31 warnings BC005) ; `ruff` : **0 nouvelle erreur** (`pipeline_runner.py` reste à 22 erreurs préexistantes, dont 14 E501 — comptes identiques avant/après vérifiés par `git stash`) | ✅ **critère §36/7 fermé** — 92 nouveaux tests : 8 d'intégration sur PostgreSQL réel (`test_request_database_read_e2e.py`), 24 agentiques (`test_database_read_delivery.py`), 32 unitaires matériau, 28 sur la cible. ⚠️ Trois pièges : lire la base du client **avec l'engine d'INIS** (P19), publier un `DATA_` absent de la table `datasets` (P20), et **jeter le `file_ingest`** d'une requête `data` qui nomme *aussi* une base (P21) — les trois sont écartés et verrouillés par un test |
 | 2026-09-30 | Cline (act) | **L2.6** | **L2 clos** : PDF/DOCX rendus **localisables** (`extract_document_blocks` : une page, un paragraphe ou un tableau par bloc, `char_offset` vérifiable dans le texte extrait), `FactExtractor` branché sur le texte extrait (`content["sentences"]`, texte intégral conservé), images **PNG/JPEG** acceptées et ingérées via `extract_image_content` (Pillow optionnel D6, `pillow_available=False` nommé, aucun OCR §9.2), seuil de l'ADR 007 **réellement appliqué** (`app/knowledge/normalization/limits.py`, `_chunked_units`, miroir `configs/*.toml`), feuille de classeur nommée dans le locator (les autres feuilles listées en `limitations`). `ingest_document` devient `async` (P25) | `93e4722` | `pytest -q` → **2120 passed / 4 skipped** (184,19 s) ; `check_architecture` + `check_contracts` OK ; ruff : **0 erreur nouvelle** sur les fichiers du lot | ADR 007 porte désormais sa section « Mise en œuvre » et ses limites assumées ; 53 tests neufs (dont 9 sur les blocs de document, 11 sur l'image/OCR, 13 sur le chunking, 3 d'intégration PDF/tronçons) |
 | 2026-09-30 | Cline (act) | **L2.1 (fin)** | Variante protocole §5.2 : `InformationRequestCreate.source_ref` n'accepte que `s3://bucket/cle` (chemin local / URL HTTP refusés, §19) et `app/knowledge/ingestion/object_intake.py` ingère l'objet nommé **avant** la planification du run — lecture en flux (plafond §41.2), type par le contenu, `sources`/`documents`/`Dataset`/unités §11, la référence du client restant le `storage_ref`. Une source illisible **refuse la création** (422 nommant la cause). `create_request` devient `async` | `9677305` | `pytest -q` → **2144 passed / 4 skipped** (229,30 s) ; checkers OK ; ruff : 0 nouvelle erreur sur les fichiers du lot (2 préexistantes dans `router.py`) | ⚠️ Le run est planifié **après** l'ingestion : sans cela le plan ignorerait la source que la requête vient de nommer (P27) |
+| 2026-09-30 | Cline (act) | **L3.1** | Étape ENRICHED : `app/knowledge/enrichment/enricher.py` (chaîne §12 `advance_stage`/`can_transition` — saut refusé ; dates ISO + `offset` du texte d'origine ; unités de mesure ; devises ; langue par mots-outils ; empreinte §17.1 ; doublons **nommés** ; `resolved_dataset_stages`), producteurs estampillés `normalized` (`FactExtractor`, `DocumentIngestor`), étape 3.7 du pipeline (`enrich_units` pur, locale par unité, limitations remontées au colis) et lignage §12.1 `Enricher.enrich` **distinct** de la synthèse | (à ancrer) | `pytest -q` → **2253 passed / 4 skipped** (201,17 s) ; `check_architecture` + `check_contracts` OK ; `ruff` clean sur les fichiers du lot | ✅ LOT L3.1 — 109 nouveaux tests (79 `test_enricher.py`, 14 `test_data_stage_transitions.py`, 10 `test_delivery_exposes_stages.py`, 6 `TestEnrichmentIsItsOwnStage`) ; 3 tests existants mis à jour (`data_stage` du fact extractor/ingestor : `raw` → `normalized`). ⚠️ Deux pièges corrigés pendant le lot : un nombre illisible dans la locale déclarée (`3.5` en `fr-FR`) était **reconverti** en 35 → désormais refusé et listé (`_valid_grouping`) ; `$500` (symbole **avant** le montant) n'était pas signalé comme ambigu → détecté dans les deux notations |
+
 
 ---
 

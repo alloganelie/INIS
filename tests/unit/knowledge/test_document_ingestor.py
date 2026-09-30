@@ -393,7 +393,9 @@ class TestUnitContract:
         for unit in outcome.units:
             assert unit["information_id"].startswith("INF_")
             assert unit["type"] in {"record", "document_fragment", "image_region"}
-            assert unit["data_stage"] == "raw"
+            # §12 — the reader that produced this unit *is* the normalisation
+            # step: a located §11 unit is never the untouched material.
+            assert unit["data_stage"] == "normalized"
             assert unit["provenance"]["method"] == "app.tools.files.read_csv"
             assert unit["provenance"]["extracted_from"] == STORAGE_REF
             assert unit["versions"] == [unit["information_id"]]

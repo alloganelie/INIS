@@ -26,7 +26,9 @@ async def test_extract_produces_valid_information_units() -> None:
         assert fact["content"]["text"]
         assert fact["source_id"] == SOURCE_ID
         assert fact["document_id"] == DOCUMENT_ID
-        assert fact["data_stage"] == "raw"
+        # §12 — the extraction of a sentence into a located, sourced unit *is*
+        # the « normalized » stage; the fetched page stays the « raw » material.
+        assert fact["data_stage"] == "normalized"
         assert fact["epistemic_status"] == "factual"
         assert fact["provenance"] == {
             "extracted_from": URL,
