@@ -973,25 +973,38 @@ contient une unité issue de la mémoire, tracée en audit, sans doublon en base
   `inspect_schema`, `profile_dataset`, `detect_duplicates`, `validate_schema`,
   `check_missing_values`, `check_consistency` (tous importables depuis `app.tools`, C5).
   ✅ **Branché** : `app/quality/dataset_quality.py` exécute `check_missing_values`, `detect_duplicates`,
-  `check_consistency` et `profile_dataset` sur les **lignes du dataset déjà livrées** (les unités §11,
-  dont le contenu d'enregistrement est déplié de `content["values"]` — sinon les contrôles porteraient
-  sur une colonne « values »), et le pipeline appelle ce module en **Stage 3.8**.
-  *preuve : `tests/unit/quality/test_quality_score_from_controls.py` (10 cas, dont le dépliage et la
-  colonne incohérente), `tests/api/test_delivery_quality_limitations.py` (4 cas sur le colis réel)*
-  ⚠️ **Reste dû** : `tests/integration/test_dataset_quality_controls_e2e.py` (ingestion réelle
-  fichier → S3 → PostgreSQL → contrôles) n'existe pas : la preuve ci-dessus remplace le lecteur de
-  matière, donc elle ne couvre pas la chaîne d'ingestion elle-même.
-- [ ] `check_freshness` (§13.2, §41.5) appliqué aux sources fichier/DB : `freshness` persisté
+  `check_consistency`, **`inspect_schema` + `validate_schema`** et `profile_dataset` sur les **lignes
+  du dataset déjà livrées** (unités §11, contenu d'enregistrement déplié de `content["values"]`), et
+  le pipeline appelle ce module en **Stage 3.8**.
+  *preuve : `tests/unit/quality/test_quality_score_from_controls.py` (10 cas), `tests/api/test_delivery_quality_limitations.py`
+  (4 cas sur le colis), `tests/integration/test_dataset_quality_controls_e2e.py` (**chaîne réelle** :
+  téléversement multipart → MinIO → PostgreSQL → `PipelineRunner` → colis)*
+  ⚠️ **Reste dû (constat reproductible, pas une hypothèse)** : sur cette chaîne, une **cellule** de CSV
+  qui ne tient pas dans sa colonne (`beaucoup` dans une colonne numérique) n'est **pas isolée** : le
+  lecteur stocke les cellules en texte, la colonne reste homogène (cohérence 1.0, schéma inféré
+  `string`). Le colis le **dit** (il signale qu'aucune mesure n'était détectable) au lieu de laisser
+  croire à une donnée propre, mais pour que §13.2 nomme la cellule elle-même, **l'ingestion devrait
+  typer la colonne** (changement de l'ingestion, hors périmètre de ce lot).
+- [x] `check_freshness` (§13.2, §41.5) appliqué aux sources fichier/DB : `freshness` persisté
   (colonne de la migration `0002`) et exposé. *preuve : `tests/unit/quality/test_freshness_file_source.py`*
-  ⚠️ L'outil existe (`app/tools/files/source_comparator.py::check_freshness`, `QualityResult` en
-  sortie) et §17.1 l'utilise pour le seuil de fraîcheur ; ce qui reste est de l'appliquer aux sources
-  **fichier/DB** de la requête et de persister leur `freshness`.
-- [ ] `compare_sources` (§14.4) entre source fichier et source web : un conflit fichier↔web
+  ✅ **Branché en Stage 3.9** (`app/quality/source_quality.py`) : la fraîcheur de **chaque source livrée**
+  (fichier et base) est évaluée, écrite sur l'entrée `sources[]` — donc **persistée** par
+  `pipeline_persistence` (la colonne était écrite à `NULL`) — et une fraîcheur inconnue est **dite**
+  plutôt que supposée récente.
+  ⚠️ **Défaut réel trouvé et corrigé** : `check_freshness` trouvait un `retrieved_at` (ce que l'ingestion
+  de fichier écrit) puis le passait à `FreshnessCheck`, qui ne lit que `updated_at` — une source fraîche
+  était donc notée **0.0 comme inconnue**. *preuve du correctif : les 7 cas de `test_freshness_file_source.py`
+  (frais / périmé / sans métadonnée / `age_days`) + `::TestTheColisCarriesTheResult`.*
+- [x] `compare_sources` (§14.4) entre source fichier et source web : un conflit fichier↔web
   doit produire un `Conflict` (§14.3), pas un arbitrage silencieux.
   *preuve : `tests/agentic/test_conflict_file_vs_web.py`*
-  ⚠️ `compare_sources` existe et rend des `Conflict` ; la détection unité par unité côté pipeline
-  (ligne ~2190 de `pipeline_runner.py`) porte aujourd'hui sur les sources web. Le croisement
-  **fichier↔web** reste à brancher.
+  ✅ **Branché en Stage 3.9** : les `conflicts` du colis (emplacement toujours vide) reçoivent le résultat
+  de `compare_sources`, et la détection §14.4 est enfin atteignable — **rien ne produisait le triplet
+  `(subject, predicate, value)`** qu'elle lit, donc elle ne pouvait jamais se déclencher sur du matériel
+  réel. Les enregistrements sont projetés mécaniquement (les valeurs descriptives nomment le sujet,
+  chaque colonne numérique un prédicat et sa cellule la valeur) ; ce qui reste **non comparable** est
+  déclaré dans `limitations` au lieu d'être arbitré (5 cas, dont « une phrase ne contredit pas une
+  colonne »).
 - [x] Score qualité §13.3 recalculé sur dataset : `quality_score` de `Dataset`/artefact
   **non `None`** quand les contrôles ont tourné ; `None` assumé sinon.
   *preuve : `tests/unit/quality/test_quality_score_from_controls.py::TestTheThreeDefects` (score
@@ -1314,5 +1327,7 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 
 
 
+
+| 2026-09-30 | Cline (act) | **L5 (suite et fin)** | `check_freshness` et `compare_sources` branchés (Stage 3.9, `app/quality/source_quality.py`) : fraîcheur évaluée par source **et persistée** (colonne `sources.freshness` écrite à `NULL` jusqu'ici), comparaison §14.4 des sources désormais **atteignable** — rien ne produisait le triplet `(subject, predicate, value)` qu'elle lit — avec projection mécanique des enregistrements et déclaration de ce qui reste non comparable ; E2E **réel** fichier → MinIO → PostgreSQL → contrôles → colis (téléversement multipart, vrai `load_request_material`) | `424450f` | `pytest -q` → **2498 passed / 4 skipped** ; 3 checkers OK ; `ruff` clean sur les fichiers du lot ; e2e rejoué seul (2 cas) | ✅ Items L5 2/3/4/5 **prouvés** ; ⚠️ **défaut réel corrigé** : `check_freshness` notait 0.0 (« inconnue ») une source fraîche qui déclarait `retrieved_at`, parce qu'il passait le dict brut à `FreshnessCheck` qui ne lit que `updated_at` ; ⚠️ **constat reproductible** : une cellule CSV qui ne tient pas dans sa colonne n'est pas isolée (les cellules sont stockées en texte, colonne homogène) — le colis le dit mais ne nomme pas la cellule, ce qui exigerait une ingestion typée (item 1 reste `[~]`) |
 
 
