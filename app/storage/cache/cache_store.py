@@ -214,16 +214,118 @@ class CacheStore:
         policy: CacheInvalidationPolicy | None = None,
         l1_backend: CacheBackend | None = None,
         l2_backend: CacheBackend | None = None,
+        l2_async_backend: Any | None = None,
     ) -> None:
         self.policy = policy or CacheInvalidationPolicy()
         # L1 defaults to the shared in-memory backend; L2 falls back to L1 so a
         # single-process deployment still behaves coherently.
         self._l1 = l1_backend or InMemoryBackend()
         self._l2 = l2_backend or self._l1
+        #: §41.5 L2 in PostgreSQL: an *asynchronous* backend (the storage layer is
+        #: async, the L1 API is sync). ``None`` keeps the store L1-only, and
+        #: :meth:`l2_enabled` says which mode the process is in.
+        self._l2_async = l2_async_backend
         self._index: dict[str, set[str]] = {}
         self.hits = 0
         self.misses = 0
         self.stale_rejections = 0
+        self.l2_promotions = 0
+        self.l2_writes = 0
+
+    def l2_enabled(self) -> bool:
+        """Return whether a durable L2 level is usable in this process."""
+        backend = self._l2_async
+        if backend is None:
+            return False
+        available = getattr(backend, "available", None)
+        return available if isinstance(available, bool) else True
+
+    # -- §41.5 L2 (asynchronous) ----------------------------------------
+
+    async def aget(self, namespace: str, *parts: Any) -> Any | None:
+        """Return the value of a key, reading L1 then the durable L2 level.
+
+        A value served from L2 is **promoted** into L1, so the second read of the
+        same key in the same process does not touch the database. The §41.5 rules
+        are applied to the L2 entry exactly as to an L1 one: an expired or too
+        stale entry is dropped (not merely ignored) and never reused.
+        """
+        key = make_cache_key(namespace, *parts)
+        cached = self.get(namespace, *parts)
+        if cached is not None:
+            return cached
+        if self._l2_async is None:
+            return None
+        entry: CacheEntry | None = await self._l2_async.aget(key)
+        if entry is None:
+            return None
+        if entry.is_expired() or not entry.is_fresh_enough(self.policy):
+            # Drop it from L2 so the next run re-fetches instead of paying for a
+            # database read that can only be rejected again.
+            await self._l2_async.adelete(key)
+            if not entry.is_expired():
+                self.stale_rejections += 1
+                self._record_stale()
+            return None
+        self._l1.set(key, entry, 0)
+        self._index.setdefault(L1, set()).add(key)
+        self.l2_promotions += 1
+        self.hits += 1
+        self._record_cache(True)
+        return entry.value
+
+    async def aset(
+        self,
+        namespace: str,
+        *parts: Any,
+        value: Any = None,
+        ttl_seconds: int | None = None,
+        source_freshness: datetime | None = None,
+        source_id: str | None = None,
+    ) -> CacheEntry:
+        """Write an entry to L1 **and** to the durable L2 level when available."""
+        entry = self.set(
+            namespace,
+            *parts,
+            value=value,
+            ttl_seconds=ttl_seconds,
+            source_freshness=source_freshness,
+            source_id=source_id,
+        )
+        if self._l2_async is not None:
+            ttl = self.policy.clamp_ttl(ttl_seconds)
+            written = await self._l2_async.aset(entry, ttl)
+            if written:
+                self.l2_writes += 1
+        return entry
+
+    async def ainvalidate_source(self, source_id: str) -> int:
+        """Invalidate one source in L1 and in L2 (``on_source_update``)."""
+        dropped = self.invalidate_source(source_id)
+        if self._l2_async is not None:
+            dropped += await self._l2_async.ainvalidate_source(source_id)
+        return dropped
+
+    async def ainvalidate_namespace(self, namespace: str) -> int:
+        """Invalidate one namespace in L1 and in L2."""
+        prefix = f"{namespace}:"
+        dropped = 0
+        for level, keys in list(self._index.items()):
+            backend = self._backend(level)
+            for key in list(keys):
+                if key.startswith(prefix):
+                    backend.delete(key)
+                    keys.discard(key)
+                    dropped += 1
+        if self._l2_async is not None:
+            dropped += await self._l2_async.ainvalidate_namespace(namespace)
+        return dropped
+
+    async def apurge_expired(self, now: datetime | None = None) -> int:
+        """Purge the expired entries of the durable level."""
+        if self._l2_async is None:
+            return 0
+        return int(await self._l2_async.apurge_expired(now))
 
     def _backend(self, level: str) -> CacheBackend:
         """Return the backend of *level*.
@@ -372,6 +474,12 @@ class CacheStore:
             "misses": self.misses,
             "stale_rejections": self.stale_rejections,
             "hit_rate": (self.hits / total) if total else 0.0,
+            # §41.5 — which mode the process really ran in, and how much the
+            # durable level served or stored: a claim of "L2 enabled" must be
+            # readable, not assumed.
+            "l2_enabled": self.l2_enabled(),
+            "l2_promotions": self.l2_promotions,
+            "l2_writes": self.l2_writes,
         }
 
     def clear(self) -> None:

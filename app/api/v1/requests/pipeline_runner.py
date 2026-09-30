@@ -31,10 +31,6 @@ from app.governance.budget.quotas import (
     BudgetGuard,
 )
 from app.knowledge.enrichment.enricher import enrich_units, resolved_dataset_stages
-from app.knowledge.memory import HybridMemorySearch, memory_audit_payload
-from app.planning.memory_checker import MemoryRequirements
-from app.planning.memory_checker import early_stop_decision
-from app.planning.memory_checker import memory_lookup as lookup_memory
 from app.knowledge.ingestion.database_material import (
     DatabaseMaterial,
     load_database_material_for_request,
@@ -44,6 +40,7 @@ from app.knowledge.ingestion.request_material import (
     RequestMaterial,
     load_request_material,
 )
+from app.knowledge.memory import HybridMemorySearch, memory_audit_payload
 from app.knowledge.provenance.stage_transformations import build_transformations
 from app.llm.tracing.llm_trace_writer import LLMTraceWriter
 from app.planning.limits import (
@@ -52,9 +49,12 @@ from app.planning.limits import (
     max_parallel_tool_calls,
     max_plan_steps,
 )
+from app.planning.memory_checker import MemoryRequirements, early_stop_decision
+from app.planning.memory_checker import memory_lookup as lookup_memory
 from app.planning.plan_builder import InvalidPlanAction, PlanBuilder, closed_actions
 from app.quality.conflict.conflict_status import conflict_payload
 from app.storage.cache.cache_store import CacheStore
+from app.storage.cache.postgres_backend import PostgresCacheBackend
 from app.storage.database.session import database_configured
 
 #: §34 ``llm_cost`` fallback pricing (USD per token) when the provider response
@@ -449,7 +449,7 @@ class PipelineRunner:
         self._llm_traces: LLMTraceWriter = LLMTraceWriter()
         self._trace_step_ids: dict[tuple[str, str], str] = {}
         #: §41.5 — L1 cache backing web_search / fetch_page reuse.
-        self._cache: CacheStore = CacheStore()
+        self._cache: CacheStore = CacheStore(l2_async_backend=PostgresCacheBackend())
         #: §41.13 — gate bounding concurrent tool calls of the last run.
         self._last_tool_gate: ConcurrencyLimiter | None = None
 
@@ -486,17 +486,19 @@ class PipelineRunner:
         """Return the §41.13 concurrency gate of the last executed run."""
         return self._last_tool_gate
 
-    # -- §41.5 L1 cache --------------------------------------------------
+    # -- §41.5 L1 + L2 cache ---------------------------------------------
 
     async def _cache_get(self, namespace: str, *parts: Any) -> Any:
-        """Read the L1 cache without blocking the event loop.
+        """Read the §41.5 cache: L1 first, then the durable L2 level.
 
-        ``CacheStore`` is deliberately synchronous (§41.5), so every cache
-        access is off-loaded to a worker thread with :func:`asyncio.to_thread`.
-        The alternative — an async wrapper type — would force a second cache
-        API for a store that is, in the default configuration, a plain dict.
+        ``CacheStore``'s L1 API is synchronous (a plain dict in the default
+        configuration) while PostgreSQL is asynchronous: the store exposes an
+        async path (:meth:`CacheStore.aget`) that reads L1, falls back to the
+        ``cache_entries`` table when a database is configured, and promotes what
+        it finds. Without a database the read is L1-only — :meth:`get_cache_stats`
+        says so rather than implying a durability the process does not have.
         """
-        return await asyncio.to_thread(self._cache.get, namespace, *parts)
+        return await self._cache.aget(namespace, *parts)
 
     async def _cache_set(
         self,
@@ -506,9 +508,14 @@ class PipelineRunner:
         *,
         source_id: str | None = None,
     ) -> None:
-        """Write to the L1 cache, stamping the §41.5 source freshness."""
-        await asyncio.to_thread(
-            self._cache.set,
+        """Write the L1 cache **and** the §41.5 L2 level, stamping freshness.
+
+        The entry carries the instant the value was obtained: §41.5 refuses to
+        reuse it once that instant is older than the request's threshold — in
+        the same process *and* after a restart, which is what the durable level
+        is for.
+        """
+        await self._cache.aset(
             namespace,
             *parts,
             value=value,
