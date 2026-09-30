@@ -8,7 +8,10 @@ from typing import Optional, Protocol, Union
 class Query:
     """Query for source discovery."""
 
-    query_string: str
+    #: Free-text narrowing of the discovery (a file name fragment, for instance).
+    #: Empty is valid: a query that names an exact target by ``filters`` has no
+    #: fragment to match — ``Query(filters={"location": "s3://b/key.csv"})`` (§9.1).
+    query_string: str = ""
     filters: Optional[dict[str, str]] = None
 
 

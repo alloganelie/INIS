@@ -10,8 +10,19 @@ from app.connectors.base import (
     SourceCandidate,
     SourceMetadata,
 )
+from app.connectors.files.explicit_target import (
+    TargetSpec,
+    explicit_candidate,
+    explicit_target,
+    read_candidate,
+)
 
 CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+#: §9.1 — what this connector reads, and how (§8.2/§11 traceability).
+SPEC = TargetSpec(
+    kind="docx", suffixes=(".docx",), content_type=CONTENT_TYPE, binary=True
+)
 
 
 def _read_docx(data: bytes) -> tuple[list[str], int, list[str]]:
@@ -51,11 +62,20 @@ class DOCXConnector:
         """Discover DOCX files matching the query.
 
         Args:
-            query: Query for source discovery.
+            query: Query for source discovery; a ``filters["location"]`` names one
+                exact file (path or ``s3://bucket/key``), otherwise the base
+                directory is globbed (§9.1/C3).
 
         Returns:
             List of source candidates.
+
+        Raises:
+            ValidationError: When an explicit target is not a ``.docx`` file.
         """
+        target = explicit_target(query)
+        if target is not None:
+            return [explicit_candidate(target, SPEC)]
+
         candidates: list[SourceCandidate] = []
         for docx_file in self._base_path.glob("*.docx"):
             if query.query_string.lower() in docx_file.name.lower():
@@ -75,16 +95,16 @@ class DOCXConnector:
             candidate: Source candidate to retrieve.
 
         Returns:
-            Raw source data.
+            Raw source data, whose ``metadata`` carries the ``content_type`` and
+            the ``location`` it was read from (§11).
+
+        Raises:
+            FileNotFoundError: When the file does not exist.
+            InfrastructureError: When the object storage is not configured for an
+                ``s3://`` target.
+            ValidationError: When the source exceeds ``[limits].max_upload_bytes``.
         """
-        file_path = Path(candidate.location)
-        content = file_path.read_bytes()
-        return RawSource(
-            source_id=candidate.source_id,
-            data=content,
-            content_type=CONTENT_TYPE,
-            metadata=candidate.metadata,
-        )
+        return read_candidate(candidate, SPEC)
 
     async def inspect(self, raw: RawSource) -> SourceMetadata:
         """Inspect raw DOCX: size, paragraph/table counts and styles.
