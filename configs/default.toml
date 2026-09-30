@@ -38,6 +38,10 @@ max_parallel_tool_calls = 10
 # app/connectors/files/upload_policy.py::DEFAULT_MAX_UPLOAD_BYTES.
 max_upload_bytes = 26214400
 
+# ADR 007 §41.6 — nombre d'unités §11 au-delà duquel l'extraction se fait par
+# tronçons, miroir de app/knowledge/normalization/limits.py.
+max_information_units_per_request = 50
+
 # â”€â”€ Â§41.5 : cache â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 [cache]
 l1_enabled = true

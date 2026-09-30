@@ -42,6 +42,12 @@ EXTENSIONS: dict[str, str] = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
     "text/plain": ".txt",
     "text/markdown": ".md",
+    # §9.1/§1.1 — the image connector (Pillow, decision D6) is a V1 connector,
+    # so the two image formats whose bytes the sniffer can *prove* are accepted.
+    # What is extracted from them is stated elsewhere: technical properties and
+    # the literal text embedded in the file, never an OCR or a caption (§9.2).
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
 }
 
 #: The §9.1 file types INIS accepts today (closed list).
@@ -50,8 +56,6 @@ SUPPORTED_MIME_TYPES: frozenset[str] = frozenset(EXTENSIONS)
 #: Types a sniffer can recognise but that the pipeline cannot read yet.
 _KNOWN_UNSUPPORTED: dict[str, str] = {
     "application/zip": "archive ZIP",
-    "image/jpeg": "image JPEG",
-    "image/png": "image PNG",
     "application/octet-stream": "binaire non identifié",
 }
 

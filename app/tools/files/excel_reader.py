@@ -15,10 +15,48 @@ from app.core.errors import InfrastructureError, ValidationError
 from app.domain.entities.dataset import Dataset
 from app.tools.files.dataset_builder import build_dataset, normalize_rows
 
-__all__ = ["read_excel", "load_excel"]
+__all__ = ["DEFAULT_SHEET_INDEX", "list_sheets", "load_excel", "read_excel"]
 
 #: Worksheet name used when the caller does not select one.
 DEFAULT_SHEET_INDEX = 0
+
+
+def list_sheets(path: str) -> list[str]:
+    """Return the worksheet names of the workbook at *path*, in workbook order.
+
+    The list is what lets a caller *name* the sheet it read — and the sheets it
+    did not read — instead of presenting a multi-sheet workbook as if it had one
+    worksheet (§0.2). Reading a workbook does not require analysing every cell,
+    so this stays a cheap header read.
+
+    Args:
+        path: Path of the ``.xlsx``/``.xlsm`` file.
+
+    Returns:
+        One entry per worksheet, in the order the workbook declares them.
+
+    Raises:
+        ValidationError: If the file is missing.
+        InfrastructureError: If ``openpyxl`` is unavailable or the workbook
+            cannot be parsed.
+    """
+    file_path = Path(path)
+    if not file_path.is_file():
+        raise ValidationError(f"excel file not found: {path}")
+
+    try:
+        import openpyxl
+    except ImportError as exc:  # pragma: no cover - §4.1 pins openpyxl
+        raise InfrastructureError("openpyxl is required to read Excel files") from exc
+
+    try:
+        workbook = openpyxl.load_workbook(str(file_path), read_only=True, data_only=True)
+    except Exception as exc:
+        raise InfrastructureError(f"could not open Excel workbook: {exc}") from exc
+    try:
+        return list(workbook.sheetnames)
+    finally:
+        workbook.close()
 
 
 def load_excel(

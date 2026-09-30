@@ -12,6 +12,8 @@ Mocked providers only — no Docker, no network.
 from __future__ import annotations
 
 import importlib
+import io
+import zipfile
 from unittest.mock import AsyncMock
 
 import pytest
@@ -21,12 +23,23 @@ from app.core.hashing import sha256_hex
 from app.domain.entities.search_result import SearchResult
 from app.domain.value_objects.ulid import ULID
 from app.main import app
+from tests.factories import png_bytes
 
 client = TestClient(app)
 
 OBJECTIVE = "Compare la population des villes."
 CSV_BYTES = b"city,population\nParis,2145906\nBerlin,3645000\n"
-PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+
+def _zip_bytes() -> bytes:
+    """Return a ZIP payload: recognised by the sniffer, refused by §9.1."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("data/whatever.txt", "x")
+    return buffer.getvalue()
+
+
+ZIP_BYTES = _zip_bytes()
 
 
 class RecordingStorage:
@@ -204,6 +217,30 @@ class TestAcceptedUpload:
         assert body["pii_classification"]["sensitivity"] in {"medium", "high", "critical"}
 
 
+def test_the_image_path_extracts_units_without_inventing_a_description(
+    storage: RecordingStorage, web_doubles: dict[str, AsyncMock], mock_llm
+) -> None:
+    """§9.1/§9.2 — an image is ingested, and what it carries is what is quoted."""
+    pytest.importorskip("PIL.Image", reason="Pillow optional (§4.1, D6)")
+    mock_llm.configure('{"summary": "Une figure.", "findings": []}')
+    request_id = create_request()
+
+    body = upload(
+        request_id,
+        name="figure.png",
+        content=png_bytes("Titre du rapport"),
+        content_type="image/png",
+    ).json()
+
+    assert body["mime_type"] == "image/png"
+    assert body["file_name"] == "figure.png"
+    units = body["information_units"]
+    assert [unit["type"] for unit in units] == ["image_region", "image_region"]
+    assert units[0]["content"]["text"] == "Titre du rapport"
+    assert units[0]["raw_reference"]["storage_ref"] == body["storage_ref"]
+    assert any("ni OCR ni légende" in text for text in body["limitations"])
+
+
 class TestRefusedUpload:
     """§25.2 — every refusal names its cause and the way out."""
 
@@ -219,11 +256,14 @@ class TestRefusedUpload:
         request_id = create_request()
 
         response = upload(
-            request_id, name="photo.png", content=PNG_BYTES, content_type="image/png"
+            request_id,
+            name="archive.zip",
+            content=ZIP_BYTES,
+            content_type="application/zip",
         )
 
         assert response.status_code == 415
-        assert "image/png" in response.json()["detail"]
+        assert "application/zip" in response.json()["detail"]
         assert storage.uploads == [], "a refused document must not be stored"
 
     def test_an_empty_file_is_refused(

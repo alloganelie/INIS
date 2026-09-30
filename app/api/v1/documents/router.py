@@ -230,9 +230,10 @@ async def upload_document(
     # ------------------------------------------------------------------
     # §11 — extract the units the document carries, and the dataset if it is
     # tabular. Nothing is invented: an unreadable payload returns no unit and
-    # one limitation naming the cause.
+    # one limitation naming the cause. Beyond the ADR 007 threshold the
+    # extraction works chunk by chunk (§41.6), which is why it is awaited.
     # ------------------------------------------------------------------
-    ingestion = ingest_document(
+    ingestion = await ingest_document(
         document_id=document_id,
         source_id=source_id,
         request_id=request_id,

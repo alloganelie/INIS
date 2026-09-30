@@ -82,12 +82,12 @@ Relevé du 2026-09-29 sur `3ac6c73` (+ constat que `app/artifacts/**` est un
 | C10 | Colis §24.1 : `datasets`/`artifacts`/`transformations` **codés en dur à `[]`** | `pipeline_runner.py:1531-1533` | §24.1 — **corrigé en L1/L2.3** (`7c1bba2`, `a6921ab`, `3fde944`) |
 | C11 | Une **seule** `TRF_` par run, operator générique `PipelineRunner`, jamais projetée | `pipeline_persistence.py:223-262` | §12.1, §24.1 — **corrigé** (`3b7d327`) : une transformation par étape réellement exécutée |
 | C12 | `app/knowledge/embedding/` et `app/knowledge/enrichment/` vides → `embeddings` jamais alimentée | listing | §12, §16 |
-| C13 | `memory_checker`, `HybridSearch`, `VectorSearch`, `ChunkedDatasetProcessor` : **aucun consommateur** | grep global | §16.2, §17, §41.6 |
+| C13 | `memory_checker`, `HybridSearch`, `VectorSearch` : **aucun consommateur** (le `ChunkedDatasetProcessor`, lui, est branché depuis L2.6) | grep global | §16.2, §17, §41.6 |
 | C14 | Frontend : `api/artifacts.ts` appelle déjà `GET /artifacts?request_id=` (fallback silencieux) → endpoint absent | `frontend/src/api/artifacts.ts` | §24.2, §31 |
 | C15 | `sha256_hex(data)` disponible ; `tests/factories/artifact_factory.py` existe | `app/core/hashing.py:19` | §24.2 |
 | C16 | `SourceRepository` divergent de la migration `0002` (`source_id`/`id`) → `INSERT` KO sur PostgreSQL | `AGENT_STATUS.md` dette n°3 | §27, §18 |
 | C17 | Cache **L1 seulement** ; `cache_entries` (0008) non câblée | `AGENT_STATUS.md` dette n°6 | §41.5 |
-| C18 | `ChunkedDatasetProcessor` présent, **non branché** | `app/knowledge/normalization/chunked_dataset.py` | §41.6 |
+| C18 | `ChunkedDatasetProcessor` présent, **non branché** | `app/knowledge/normalization/chunked_dataset.py` | §41.6 — **corrigé en L2.6** : seuil de l'ADR 007 lu (`app/knowledge/normalization/limits.py`) et appliqué dans l'ingestion (`document_ingestor._chunked_units`), preuve `tests/integration/test_chunked_ingestion.py` |
 | C19 | `app/security/certificates/` sans module (mTLS absent) ; `app/security/vault/` OK | listing | §19.2 |
 | C20 | Aucun mécanisme de plugins (§9.2) : 0 `plugin`, 0 `entry_points` | grep + `pyproject.toml` | §9.2 |
 | C21 | 1 428 tests unitaires verts, mais **aucun test de bout en bout d'ingestion de fichier** | `AGENT_STATUS.md` | §33, §36 |
@@ -337,6 +337,9 @@ est identique, et dont le `storage_ref` existe dans S3.
 
 ### L2 — Ingestion de fichiers et de bases (§1.1, §9.1, §8.4, §36.6/§36.7) (5–7 j) · Devin + Codex + Antigravity
 
+> ### ✅ Lot **clos** au 2026-09-30 (L2.1 → L2.6) — critère de sortie N2 prouvé
+> Détail des preuves : bloc « Critère de sortie L2 (N2) — clos » en fin de lot.
+
 **Objectif** : un client peut fournir **une donnée** (fichier ou requête SQL) et obtenir des
 `InformationUnit` sourcées. C'est l'écart le plus grave de l'audit (C1–C4).
 
@@ -486,7 +489,7 @@ est identique, et dont le `storage_ref` existe dans S3.
 
 #### L2.3 — Datasets réels et traçabilité (§11, §12, §27)
 
-> ### ⚙️ État d'avancement L2.3 au 2026-09-29 — ingestion des unités et du dataset faite ; reste le découpage et les transformations
+> ### ⚙️ État d'avancement L2.3 au 2026-09-30 — ingestion, découpage et granularité **faits** ; reste la lignée d'artefact (L3)
 >
 > **Fait et prouvé** (commit `a6921ab`) :
 >
@@ -506,27 +509,50 @@ est identique, et dont le `storage_ref` existe dans S3.
 > 2. Le `Dataset` est **reconstruit** avec `storage_ref` = la référence objet : les lecteurs §21
 >    rapportent un `file://` qui meurt avec la copie temporaire (§18.1).
 > 3. Aucun score de confiance inventé : `confidence = {"score": None, "not_a_probability": True}`.
-> 4. PDF/DOCX : localisation par **section + décalage**, jamais un numéro de page supposé.
+> 4. PDF/DOCX : localisation par **bloc localisable** — ⚠️ **révisé en L2.6** : le numéro de page (PDF)
+>    et l'index de paragraphe (DOCX) sont désormais **prouvés par le lecteur**
+>    (`extract_document_blocks`), donc utilisés ; la L2.3 n'avait que la section + décalage.
 > 5. Le vocabulaire `type` de §11 dans ce dépôt est `text|number|table|record|image_region|document_fragment`
 >    (≠ `table_row`/`document_section` du plan) : les unités de fichier sont donc `record` et
 >    `document_fragment`.
 >
 > **Reste ouvert dans L2.3**
 >
-> - [ ] `ChunkedDatasetProcessor` (ADR 007) non branché : l'ingestion lit le document entier.
+> - [x] `ChunkedDatasetProcessor` (ADR 007) non branché : l'ingestion lit le document entier.
+>   ✅ **clos en L2.6** : `app/knowledge/normalization/limits.py` lit le seuil de l'ADR 007
+>   (`MAX_INFORMATION_UNITS_PER_REQUEST`, défaut 50, miroir dans `configs/*.toml`),
+>   `_chunked_units` construit les unités §11 par tronçons de `chunk_size_rows` dès que le seuil est
+>   franchi, et `tests/integration/test_chunked_ingestion.py` prouve le chemin réel (tronçons
+>   `[50, 50, 20]` pour 120 lignes, 120 unités persistées, ordre du fichier conservé).
+>   ⚠️ Ce qui est borné : la **construction des unités**, pas l'inférence de schéma du `Dataset`
+>   (§41.6 n'offre pas de fusion incrémentale) — écrit dans le code, pas sous-entendu.
+>   *preuve : `tests/integration/test_chunked_ingestion.py`, `tests/unit/knowledge/test_ingestion_chunking.py`*
 > - [ ] `Transformation` **par étape réelle** (§12.1, C11) : `pipeline_persistence.py` écrit encore une
 >   seule `TRF_` générique par run ; l'ingestion ne produit aucune transformation.
-> - [ ] Granularité page/feuille pour PDF/Excel (aujourd'hui : section du document, ou feuille unique du classeur).
+>   ⚠️ **Obsolète** : `app/knowledge/provenance/stage_transformations.py` (commit `066ac1b`) écrit
+>   désormais une ligne par étape réellement exécutée — dont la paire du fichier ingéré
+>   (`raw` = lecteur §21, `normalized` = `DocumentIngestor.ingest`), vérifiée par
+>   `tests/unit/knowledge/test_transformation_records_per_stage.py` et, bout en bout, par
+>   `tests/integration/test_pdf_ingestion_e2e.py`.
+> - [x] Granularité page/feuille pour PDF/Excel (aujourd'hui : section du document, ou feuille unique du classeur).
+>   ✅ **clos en L2.6** : une unité par **page** (PDF) et par **paragraphe**/**tableau** (DOCX), avec
+>   `index` égal à la position réelle dans le document ; pour un classeur, la **feuille lue est nommée
+>   dans chaque locator** (`location.sheet`) et les feuilles non lues sont listées dans `limitations`
+>   (aucune fusion implicite, §0.2).
+>   *preuve : `tests/unit/tools/test_document_blocks.py`, `tests/unit/knowledge/test_document_ingestor.py::TestWorkbookIngestion`*
 > - [ ] `artifact_lineage` / `artifact_delivery_events` (L1) restent vides — maintenant que les datasets
->   existent, la lignée d'un artefact `dataset_export` peut être remplie (§24.2).
+>   existent, la lignée d'un artefact `dataset_export` peut être remplie (§24.2) → **L3**.
 
 - [x] À partir d'un document ingéré, produire un `Dataset`
   (`app/domain/entities/dataset.py` : `dataset_id` `DATA_`, `source_id`, `dataset_schema`,
   `row_count`, `storage_ref`) et le persister dans la table `datasets` (migration `0007`).
   *preuve : `tests/unit/knowledge/test_dataset_from_csv.py` + `tests/integration/test_dataset_persistence.py`*
-- [ ] Réutiliser `app/knowledge/normalization/chunked_dataset.py` (déjà écrit, C18) au-delà
+- [x] Réutiliser `app/knowledge/normalization/chunked_dataset.py` (déjà écrit, C18) au-delà
   du seuil documenté par l'ADR `007_chunked_processing_threshold.md`.
-  *preuve : `tests/integration/test_chunked_ingestion.py`*
+  ✅ **clos en L2.6** : seuil lu (`app/knowledge/normalization/limits.py`), appliqué dans
+  `document_ingestor._chunked_units`, et l'ADR 007 porte désormais sa section « Mise en œuvre »
+  (ce qui est découpé, ce qui ne l'est pas, où le seuil se règle).
+  *preuve : `tests/integration/test_chunked_ingestion.py`, `tests/unit/knowledge/test_ingestion_chunking.py`*
 - [x] Unités d'information issues du fichier : **une unité par enregistrement/fragment utile**,
   `type` ∈ {`text`,`table_row`,`document_section`…} selon §11, avec `raw_reference` pointant
   sur `document_id` + `location` (page/feuille/ligne/colonne) — jamais de contenu sans localisation.
@@ -607,15 +633,26 @@ est identique, et dont le `storage_ref` existe dans S3.
 
 #### L2.6 — Images et documents non structurés (Codex)
 
-- [ ] Brancher `extract_document` (PDF/DOCX→texte, déjà écrit `app/tools/files/document_reader.py`)
-  puis `fact_extractor` sur le texte extrait, avec `location` = page/paragraphe.
-  *preuve : `tests/integration/test_pdf_ingestion_e2e.py`*
-- [ ] Brancher `extract_image_content` (Pillow) pour les images fournies.
-  Pillow est **optionnel par décision D6** (`app/connectors/images/image_connector.py:72-75`):
-  quand il est absent, le résultat porte `pillow_available=False` — conserver ce contrat.
-  **OCR avancé reste hors périmètre V1** (§9.2) : le comportement par défaut doit être
-  « pas d'OCR disponible » + `limitations`, jamais une description inventée.
-  *preuve : `tests/unit/tools/test_image_content_no_ocr.py`*
+- [x] Brancher `extract_document` (PDF/DOCX→texte, `app/tools/files/document_reader.py`) puis
+  `fact_extractor` sur le texte extrait, avec `location` = page/paragraphe.
+  Le lecteur rend désormais des **blocs localisables** (`extract_document_blocks`) : une **page**
+  par unité pour un PDF, un **paragraphe** (puis un **tableau**) pour un DOCX, un paragraphe pour
+  TXT/MD ; `index` est la position réelle dans le document (la 3ᵉ paragraphe reste `paragraph 3`
+  même si la 2ᵉ est vide) et `char_offset`/`characters` sont **vérifiables**
+  (`texte[offset:offset+caractères] == bloc`). `FactExtractor.extract` (async) lit les phrases de
+  chaque bloc ; elles sont rangées dans `content["sentences"]` **à côté** du texte intégral — un
+  bloc trop court pour le découpeur de phrases garde tout son texte.
+  *preuve : `tests/integration/test_pdf_ingestion_e2e.py`, `tests/unit/tools/test_document_blocks.py`
+  (9 cas), `tests/unit/knowledge/test_document_ingestor.py::TestPdfIngestion` / `TestDocxIngestion`*
+- [x] Brancher `extract_image_content` (Pillow) pour les images fournies.
+  Les types dont la **signature est prouvable** (`image/png`, `image/jpeg`) entrent dans la liste
+  blanche §9.1 (`mime_sniffer.py`) et sont ingérés : une unité `image_region` par texte réellement
+  embarqué + une pour les propriétés techniques. Pillow reste **optionnel (D6)** : quand il manque,
+  aucune unité n'est produite et la limitation porte `pillow_available=False` — jamais une
+  description inventée. **OCR toujours hors périmètre V1** (§9.2).
+  *preuve : `tests/unit/tools/test_image_content_no_ocr.py` (11 cas, dont la dégradation Pillow),
+  `tests/unit/knowledge/test_document_ingestor.py::TestImageIngestion`,
+  `tests/api/test_document_upload.py::test_the_image_path_extracts_units_without_inventing_a_description`*
 
 **Critère de sortie L2 (N2)** : un `POST /v1/requests` avec un CSV joint (ou `source_ref`)
 produit un colis §24.1 contenant `datasets[]` non vide, des unités localisables dans le fichier,
@@ -632,9 +669,21 @@ lecture seule ; les tests d'erreur (type refusé, quota, SQL d'écriture) passen
 > | provenance complète | idem : `provenance.request_type`, sources du document dans `sources[]`, `document_id`/`dataset_id` sur chaque unité |
 > | type refusé / quota | `tests/integration/test_document_upload_s3.py::test_an_unsupported_document_never_reaches_the_bucket` (+ tests de quota §41.2 du lot L2.1) |
 >
-> ⚠️ Reste dû pour **clore** L2 : l'extraction PDF/image (lot **L2.6**). La branche « requête
+> ⚠️ Reste dû pour **clore** L2 : l'extraction PDF/image (lot **L2.6**) — ✅ **fait le 2026-09-30**
+> (L2.6, voir le bloc ci-dessous). La branche « requête
 > PostgreSQL lecture seule » (lot **L2.5**), le mode « cible explicite » des connecteurs fichiers
 > et la lecture S3 en flux (lot **L2.4**) sont **faits** (`a90f385`, `7476a14` + `4f2a0eb`).
+
+> ### ✅ Critère de sortie L2 (N2) — **clos**
+>
+> | Moitié du critère | Preuve | État |
+> |---|---|---|
+> | Fichier joint → `datasets[]` non vide, unités localisables, `transformations[]` non vide, provenance complète | `tests/integration/test_request_file_ingestion_e2e.py` | ✅ L2.3 |
+> | Requête PostgreSQL lecture seule → même contrat | `tests/integration/test_request_database_read_e2e.py`, `tests/integration/test_request_file_ingestion_e2e.py` | ✅ L2.5b |
+> | **PDF/DOCX → une unité par page/paragraphe, localisée** | `tests/integration/test_pdf_ingestion_e2e.py` (colis §24.1 : `location.page ∈ {1,2}`, `content.text` = le texte des pages, étages `read_pdf` + `DocumentIngestor.ingest`) ; `tests/unit/tools/test_document_blocks.py` | ✅ L2.6 |
+> | **Images → unités factuelles, sans OCR ni invention** | `tests/unit/tools/test_image_content_no_ocr.py`, `tests/unit/knowledge/test_document_ingestor.py::TestImageIngestion`, `tests/api/test_document_upload.py` | ✅ L2.6 |
+> | **Au-delà de 50 unités, l'extraction se fait par tronçons** (ADR 007/§41.6) | `tests/integration/test_chunked_ingestion.py` (120 lignes → tronçons `[50, 50, 20]`, 120 unités en base), `tests/unit/knowledge/test_ingestion_chunking.py` (seuil + équivalence tronçonné/direct) | ✅ L2.6 |
+> | Tests d'erreur (type refusé, quota, SQL d'écriture) | `tests/integration/test_document_upload_s3.py::test_an_unsupported_document_never_reaches_the_bucket` (archive ZIP refusée), quota §41.2 (lot L2.1), `tests/unit/tools/test_postgres_query_readonly.py` | ✅ L2.1/L2.5 |
 
 > ### ✅ Moitié « PostgreSQL lecture seule » du critère de sortie L2 — prouvée le 2026-09-30 (L2.5b)
 >
@@ -769,9 +818,12 @@ incohérence produit un colis où ces trois défauts sont **explicitement listé
   invalidation par `request_id`/`source_id`. *preuve : `tests/integration/test_cache_l2_postgres.py`*
 - [ ] **Cache L3 pgvector** : réutilisation d'embeddings déjà calculés (clé = `sha256` du texte
   normalisé) — évite de recalculer un vecteur identique. *preuve : `tests/integration/test_cache_l3_embeddings.py`*
-- [ ] §41.6 : `ChunkedDatasetProcessor` branché au seuil de l'ADR 007 **dans le chemin réel**
-  (L2.3 le mentionne ; ici on valide la borne mémoire et la reprise).
-  *preuve : `tests/performance/test_chunked_threshold.py`*
+- [x] §41.6 : `ChunkedDatasetProcessor` branché au seuil de l'ADR 007 **dans le chemin réel** —
+  ✅ **branché en L2.6** (`document_ingestor._chunked_units` + `app/knowledge/normalization/limits.py`).
+  ⚠️ Ce qui reste de ce lot : valider la **borne mémoire** sous charge et la reprise (§41.1), pas le
+  branchement lui-même.
+  *preuve du branchement : `tests/integration/test_chunked_ingestion.py` ; reste dû ici :
+  `tests/performance/test_chunked_threshold.py`*
 - [ ] §41.1 : reprise après redémarrage pour une requête longue (checkpoints `0005`
   `execution_checkpoints` + `progress`), testée avec un kill de processus.
   *preuve : `tests/integration/test_resume_after_restart.py`*
@@ -832,7 +884,7 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 3 | Un agent peut envoyer une demande JSON via le protocole | `[~]` HTTP OK, AMQP non live | L7 | `tests/integration/test_amqp_broker.py` (live) |
 | 4 | INIS construit automatiquement un plan | `[x]` | — | `tests/unit/planning/test_plan_builder.py` |
 | 5 | INIS peut rechercher sur le Web | `[x]` | — | `tests/integration/test_v2_full_stack.py` |
-| 6 | **INIS peut ingérer un fichier structuré** | `[ ]` **absent** | L2 | `tests/integration/test_file_ingestion_e2e.py` |
+| 6 | **INIS peut ingérer un fichier structuré** | `[x]` ✅ (L2.3/L2.6 : CSV/JSON/XML/XLSX **et** PDF/DOCX/images) | L2 | ⚠️ correction de preuve : le plan attendait `tests/integration/test_file_ingestion_e2e.py`, **ce fichier n'existe pas** — les preuves sont `tests/integration/test_request_file_ingestion_e2e.py` (CSV → colis), `tests/integration/test_pdf_ingestion_e2e.py` (PDF → pages localisées) et `tests/unit/knowledge/test_document_ingestor.py` (tous les formats) |
 | 7 | **INIS peut interroger PostgreSQL** | `[x]` | L2.5 | `tests/integration/test_request_database_read_e2e.py` |
 | 8 | INIS stocke les sources et leurs métadonnées | `[~]` web seulement, repo divergent | L6 | `tests/unit/storage/test_source_repository.py` |
 | 9 | INIS conserve la provenance | `[~]` vrai pour le web, à étendre | L2.3 | `tests/agentic/test_file_unit_traceability.py` |
@@ -846,7 +898,7 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 17 | Une suppression n'efface pas silencieusement l'historique | `[~]` à vérifier sur les nouvelles tables | L6 | `tests/unit/migrations/test_soft_delete_columns.py` |
 | 18 | Une information insuffisamment étayée est marquée comme telle | `[x]` (+ limites qualité) | L5 | `tests/agentic/test_insufficient_evidence.py` |
 | 19 | **INIS n'utilise pas le LLM comme source de vérité** | `[x]` ✅ la fabrication de step est supprimée (C6 fermé en L2.2) | L2.2 | `tests/agentic/test_no_fabricated_step_output.py` (+ `test_non_hallucination.py` pour les claims LLM) |
-| 20 | Une sortie factuelle peut être reliée à une preuve et une source | `[~]` web seulement | L2.3 | `tests/agentic/test_non_hallucination.py` (cas fichier) |
+| 20 | Une sortie factuelle peut être reliée à une preuve et une source | `[~]` web seulement | L2.3 | `tests/agentic/test_non_hallucination.py` (cas fichier) — ⚠️ **avancé en L2.6** : une unité de fichier (page de PDF, enregistrement, image) est reliée à sa source (`source_id`, `document_id`, `dataset_id`, `location`, `provenance.extracted_from`), prouvé par `tests/integration/test_pdf_ingestion_e2e.py` ; la *preuve* §14 (table `evidence`) reste web → L5 |
 
 **Clôture de la vague V1 = critères 6, 7, 8, 9, 11, 16, 19, 20 passés à `[x]`.**
 
@@ -873,6 +925,7 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 2026-09-30 | Cline (act) | **L2.4** | Le mode « cible explicite » (`Query.filters["location"]` : chemin ou `s3://…`) existe dans les 6 connecteurs fichiers, le glob reste le défaut ; S3 est lu **en flux** vers un fichier temporaire nettoyé, refusé sur la taille déclarée **puis** pendant le transfert ; `RawSource.metadata` porte le `content_type` et la `location` réels ; plafond unique `[limits].max_upload_bytes` partagé entre l'upload et la lecture de source (`app/core/size_limits.py`) | `a90f385` | `pytest -q` → **1938 passed / 4 skipped** (374,02 s) ; 3 checkers OK ; BC **0 breaking** (31 warnings BC005) ; `ruff` clean sur les fichiers du lot | ✅ **C3 fermé** (96 nouveaux tests : 43 + 36 + 13 + 4 MinIO réel). ⚠️ Trois pièges corrigés au passage : le quota ne bornait que l'entrée HTTP (P16), `FileNotFoundError` était **enveloppée** donc anonyme (P17), un mauvais suffixe se lisait « aucun candidat » au lieu d'un refus nommé (P18) |
 | 2026-09-30 | Cline (act) | **L2.5a** | `postgres_query` en **lecture seule** : liste blanche `SELECT`/`WITH`, mots-clés d'écriture refusés, empilement refusé, `LIMIT` ajouté si absent, transaction `READ ONLY` + `statement_timeout` (5 s par défaut, plafond 120 s) dans un seul `engine.begin()` ; identifiants par entrée du **vault** §41.4 (`app/tools/database/credentials.py`) et DSN refusé par son nom, sans écho du secret | `7476a14` | `pytest -q` → **1974 passed / 4 skipped** ; 3 checkers OK ; BC **0 breaking** ; `ruff` clean sur le lot | ✅ 36 nouveaux tests (`tests/unit/tools/test_postgres_query_readonly.py`) | 
 | 2026-09-30 | Cline (act) | **L2.5b** | La source PostgreSQL **nommée par la requête** entre dans le pipeline : `constraints.source_preferences=["postgres:<ref>[#table]"]` (nouveau `app/connectors/database/source_target.py`, une entrée malformée **lève** au lieu de disparaître), lecture → `Dataset` + une unité §11 par ligne localisée en `row` (`app/knowledge/ingestion/database_material.py`), étape `query_database` **exécutable** et conditionnelle (`tool_dispatch.py`), orientation du plan `data`/`source` (aucune recherche web), sources `database`, étages §12.1 `PostgresConnector`/`DatabaseMaterial`, `Dataset` persisté (`DatasetRepository`) pour que le `DATA_` livré soit consultable | `4f2a0eb` | `pytest -q` → **2067 passed / 4 skipped** (148,75 s) ; `check_architecture` + `check_contracts` + `check_invariants` OK ; BC **0 breaking** (31 warnings BC005) ; `ruff` : **0 nouvelle erreur** (`pipeline_runner.py` reste à 22 erreurs préexistantes, dont 14 E501 — comptes identiques avant/après vérifiés par `git stash`) | ✅ **critère §36/7 fermé** — 92 nouveaux tests : 8 d'intégration sur PostgreSQL réel (`test_request_database_read_e2e.py`), 24 agentiques (`test_database_read_delivery.py`), 32 unitaires matériau, 28 sur la cible. ⚠️ Trois pièges : lire la base du client **avec l'engine d'INIS** (P19), publier un `DATA_` absent de la table `datasets` (P20), et **jeter le `file_ingest`** d'une requête `data` qui nomme *aussi* une base (P21) — les trois sont écartés et verrouillés par un test |
+| 2026-09-30 | Cline (act) | **L2.6** | **L2 clos** : PDF/DOCX rendus **localisables** (`extract_document_blocks` : une page, un paragraphe ou un tableau par bloc, `char_offset` vérifiable dans le texte extrait), `FactExtractor` branché sur le texte extrait (`content["sentences"]`, texte intégral conservé), images **PNG/JPEG** acceptées et ingérées via `extract_image_content` (Pillow optionnel D6, `pillow_available=False` nommé, aucun OCR §9.2), seuil de l'ADR 007 **réellement appliqué** (`app/knowledge/normalization/limits.py`, `_chunked_units`, miroir `configs/*.toml`), feuille de classeur nommée dans le locator (les autres feuilles listées en `limitations`). `ingest_document` devient `async` (P25) | `—` | `pytest -q` → **2120 passed / 4 skipped** (184,19 s) ; `check_architecture` + `check_contracts` OK ; ruff : **0 erreur nouvelle** sur les fichiers du lot | ADR 007 porte désormais sa section « Mise en œuvre » et ses limites assumées ; 53 tests neufs (9 blocs document, 11 image/OCR, 13 chunking, 6 PDF/DOCX ingérés, 3 intégration PDF/tronçons, 10 adaptés) |
 
 ---
 
@@ -902,6 +955,10 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | P20 | Publier un `DATA_` dans `datasets[]` **sans l'avoir persisté** | le client ne peut pas appeler l'API avec cet identifiant à la place de la table d'INIS ; un dataset en mémoire est un dataset inexistant — ⚠️ **corrigé en L2.5b** (`_persist_database_dataset`, limitation nommée si l'écriture échoue ; preuve `test_the_delivered_dataset_is_consultable`) |
 | P21 | Orienter un plan `data` sur la **base nommée** en ne gardant que cette source | le `file_ingest` d'un fichier pourtant fourni par la même requête disparaît : la moitié de ce que le client a donné n'est jamais livrée, **sans limitation** (l'étape n'existe plus, donc plus rien ne la signale) — ⚠️ **corrigé en L2.5b** (`OWNED_SOURCE_ACTIONS` : les deux sources détenues par la requête survivent, seules les étapes web sont retirées ; preuve `test_database_read_delivery.py::TestBothOwnedSourcesCoexist`) |
 | P22 | Une préférence `postgres:` **malformée** ignorée silencieusement | une faute de frappe devient « aucune base n'a été nommée », et le pipeline interroge le **web** pour des données que le demandeur détient déjà : la requête « réussit » en répondant à côté — ⚠️ **écarté en L2.5b** (`parse_target` lève ; l'étape est dégradée avec la cause, jamais remplacée par une recherche) |
+| P23 | Une unité de PDF localisée par « section du texte extrait » ne dit **rien** de vérifiable : le lecteur concaténait toutes les pages | une position qu'aucun lecteur ne peut retrouver n'est pas une localisation (§11) — ✅ **corrigé en L2.6** : `extract_document_blocks` rend une page / un paragraphe par bloc, et le test vérifie `texte[offset:offset+n] == bloc` |
+| P24 | Un nouveau producteur d'unités (`extract_image_content`) rend la référence du **fichier temporaire** qu'il a lu (`file://…`) | la provenance d'une image pointerait sur un chemin détruit à la fin de l'appel (§18.1) — même piège que P19 pour un autre producteur — ✅ **traité en L2.6** : `_image_units` réécrit `raw_reference`/`provenance.extracted_from` avec la référence objet, et le test refuse tout `file://` dans l'unité |
+| P25 | Le `DefaultChunkedDatasetProcessor` §41.6 est **asynchrone**, l'ingestion ne l'était pas | un helper synchrone appelant `asyncio.run` lève dans la boucle de la requête : le chunking n'aurait jamais tourné en production — ✅ **traité en L2.6** : `ingest_document` et `_chunked_units` sont `async`, le routeur les attend |
+| P26 | Ajouter un type à la liste blanche (§9.1) sans brancher son lecteur | un PNG accepté, stocké, et sans la moindre unité : le client croit avoir fourni une source exploitable — ✅ **traité en L2.6** : liste blanche **et** ingestion image dans le même lot, `pillow_available=False` nommé quand Pillow manque |
 
 ---
 

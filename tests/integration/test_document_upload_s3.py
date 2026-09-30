@@ -33,6 +33,20 @@ PII_CSV = b"name,email\nAlice Dupont,alice@example.com\n"
 OBJECTIVE = "Ingestion d'un fichier client"
 
 
+def _zip_bytes() -> bytes:
+    """Return a ZIP payload: recognised by the sniffer, refused by §9.1."""
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("data/whatever.txt", "x")
+    return buffer.getvalue()
+
+
+ZIP_BYTES = _zip_bytes()
+
+
 @pytest.fixture(autouse=True)
 def _fresh_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     """Rebuild the process-wide engine in the loop of the current test."""
@@ -205,7 +219,7 @@ def test_an_unsupported_document_never_reaches_the_bucket(
     monkeypatch.setenv("INIS_DATABASE_URL", db_url)
     request_id = _create_request()
 
-    response = _upload(request_id, content=b"\x89PNG\r\n\x1a\nbinary", name="photo.png")
+    response = _upload(request_id, content=ZIP_BYTES, name="archive.zip")
 
     assert response.status_code == 415
     assert client.get(f"/v1/documents?request_id={request_id}").json()["total"] == 0

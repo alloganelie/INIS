@@ -21,12 +21,19 @@ from tests.factories.conflict_factory import make_conflict
 from tests.factories.dataset_factory import make_dataset
 from tests.factories.document_factory import make_document
 from tests.factories.evidence_factory import make_evidence
+from tests.factories.file_factory import (
+    docx_bytes,
+    pdf_bytes,
+    png_bytes,
+    workbook_bytes,
+)
 from tests.factories.information_unit_factory import make_information_unit
 from tests.factories.request_factory import make_request_payload
 from tests.factories.source_factory import make_source, make_source_create_payload
 from tests.factories.transformation_factory import make_transformation
 
 __all__ = [
+    "docx_bytes",
     "make_agent_identity",
     "make_agent_identity_dict",
     "make_artifact",
@@ -42,5 +49,8 @@ __all__ = [
     "make_source",
     "make_source_create_payload",
     "make_transformation",
+    "pdf_bytes",
+    "png_bytes",
+    "workbook_bytes",
 ]
 

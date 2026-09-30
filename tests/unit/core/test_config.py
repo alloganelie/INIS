@@ -18,6 +18,9 @@ from app.domain.value_objects.request_constraints import (
     DEFAULT_CONSTRAINTS,
     DEFAULT_REQUIRED_OUTPUT,
 )
+from app.knowledge.normalization.limits import (
+    DEFAULT_MAX_INFORMATION_UNITS_PER_REQUEST,
+)
 from app.planning.limits import (
     DEFAULT_MAX_PARALLEL_TOOL_CALLS,
     DEFAULT_MAX_PLAN_STEPS,
@@ -63,4 +66,10 @@ def test_default_config_matches_domain_constants() -> None:
     # §36.6 — the upload ceiling of the deployment mirrors the runtime default:
     # the two must never drift, otherwise a documented limit is not the one used.
     assert limits["max_upload_bytes"] == DEFAULT_MAX_UPLOAD_BYTES
+    # ADR 007 — the chunking threshold is a deployment setting too, not a comment
+    # buried in an ADR: the profile and the runtime read the same number.
+    assert (
+        limits["max_information_units_per_request"]
+        == DEFAULT_MAX_INFORMATION_UNITS_PER_REQUEST
+    )
 

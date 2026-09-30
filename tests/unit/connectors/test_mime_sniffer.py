@@ -104,18 +104,29 @@ class TestDetectionByContent:
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "text/plain",
             "text/markdown",
+            # §9.1 — the image connector (Pillow) is a V1 connector: the two
+            # image formats whose bytes the sniffer can prove are accepted.
+            "image/png",
+            "image/jpeg",
         }
 
 
 class TestRefusal:
     """An unsupported type is refused *with its detected type named* (§25.2)."""
 
-    def test_image_is_refused_as_an_image(self) -> None:
-        with pytest.raises(ValidationError) as failure:
-            require_supported(b"\x89PNG\r\n\x1a\nrest", "photo.csv")
+    def test_an_image_signature_is_accepted_as_an_image(self) -> None:
+        """§9.1 — PNG/JPEG are read by the image connector, not stored as blobs."""
+        sniffed = require_supported(b"\x89PNG\r\n\x1a\nrest", "photo.csv")
 
-        assert "image/png" in str(failure.value)
-        assert "Types acceptés" in str(failure.value)
+        assert sniffed.mime_type == "image/png"
+        assert sniffed.extension == ".png"
+        assert require_supported(b"\xff\xd8\xff\xe0rest", "photo.png").mime_type == (
+            "image/jpeg"
+        )
+
+    def test_an_unidentified_binary_is_refused_as_such(self) -> None:
+        with pytest.raises(ValidationError, match="binaire non identifié"):
+            require_supported(b"\x00\x01\x02\x03binary\x00", "photo.png")
 
     def test_archive_is_refused_as_an_archive(self) -> None:
         with pytest.raises(ValidationError, match="archive ZIP"):

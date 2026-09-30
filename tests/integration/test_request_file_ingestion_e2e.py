@@ -76,7 +76,7 @@ async def _ingest_csv(engine: Any, request_id: str) -> dict[str, str]:
     """
     document_id = ULID.new("DOC_")
     source_id = ULID.new("SRC_")
-    outcome = ingest_document(
+    outcome = await ingest_document(
         document_id=document_id,
         source_id=source_id,
         request_id=request_id,
