@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 from app.main import app
 
 client = TestClient(app)
+
+#: The endpoint reports the highest migration on disk; the expectation is read
+#: from the same place so adding a migration never makes this test a liar.
+LATEST_MIGRATION = max(
+    f.stem.split("_")[0]
+    for f in Path("migrations/versions").glob("*.py")
+    if not f.name.startswith("__")
+)
 
 
 def test_health_includes_migration_metadata():
@@ -15,7 +25,7 @@ def test_health_includes_migration_metadata():
     assert "migrations" in data
     m = data["migrations"]
     assert "latest_available" in m
-    assert m["latest_available"] == "0010"
+    assert m["latest_available"] == LATEST_MIGRATION
     assert "applied" in m
 
 

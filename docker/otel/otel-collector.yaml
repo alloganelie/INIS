@@ -1,0 +1,46 @@
+# INIS — collecteur OpenTelemetry (§20.2 trace distribuée, §34 métriques).
+#
+# Reçoit l'OTLP (gRPC 4317 / HTTP 4318) et réexpose ce qu'il collecte en
+# Prometheus (port 8889), que `docker/prometheus/prometheus.yml` scrape.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # `batch` limite le nombre d'appels sortants ; `memory_limiter` protège le
+  # collecteur quand un pic de traces arrive plus vite qu'il ne les exporte.
+  memory_limiter:
+    check_interval: 2s
+    limit_mib: 512
+    spike_limit_mib: 128
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug]
+

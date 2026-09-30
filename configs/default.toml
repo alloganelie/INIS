@@ -1,0 +1,67 @@
+# INIS â€” configuration de rÃ©fÃ©rence (Â§41.2 Â« [CONFIG] Â»).
+#
+# Ce fichier *documente et fige* les valeurs par dÃ©faut du runtime. La
+# rÃ©solution effective reste, dans l'ordre : variable d'environnement â†’ valeur
+# de ce fichier (via le profil chargÃ©) â†’ valeur codÃ©e. `tests/unit/core/test_config.py`
+# vÃ©rifie que les quatre profils exposent les mÃªmes clÃ©s et que les valeurs
+# correspondent aux constantes du code ; un Ã©cart fait Ã©chouer la suite.
+
+[environment]
+name = "default"
+
+# â”€â”€ Â§41.2 : budgets par requÃªte â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Tout plafond est *non bornÃ©* par dÃ©faut (``Budget`` utilise ``None``). Une
+# demande fixe ses limites dans `POST /v1/requests` â†’ `budget` ; les valeurs
+# ci-dessous, commentÃ©es, sont des exemples de bornage.
+[budgets]
+# max_llm_tokens = 200000
+# max_web_requests = 20
+# max_api_calls = 40
+# max_storage_bytes = 104857600
+# max_compute_seconds = 300
+# max_total_cost_usd = 0.50
+
+# â”€â”€ Â§7 : contraintes par dÃ©faut d'une demande â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+[request_defaults]
+minimum_confidence = 0.8
+maximum_execution_time_seconds = 300
+maximum_iterations = 12
+maximum_web_depth = 3
+required_output_format = "evidence_package"
+ttl_seconds = 900
+
+# â”€â”€ Â§41.13 : garde-fous d'exÃ©cution (app/planning/limits.py) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+[limits]
+max_plan_steps = 50
+max_parallel_tool_calls = 10
+# §36.6 — taille maximale d'un document téléversé (25 Mio), miroir de
+# app/connectors/files/upload_policy.py::DEFAULT_MAX_UPLOAD_BYTES.
+max_upload_bytes = 26214400
+
+# ADR 007 §41.6 — nombre d'unités §11 au-delà duquel l'extraction se fait par
+# tronçons, miroir de app/knowledge/normalization/limits.py.
+max_information_units_per_request = 50
+
+# â”€â”€ Â§41.5 : cache â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+[cache]
+l1_enabled = true
+redis_ttl_seconds = 300
+redis_prefix = "inis"
+
+[llm]  # Â§22 â€” sans clÃ©, le routeur rÃ©pond un stub explicitement marquÃ©
+provider = "openrouter"
+default_model = "openai/gpt-4"
+probe_max_tokens = 16
+# Â§41.8 â€” tentatives totales par modÃ¨le, premiÃ¨re comprise.
+retry_attempts = 3
+# Â§22.2 â€” chaÃ®ne de repli ordonnÃ©e, du modÃ¨le le plus intÃ©ressant au moins.
+# Aucune liste n'est codÃ©e en dur : le dÃ©ploiement la fixe via
+# LLM_MODEL_FALLBACKS (cf. `.env.example`, liste `:free` vÃ©rifiÃ©e + commande de
+# rafraÃ®chissement du catalogue). Vide = le premier Ã©chec remonte tel quel.
+fallback_models = []
+
+[web]  # Â§9 â€” sans clÃ© Serper, le provider Wikipedia assure la dÃ©gradation
+provider = "serper"
+fallback_provider = "wikipedia"
+results_per_query = 5
+

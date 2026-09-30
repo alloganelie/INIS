@@ -10,6 +10,27 @@ from app.connectors.base import (
     SourceCandidate,
     SourceMetadata,
 )
+from app.connectors.files.explicit_target import (
+    TargetSpec,
+    explicit_candidate,
+    explicit_target,
+    read_candidate,
+)
+
+CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
+#: §9.1 — what this connector reads, and how (§8.2/§11 traceability). Both
+#: declared suffixes are accepted: the connector retrieves the bytes, and a
+#: legacy ``.xls`` is refused by the reader that inspects it, where the real
+#: limitation belongs.
+SPEC = TargetSpec(
+    kind="excel",
+    suffixes=(".xlsx", ".xls"),
+    content_type=CONTENT_TYPE,
+    binary=True,
+)
 
 
 class ExcelConnector:
@@ -30,11 +51,20 @@ class ExcelConnector:
         """Discover Excel files matching the query.
 
         Args:
-            query: Query for source discovery.
+            query: Query for source discovery; a ``filters["location"]`` names one
+                exact file (path or ``s3://bucket/key``), otherwise the base
+                directory is globbed (§9.1/C3).
 
         Returns:
             List of source candidates.
+
+        Raises:
+            ValidationError: When an explicit target is not an Excel file.
         """
+        target = explicit_target(query)
+        if target is not None:
+            return [explicit_candidate(target, SPEC)]
+
         candidates: list[SourceCandidate] = []
         for excel_file in self._base_path.glob("*.xlsx"):
             if query.query_string.lower() in excel_file.name.lower():
@@ -54,17 +84,16 @@ class ExcelConnector:
             candidate: Source candidate to retrieve.
 
         Returns:
-            Raw source data.
+            Raw source data, whose ``metadata`` carries the ``content_type`` and
+            the ``location`` it was read from (§11).
+
+        Raises:
+            FileNotFoundError: When the file does not exist.
+            InfrastructureError: When the object storage is not configured for an
+                ``s3://`` target.
+            ValidationError: When the source exceeds ``[limits].max_upload_bytes``.
         """
-        file_path = Path(candidate.location)
-        with file_path.open("rb") as f:
-            content = f.read()
-        return RawSource(
-            source_id=candidate.source_id,
-            data=content,
-            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            metadata=candidate.metadata,
-        )
+        return read_candidate(candidate, SPEC)
 
     async def inspect(self, raw: RawSource) -> SourceMetadata:
         """Inspect raw Excel data to extract metadata.

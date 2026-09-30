@@ -3,21 +3,26 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timezone
 import json
 import time
-from typing import Any, AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping, Sequence
+from datetime import UTC, datetime
+from typing import Any
 
+from ulid import ULID as PythonUlid
+
+from app.agents.pipeline.tool_dispatch import describe_action, is_web_action
 from app.agents.runtime.lifecycle import GRACEFUL_EXPIRY_STATUS, RequestLifecycle
-from app.domain.value_objects.ulid import ULID
-from app.core.statuses import resolve_delivery_status
-from app.planning.limits import (
-    PLANNING_LIMIT_EXCEEDED_STATUS,
-    ConcurrencyLimiter,
-    max_parallel_tool_calls,
-    max_plan_steps,
+from app.api.v1.requests.pipeline_persistence import (
+    persist_pipeline_delivery,
+    persist_transformations,
 )
-from app.quality.conflict.conflict_status import conflict_payload
+from app.artifacts.delivery.delivery_service import deliver_artifacts
+from app.core.errors import InisError
+from app.core.logging import get_logger
+from app.core.statuses import CANCELLED_STATUS, resolve_delivery_status
+from app.core.version import API_VERSION
+from app.domain.value_objects.ulid import ULID
 from app.governance.budget.quotas import (
     BUDGET_EXCEEDED_STATUS,
     GLOBAL_USAGE,
@@ -25,15 +30,36 @@ from app.governance.budget.quotas import (
     BudgetExceeded,
     BudgetGuard,
 )
+from app.knowledge.enrichment.enricher import enrich_units, resolved_dataset_stages
+from app.knowledge.ingestion.database_material import (
+    DatabaseMaterial,
+    load_database_material_for_request,
+)
+from app.knowledge.ingestion.document_ingestor import reader_for
+from app.knowledge.ingestion.request_material import (
+    RequestMaterial,
+    load_request_material,
+)
+from app.knowledge.provenance.stage_transformations import build_transformations
 from app.llm.tracing.llm_trace_writer import LLMTraceWriter
+from app.planning.limits import (
+    PLANNING_LIMIT_EXCEEDED_STATUS,
+    ConcurrencyLimiter,
+    max_parallel_tool_calls,
+    max_plan_steps,
+)
+from app.planning.plan_builder import InvalidPlanAction, PlanBuilder, closed_actions
+from app.quality.conflict.conflict_status import conflict_payload
 from app.storage.cache.cache_store import CacheStore
-from app.api.v1.requests.pipeline_persistence import persist_pipeline_delivery
-from ulid import ULID as PythonUlid
+from app.storage.database.session import database_configured
 
 #: §34 ``llm_cost`` fallback pricing (USD per token) when the provider response
 #: carries no ``cost_usd``. Documented estimate, not a billing figure.
 _LLM_COST_PER_INPUT_TOKEN = 1.5e-6
 _LLM_COST_PER_OUTPUT_TOKEN = 6.0e-6
+
+#: Delivery logger — synthesis fallbacks (stub/error) are stated, never hidden.
+logger = get_logger(__name__)
 
 #: Nominal number of plan steps (§28 cycle) used for progress reporting.
 PIPELINE_STEPS_TOTAL = 22
@@ -46,6 +72,316 @@ CACHE_NS_PAGE_FETCH = "page_fetch"
 #: ``ConcurrencyLimiter`` live in :mod:`app.planning.limits`; the names below
 #: are re-exported so existing importers keep working.
 
+#: §15.1 — extraction confidence of a fact read from the full page vs snippet.
+_FULL_TEXT_CONFIDENCE = 0.9
+_SNIPPET_CONFIDENCE = 0.6
+
+#: §8.4 actions that read a source the request *already owns* (a file it uploaded
+#: for this request, the database it named). They survive plan orientation: a
+#: ``data`` request is planned around its sources, and a file it sent is one of
+#: them. The web acquisition steps are the ones removed, never these.
+OWNED_SOURCE_ACTIONS = frozenset({"file_ingest", "query_database"})
+
+
+def _fact_confidence(fact: dict[str, Any], full_text: bool) -> float:
+    """Return the 0..1 extraction confidence of one extracted fact (§15.1).
+
+    The extractor does not measure confidence itself, so the pipeline states
+    the only signal it honestly owns: whether the sentence was read from the
+    fetched document or from a search result snippet.
+    """
+    raw = fact.get("confidence")
+    if isinstance(raw, dict):
+        raw = raw.get("score")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return _FULL_TEXT_CONFIDENCE if full_text else _SNIPPET_CONFIDENCE
+    return max(0.0, min(1.0, float(raw)))
+
+def _llm_plan_steps(
+    parsed_plan: dict[str, Any], objective: str
+) -> list[dict[str, Any]]:
+    """Map the steps of a parsed LLM plan onto §8.2 plan steps.
+
+    §8.4 — only the ``action`` the LLM **declared** is kept as an action; its
+    free-text ``description`` becomes the step input, never the action. A step
+    that declares none is passed through with an empty action, so the plan
+    validator refuses the whole plan instead of guessing what was meant.
+    """
+    return [
+        {
+            "action": str(step.get("action") or ""),
+            "tool": str(step.get("tool") or "collector"),
+            "inputs": {"requirement": str(step.get("description") or objective)},
+            "expected_output": str(step.get("expected_output") or "information_unit"),
+        }
+        for step in parsed_plan.get("steps", [])
+        if isinstance(step, dict)
+    ]
+
+
+def _plan_budget(plan: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the §41.2 budget of *plan*, completed with the pipeline defaults.
+
+    A plan rebuilt from an LLM answer must carry the same budget as the plan it
+    replaces; a plan that carries none (the degraded fallback) falls back to the
+    documented defaults instead of failing on a missing key.
+    """
+    raw = plan.get("budget") if isinstance(plan, dict) else None
+    raw = raw if isinstance(raw, dict) else {}
+    return {
+        "max_iterations": raw.get("max_iterations", 12),
+        "max_cost": raw.get("max_cost"),
+        "max_execution_time_seconds": raw.get("max_execution_time_seconds", 300),
+    }
+
+
+def _ingest_step(document: Mapping[str, Any], order: int) -> dict[str, Any]:
+    """Return the §8.4 ``file_ingest`` step of one ingested *document*.
+
+    The step names the §21 reader of the document's MIME type and carries the
+    storage reference, so a reader of the plan can tell which file it will read
+    without running it.
+    """
+    return {
+        "step_id": ULID.new("STEP_"),
+        "order": order,
+        "action": "file_ingest",
+        "tool": reader_for(document.get("mime_type")),
+        "inputs": {
+            "document_id": document.get("document_id"),
+            "file_name": document.get("file_name"),
+            "storage_ref": document.get("storage_ref"),
+            "mime_type": document.get("mime_type"),
+        },
+        "expected_output": "information_unit",
+        "status": "pending",
+    }
+
+
+def _orient_plan(
+    steps: Sequence[dict[str, Any]],
+    material: RequestMaterial,
+    request_type: str,
+) -> list[dict[str, Any]]:
+    """Return *steps* oriented by the material the request already ingested.
+
+    §7/§8.4 — this is where ``request_type`` becomes operative (C4):
+
+    * a ``data``/``source`` request is planned **around its file**: the web
+      acquisition steps are dropped, because the requester said the data was the
+      file it sent — searching the web for it would answer another question;
+    * any other request keeps its steps and gains the ``file_ingest`` steps
+      first, so the file's units join its delivery instead of being ignored.
+
+    Nothing is added when the request ingested nothing: the caller only calls
+    this with material in hand, and a plan is never given a step it cannot run.
+    """
+    ingest_steps = [
+        _ingest_step(document, order)
+        for order, document in enumerate(material.documents, start=1)
+    ]
+    if request_type in ("data", "source"):
+        # §8.4 — only the sources the request owns survive; ``file_ingest`` steps
+        # are added below, and a ``query_database`` step would be another owned
+        # source rather than a web acquisition.
+        kept: list[dict[str, Any]] = [
+            dict(step)
+            for step in steps
+            if str(step.get("action")) in OWNED_SOURCE_ACTIONS
+        ]
+    else:
+        kept = [dict(step) for step in steps]
+    combined = [*ingest_steps, *kept]
+    for order, step in enumerate(combined, start=1):
+        step["order"] = order
+    return combined
+
+
+def _material_step_result(
+    step: Mapping[str, Any], material: RequestMaterial
+) -> dict[str, Any]:
+    """Return the step result of a real ``file_ingest`` (§9.1, §25.2).
+
+    The step reads back what ingestion already stored for this request. When the
+    request ingested nothing it is ``degraded`` with the reason, never ``done``
+    with an empty output, and it never falls back to a web search.
+    """
+    spec = describe_action("file_ingest")
+    result: dict[str, Any] = {
+        "step_id": step.get("step_id") or ULID.new("STEP_"),
+        "action": "file_ingest",
+        "tools_required": list(spec.tools),
+    }
+    if not material.has_material:
+        result.update({"status": "degraded", "output": "", "error": spec.refusal()})
+        return result
+    result.update(
+        {
+            "status": "done",
+            # §37 — what was read back, with its identifiers; no interpretation.
+            "output": (
+                f"file_ingest : {material.summary()} Documents : "
+                + ", ".join(
+                    str(document.get("file_name") or document.get("document_id"))
+                    for document in material.documents
+                )
+            ),
+            "documents": [
+                {"document_id": document.get("document_id"), "file_name": document.get("file_name")}
+                for document in material.documents
+            ],
+            "datasets": [
+                dataset.get("dataset_id") for dataset in material.datasets
+            ],
+            "information_units": [
+                unit.get("information_id") for unit in material.units
+            ],
+        }
+    )
+    return result
+
+
+
+
+
+def _database_step(target: Any | None, order: int) -> dict[str, Any]:
+    """Return the §8.4 ``query_database`` step of one named PostgreSQL source.
+
+    The step carries the *service* and the *table*, never a DSN: a reader of the
+    plan can tell which database and which table it will read, and the secret
+    stays in the vault where the tool reads it (§41.4, §36.7).
+    """
+    return {
+        "step_id": ULID.new("STEP_"),
+        "order": order,
+        "action": "query_database",
+        "tool": "postgres_query",
+        "inputs": {
+            "service": getattr(target, "service", None),
+            "table": getattr(target, "table", None),
+        },
+        "expected_output": "dataset",
+        "status": "pending",
+    }
+
+
+def _orient_database_plan(
+    steps: Sequence[dict[str, Any]],
+    target: Any | None,
+    request_type: str,
+) -> list[dict[str, Any]]:
+    """Return *steps* oriented by the PostgreSQL source the request named (§7).
+
+    Same rule as the file branch: a ``data``/``source`` request is planned
+    **around its sources** — searching the web for data the requester already
+    owns answers another question. Any other request keeps its steps and gains
+    the database read first.
+
+    A ``file_ingest`` step is *kept* for a ``data`` request: it is a second source
+    the same request already owns (a file it uploaded *and* a database it named),
+    and dropping it would silently discard half of what was given. Only the web
+    acquisition steps are removed.
+    """
+    if request_type in ("data", "source"):
+        kept = [
+            dict(step)
+            for step in steps
+            if str(step.get("action")) in OWNED_SOURCE_ACTIONS
+        ]
+    else:
+        kept = [dict(step) for step in steps]
+    combined = [_database_step(target, 1), *kept]
+    for order, step in enumerate(combined, start=1):
+        step["order"] = order
+    return combined
+
+
+async def _persist_database_dataset(
+    material: DatabaseMaterial, request_id: str
+) -> list[str]:
+    """Store the ``Dataset`` read from PostgreSQL so it stays consultable (§11/§27).
+
+    The rows are not re-stored — the source database remains their storage — but
+    the ``DATA_`` identifier the delivery publishes must exist: a client that
+    reads ``datasets[]`` and calls the API with that identifier must find the
+    dataset, exactly as it does for an ingested file.
+
+    Returns:
+        The limitations of a persistence that did not happen; never an exception.
+    """
+    if material.dataset is None:
+        return []
+    if not database_configured():
+        return [
+            (
+                "Dataset PostgreSQL non persisté (INIS_DATABASE_URL non configuré) : il "
+                "reste publié dans cette livraison mais n'est pas consultable via l'API."
+            )
+        ]
+    from app.storage.database.engine import get_default_engine
+    from app.storage.repositories.dataset_repository import DatasetRepository
+
+    engine = get_default_engine()
+    if engine is None:  # pragma: no cover - guarded by database_configured()
+        return []
+    try:
+        await DatasetRepository.create(
+            engine,
+            {
+                **material.dataset,
+                # §27 — ``name`` is NOT NULL; the preference is the honest label.
+                "name": f"{material.target.credential_ref}#{material.target.table or ''}",
+                "request_id": request_id,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - §25.2: the gap is named, not hidden
+        return [
+            (
+                f"Dataset PostgreSQL non persisté ({type(exc).__name__}: {exc}) — il reste "
+                "publié dans cette livraison mais n'est pas consultable via l'API."
+            )
+        ]
+    return []
+
+
+def _database_step_result(
+    step: Mapping[str, Any],
+    material: DatabaseMaterial | None,
+    refusal: str | None = None,
+) -> dict[str, Any]:
+    """Return the step result of a real ``query_database`` (§36.7, §25.2).
+
+    The step is ``done`` only when the database returned something: an empty read
+    is ``degraded`` with the reason, never ``done`` with an empty output, and it
+    never becomes a web search for the name of the table.
+    """
+    spec = describe_action("query_database")
+    result: dict[str, Any] = {
+        "step_id": step.get("step_id") or ULID.new("STEP_"),
+        "action": "query_database",
+        "tools_required": list(spec.tools),
+    }
+    if material is None or not material.has_material:
+        reason = (
+            refusal
+            or (material.limitations[0] if material and material.limitations else None)
+            or spec.refusal()
+        )
+        result.update({"status": "degraded", "output": "", "error": reason})
+        return result
+    result.update(
+        {
+            "status": "done",
+            # §37 — the counts that were really read; no interpretation.
+            "output": material.summary(),
+            "datasets": [material.dataset.get("dataset_id")] if material.dataset else [],
+            "information_units": [
+                unit.get("information_id") for unit in material.units
+            ],
+        }
+    )
+    return result
+
 
 class PipelineRunner:
     """Orchestrates request processing across understanding, planning, coordinator, and confidence."""
@@ -57,6 +393,8 @@ class PipelineRunner:
         self._event_history: dict[str, list[dict[str, Any]]] = {}
         self._subscribers: dict[str, list[asyncio.Queue[dict[str, Any]]]] = {}
         self._running: set[str] = set()
+        #: §1.3 — requests cancelled by the requester (cooperative stop).
+        self._cancelled: set[str] = set()
         self._lifecycles: dict[str, RequestLifecycle] = {}
         self._guards: dict[str, BudgetGuard] = {}
         self._llm_traces: LLMTraceWriter = LLMTraceWriter()
@@ -187,6 +525,7 @@ class PipelineRunner:
         self._event_history.clear()
         self._subscribers.clear()
         self._running.clear()
+        self._cancelled.clear()
         self._lifecycles.clear()
         self._guards.clear()
         self._trace_step_ids.clear()
@@ -210,6 +549,50 @@ class PipelineRunner:
     def is_running(self, request_id: str) -> bool:
         """Check if pipeline is actively running for a request."""
         return request_id in self._running
+
+    # -- §1.3 / §32 cancellation ----------------------------------------
+
+    def is_cancelled(self, request_id: str) -> bool:
+        """Return ``True`` when the requester cancelled the request (§1.3)."""
+        return request_id in self._cancelled
+
+    def cancel(self, request_id: str) -> dict[str, Any]:
+        """Cancel a request and return its updated state (§1.3 ``CANCELLED``).
+
+        Cancellation is cooperative and idempotent: the state, the §41.1
+        lifecycle and the SSE stream are updated immediately, while a run
+        already in flight stops at its next step boundary instead of being
+        killed mid-write. Cancelling twice returns the same ``CANCELLED``
+        state, so the endpoint never depends on the caller's timing.
+        """
+        cancelled_at = datetime.now(UTC).isoformat()
+        state = dict(self._run_states.get(request_id, {}))
+        state.update(
+            {
+                "status": CANCELLED_STATUS,
+                "current_step": "cancelled",
+                "request_id": request_id,
+                "cancelled_at": cancelled_at,
+            }
+        )
+        self._run_states[request_id] = state
+        self._cancelled.add(request_id)
+        self._running.discard(request_id)
+        lifecycle = self._lifecycles.get(request_id)
+        if lifecycle is not None:
+            # §41.1 — the cancellation is a committed step, so a resume
+            # projection reports where the run actually stopped.
+            lifecycle.commit_step("CANCELLED", {"cancelled_at": cancelled_at})
+        self._emit_event(
+            request_id,
+            {
+                "step": "cancelled",
+                "status": CANCELLED_STATUS,
+                "request_id": request_id,
+                "timestamp": cancelled_at,
+            },
+        )
+        return state
 
     # -- §41.1 lifecycle ------------------------------------------------
 
@@ -269,7 +652,7 @@ class PipelineRunner:
             {
                 "status": "resumed",
                 "resumed_from_step": checkpoint.step_id if checkpoint else None,
-                "resumed_at": datetime.now(timezone.utc).isoformat(),
+                "resumed_at": datetime.now(UTC).isoformat(),
             }
         )
         self._run_states[request_id] = state
@@ -396,6 +779,21 @@ class PipelineRunner:
             if trace.get("request_id") == request_id
         ]
 
+    def _synthesis_model(self, request_id: str) -> str | None:
+        """Return the model that produced the synthesis, when the trace knows it.
+
+        Recorded in the §12.1 ``enriched`` transformation so a delivery can say
+        *which* model summarised its material. ``None`` when no trace names one:
+        the stage then reports the generic tool ``synthesis`` rather than an
+        invented model identifier.
+        """
+        for trace in reversed(self.llm_traces(request_id)):
+            for key in ("model", "model_id", "provider_model"):
+                value = trace.get(key)
+                if value:
+                    return str(value)
+        return None
+
     def trace_steps(self, request_id: str) -> dict[str, str]:
         """Return the ``phase -> STEP_{ULID}`` map used to trace a request."""
         return {
@@ -493,7 +891,7 @@ class PipelineRunner:
                 "step": "received",
                 "status": "received",
                 "request_id": request_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             }
             yield f"data: {json.dumps(init_event)}\n\n"
         else:
@@ -507,7 +905,7 @@ class PipelineRunner:
                 while True:
                     event = await queue.get()
                     yield f"data: {json.dumps(event)}\n\n"
-                    if event.get("step") in ("delivering", "completed", "failed"):
+                    if event.get("step") in ("delivering", "completed", "failed", "cancelled"):
                         break
             finally:
                 if request_id in self._subscribers and queue in self._subscribers[request_id]:
@@ -516,7 +914,7 @@ class PipelineRunner:
     async def run(self, request_id: str, payload: Any) -> dict[str, Any]:
         """Run the end-to-end pipeline with graceful degradation if modules are missing."""
         start_time = time.monotonic()
-        start_iso = datetime.now(timezone.utc).isoformat()
+        start_iso = datetime.now(UTC).isoformat()
         self._running.add(request_id)
 
         objective = getattr(payload, "objective", None) or (
@@ -589,16 +987,13 @@ class PipelineRunner:
             requirements_list = [objective] if objective else ["general_inquiry"]
             understanding_status = f"degraded: {err}"
 
-        requirements: Any = requirements_list
         try:
-            from app.llm.tasks.understanding_task import UnderstandingTask
             from app.llm.prompts.understanding_prompt import build as build_understanding_prompt
+            from app.llm.tasks.understanding_task import UnderstandingTask
 
             prompt = build_understanding_prompt(objective=objective)
             task = UnderstandingTask()
             llm_result = await task.run(prompt, max_tokens=500)
-            if not llm_result.get("stub"):
-                requirements = llm_result["content"]
             # §41.2 — meter the LLM call against the request budget.
             budget_exceeded = self._meter_llm(request_id, llm_result)
             # §41.12 — trace the reasoning decision (prompt stored hashed only).
@@ -637,21 +1032,37 @@ class PipelineRunner:
             "request_id": request_id,
         })
         plan: dict[str, Any] | None = None
+        #: §8.4 — a plan refused by the closed vocabulary; stated in limitations.
+        plan_rejection: str | None = None
+        #: One validator for both plans a run can receive: the submitted one and
+        #: the LLM one.
+        builder = PlanBuilder()
         explicit_plan = payload.get("plan") if isinstance(payload, dict) else None
-        if isinstance(explicit_plan, dict) and "steps" in explicit_plan:
-            plan = {
-                "plan_id": explicit_plan.get("plan_id") or ULID.new("PLAN_"),
-                "request_id": request_id,
-                "objective": objective,
-                "steps": list(explicit_plan.get("steps") or []),
-                "budget": explicit_plan.get("budget", {}),
-            }
-            planning_status = "completed"
-        else:
+        explicit_steps = (
+            list(explicit_plan.get("steps") or [])
+            if isinstance(explicit_plan, dict) and "steps" in explicit_plan
+            else []
+        )
+        if explicit_steps:
             try:
-                from app.planning.plan_builder import PlanBuilder
+                # §8.4 — a submitted plan is data coming from outside the process:
+                # it is checked like an LLM answer, never trusted, and refused as
+                # a whole as soon as one of its steps names an unknown action.
+                PlanBuilder.validate_steps(explicit_steps)
+            except InvalidPlanAction as refusal:
+                plan_rejection = str(refusal)
+            else:
+                plan = {
+                    "plan_id": explicit_plan.get("plan_id") or ULID.new("PLAN_"),
+                    "request_id": request_id,
+                    "objective": objective,
+                    "steps": explicit_steps,
+                    "budget": explicit_plan.get("budget", {}),
+                }
+                planning_status = "completed"
 
-                builder = PlanBuilder()
+        if plan is None:
+            try:
                 steps = [
                     {
                         "action": "collect_information",
@@ -681,7 +1092,11 @@ class PipelineRunner:
                         "max_execution_time_seconds": max_time,
                     },
                 )
-                planning_status = "completed"
+                # §8.4 — when a submitted plan was refused, the deterministic
+                # plan runs instead and the refusal stays stated in the delivery.
+                planning_status = (
+                    "completed" if plan_rejection is None else f"degraded: {plan_rejection}"
+                )
             except Exception as err:
                 plan = {
                     "plan_id": ULID.new("PLAN_"),
@@ -702,18 +1117,18 @@ class PipelineRunner:
                 planning_status = f"degraded: {err}"
 
         try:
-            from app.llm.tasks.planning_task import PlanningTask
-            from app.llm.prompts.planning_prompt import build as build_planning_prompt
             from app.llm.parsers.plan_parser import parse_plan
+            from app.llm.prompts.planning_prompt import build as build_planning_prompt
+            from app.llm.tasks.planning_task import PlanningTask
 
-            try:
-                prompt = build_planning_prompt(objective=objective, requirements=requirements)
-            except TypeError:
-                tools = ["collector", "web_search", "vector_search"]
-                prompt = build_planning_prompt(
-                    objective=f"{objective} (Requirements: {requirements})" if requirements else objective,
-                    available_tools=tools,
-                )
+            prompt = build_planning_prompt(
+                objective=objective,
+                available_tools=["collector", "web_search", "vector_search"],
+                # §8.4 — the planner is told the closed vocabulary, so a plan
+                # naming anything else is a mistake it can avoid.
+                available_actions=sorted(closed_actions()),
+                requirements=requirements_list,
+            )
             task = PlanningTask()
             llm_result = await task.run(prompt, max_tokens=800)
             # §41.2 — meter the planning LLM call too.
@@ -732,28 +1147,29 @@ class PipelineRunner:
                     else "plan steps parsed from LLM output"
                 ),
             )
-            if not llm_result.get("stub") and not (isinstance(explicit_plan, dict) and "steps" in explicit_plan):
-                # parser le JSON via app.llm.parsers.plan_parser.parse_plan
+            if not llm_result.get("stub") and not (explicit_steps and plan_rejection is None):
                 parsed_llm_plan = parse_plan(llm_result["content"])
-                plan_id = (plan.get("plan_id") if isinstance(plan, dict) and plan.get("plan_id") else ULID.new("PLAN_"))
-                plan = {
-                    "plan_id": plan_id,
-                    "request_id": request_id,
-                    "objective": objective,
-                    "steps": [
-                        {
-                            "step_id": step.get("step_id") or ULID.new("STEP_"),
-                            "order": step.get("order", idx),
-                            "action": step.get("description") or step.get("action", "collect_information"),
-                            "tool": step.get("tool", "collector"),
-                            "inputs": step.get("inputs", {"requirement": step.get("description", objective)}),
-                            "expected_output": step.get("expected_output", "information_unit"),
-                            "status": step.get("status", "pending"),
-                        }
-                        for idx, step in enumerate(parsed_llm_plan.get("steps", []), start=1)
-                    ],
-                }
-                planning_status = "completed"
+                proposed_steps = _llm_plan_steps(parsed_llm_plan, objective)
+                try:
+                    # §8.4 — the LLM plan is validated as a whole: a single
+                    # unknown (or missing) action refuses it entirely, and the
+                    # validated plan already in hand keeps running. The LLM
+                    # answer is never "repaired" into something executable.
+                    rebuilt = builder.build(
+                        request_id, objective, proposed_steps, _plan_budget(plan)
+                    )
+                except InvalidPlanAction as refusal:
+                    plan_rejection = plan_rejection or str(refusal)
+                    planning_status = f"degraded: {plan_rejection}"
+                else:
+                    if isinstance(plan, dict) and plan.get("plan_id"):
+                        rebuilt["plan_id"] = plan["plan_id"]
+                    plan = rebuilt
+                    planning_status = (
+                        "completed"
+                        if plan_rejection is None
+                        else f"degraded: {plan_rejection}"
+                    )
         except ImportError:
             pass
         except Exception:
@@ -766,6 +1182,60 @@ class PipelineRunner:
             "plan_id": plan.get("plan_id") if isinstance(plan, dict) else None,
         })
         lifecycle.commit_step("PLAN_GENERATION", {"plan_id": plan.get("plan_id") if isinstance(plan, dict) else None})
+
+        # -------------------------------------------------------------
+        # Stage 2.5: §9.1 material the request already ingested
+        # -------------------------------------------------------------
+        # An uploaded document is ingested when it arrives (L2.3): its §11 units
+        # and its Dataset are already stored. Reading them back here is what
+        # makes ``request_type`` operative (§7, C4) and what puts ``datasets[]``
+        # in the colis (§24.1) instead of leaving the file's material unused.
+        request_material = await load_request_material(request_id)
+        request_type = str(
+            getattr(payload, "request_type", None)
+            or (payload.get("request_type") if isinstance(payload, dict) else "")
+            or "research"
+        )
+        if request_material.has_documents and isinstance(plan, dict):
+            plan["steps"] = _orient_plan(
+                plan.get("steps", []), request_material, request_type
+            )
+            plan["request_type"] = request_type
+
+        # -------------------------------------------------------------
+        # Stage 2.6: §36.7 PostgreSQL source named by the request
+        # -------------------------------------------------------------
+        # ``constraints.source_preferences`` is the only channel a request has for
+        # "interroge ma base" (§7). Naming one makes the read part of the plan —
+        # and, for a ``data`` request, replaces the web acquisition: searching the
+        # web for data the requester already owns answers another question.
+        database_material: DatabaseMaterial | None = None
+        database_refusal: str | None = None
+        try:
+            database_material = await load_database_material_for_request(
+                payload, request_id=request_id
+            )
+        except InisError as exc:
+            # §25.2 — an uninterpretable ``postgres:`` entry is a named failure of
+            # the step, never "no database was named" (which would silently send
+            # the request to the web).
+            database_refusal = (
+                f"Préférence de source PostgreSQL inutilisable (§7) : {exc}"
+            )
+        if (database_material is not None or database_refusal) and isinstance(plan, dict):
+            plan["steps"] = _orient_database_plan(
+                plan.get("steps", []),
+                database_material.target if database_material else None,
+                request_type,
+            )
+            plan["request_type"] = request_type
+        #: §11/§27 — the datasets this read produced, and why one could not be
+        #: stored; both are stated in the delivery rather than assumed.
+        database_persistence_limits: list[str] = (
+            await _persist_database_dataset(database_material, request_id)
+            if database_material is not None
+            else []
+        )
 
         # -------------------------------------------------------------
         # Stage 3: Real web-search execution per §9/§10 (graceful degradation)
@@ -784,6 +1254,16 @@ class PipelineRunner:
         execution_status = "completed"
 
         steps_to_run = plan.get("steps", []) if isinstance(plan, dict) else []
+
+        # §8.4/§25.2 — plan actions the pipeline cannot execute today. They are
+        # collected here so the delivery can name them instead of hiding them.
+        degraded_actions: list[str] = []
+        #: §8.4/§9.1 — ``file_ingest`` steps that had nothing to read: the action
+        #: is wired, but *this* request ingested no document.
+        unavailable_ingests: list[str] = []
+        #: §8.4/§36.7 — ``query_database`` steps whose source could not be read
+        #: (absent vault entry, unreachable host, empty table, no table named).
+        unavailable_databases: list[str] = []
 
         # §41.13 Safeguard: max_plan_steps
         max_plan_steps_limit = max_plan_steps()
@@ -813,8 +1293,8 @@ class PipelineRunner:
 
 
         try:
-            from app.connectors.web.provider_router import ProviderRouter
             from app.connectors.web.extractors.wikipedia_extractor import WikipediaExtractor
+            from app.connectors.web.provider_router import ProviderRouter
             from app.knowledge.extraction.fact_extractor import FactExtractor
             from app.quality.source_reliability import SourceReliabilityScorer
 
@@ -824,8 +1304,54 @@ class PipelineRunner:
             reliability_scorer = SourceReliabilityScorer()
 
             for step in steps_to_run:
+                # §1.3 — a cancelled request stops at the next step boundary
+                # instead of continuing acquisition for nobody.
+                if self.is_cancelled(request_id):
+                    execution_status = CANCELLED_STATUS
+                    break
                 action = step.get("action", "")
                 inputs = step.get("inputs", {})
+                if action == "file_ingest":
+                    # §9.1 — the step reads back the material the request already
+                    # ingested. It is `done` only when there is material to read;
+                    # otherwise it is degraded with the reason, and the step never
+                    # becomes a web search for the string "file_ingest".
+                    ingest_result = _material_step_result(step, request_material)
+                    step_results.append(ingest_result)
+                    if ingest_result.get("status") != "done":
+                        unavailable_ingests.append(action)
+                    continue
+                if action == "query_database":
+                    # §36.7 — the step reads the PostgreSQL source the request
+                    # named. Same rule as ``file_ingest``: an unreadable or empty
+                    # database degrades the step with its reason instead of
+                    # becoming a search for the name of a table.
+                    database_result = _database_step_result(
+                        step, database_material, database_refusal
+                    )
+                    step_results.append(database_result)
+                    if database_result.get("status") != "done":
+                        unavailable_databases.append(action)
+                    continue
+                if not is_web_action(action):
+                    # §8.4 — the acquisition stage only knows how to search the
+                    # web. Before this guard, *any* action became a web search
+                    # with its own name as the query (a `file_ingest` step
+                    # searched for the literal string "file_ingest"), and the
+                    # step was then reported as if it had produced material.
+                    spec = describe_action(action)
+                    degraded_actions.append(spec.action)
+                    step_results.append(
+                        {
+                            "step_id": step.get("step_id", ULID.new("STEP_")),
+                            "status": "degraded",
+                            "action": spec.action,
+                            "output": "",
+                            "error": spec.refusal(),
+                            "tools_required": list(spec.tools),
+                        }
+                    )
+                    continue
                 # Derive the search query from step inputs or the objective
                 query = (
                     inputs.get("query")
@@ -885,7 +1411,19 @@ class PipelineRunner:
                                     document_id=doc_id,
                                     url=url,
                                 )
-                                web_facts.extend(facts)
+                                # §24.1 — a finding carries its own extraction
+                                # confidence: a fact read from the full page is
+                                # stronger material than one read from a search
+                                # snippet, and the §15 extraction dimension must
+                                # be able to tell the two apart.
+                                web_facts.extend(
+                                    {
+                                        **fact,
+                                        "confidence": _fact_confidence(fact, page_text),
+                                        "evidence_ids": [fact.get("evidence_id")],
+                                    }
+                                    for fact in facts
+                                )
                             except Exception:
                                 pass
 
@@ -899,6 +1437,10 @@ class PipelineRunner:
                                 "reliability_score": rel_score,
                                 "search_score": result.score,
                                 "source_type": "web",
+                                # §15.1 — the acquisition instant feeds the
+                                # freshness dimension; an ISO 8601 UTC stamp,
+                                # never a guessed publication date.
+                                "retrieved_at": datetime.now(UTC).isoformat(),
                             })
                             step_output_snippets.append(
                                 f"[{result.title}] {snippet}"
@@ -920,7 +1462,10 @@ class PipelineRunner:
                         "step_id": step.get("step_id", ULID.new("STEP_")),
                         "status": "degraded",
                         "action": action,
-                        "output": f"Step degraded: {step_err}",
+                        # §37 — the failure is reported in `error`; `output` stays
+                        # empty because the step produced nothing to deliver.
+                        "output": "",
+                        "error": f"{type(step_err).__name__}: {step_err}",
                     })
 
         except ImportError:
@@ -930,39 +1475,29 @@ class PipelineRunner:
             execution_status = f"degraded: {err}"
 
         if not step_results:
-            # Pure stub fallback when no steps ran
-            try:
-                from app.agents.pipeline.step_executor import StepExecutor
-
-                executor = StepExecutor()
-
-                class _ToolAdapter:
-                    def execute(self, s: dict[str, Any]) -> dict[str, Any]:
-                        inputs = s.get("inputs", {})
-                        req_val = inputs.get("requirement", objective)
-                        act = s.get("action", "collect_information")
-                        return {
-                            "status": "done",
-                            "action": act,
-                            "output": f"Extracted intelligence payload for {req_val}",
-                        }
-
-                tool_instance = _ToolAdapter()
-                for step in steps_to_run:
-                    res = executor.execute(step, tool_instance)
-                    if "output" not in res and isinstance(res.get("result"), dict):
-                        res["output"] = res["result"].get("output", "")
-                    step_results.append(res)
-            except Exception as fallback_err:
-                step_results = [
+            # ------------------------------------------------------------------
+            # §25.2/§37 — a step the pipeline cannot execute is *reported*.
+            #
+            # This block used to answer with the sentence "Extracted intelligence
+            # payload for <objective>", which is not a result: it is fabricated
+            # text that made an empty run look like a successful one (§0.2,
+            # §22.3). The honest answer is a degraded step, no output, and the
+            # §21 tools the action would have needed.
+            # ------------------------------------------------------------------
+            for step in steps_to_run:
+                spec = describe_action(step.get("action"))
+                step_results.append(
                     {
-                        "step_id": s.get("step_id", ULID.new("STEP_")),
-                        "status": "done",
-                        "output": f"Fallback execution output for {objective}",
+                        "step_id": step.get("step_id", ULID.new("STEP_")),
+                        "status": "degraded",
+                        "action": spec.action,
+                        "output": "",
+                        "error": spec.refusal(),
+                        "tools_required": list(spec.tools),
                     }
-                    for s in steps_to_run
-                ]
-                execution_status = f"degraded: {fallback_err}"
+                )
+            if step_results:
+                execution_status = "degraded: aucune étape exécutable"
 
         self._emit_event(request_id, {
             "step": "executing",
@@ -972,6 +1507,241 @@ class PipelineRunner:
             "facts_extracted": len(web_facts),
         })
         lifecycle.commit_step("DATA_ACQUISITION", {"facts": len(web_facts), "results": len(step_results)})
+
+        # -------------------------------------------------------------
+        # Stage 3.5: Information units & evidence assembly (§11, §14.2)
+        # -------------------------------------------------------------
+        # One unit per traceable web fact, built *before* the confidence stage
+        # because §15 scores what was actually collected. The aggregate internal
+        # unit stays first: it is the synthesis of the run, never a substitute
+        # for the information that was really acquired.
+        now_iso = datetime.now(UTC).isoformat()
+        inf_id = ULID.new("INF_")
+        evid_id = ULID.new("EVID_")
+        resp_id = f"RESP_{PythonUlid()}"
+
+        details_list = [
+            r.get("output", "")
+            for r in step_results
+            if r.get("output")
+        ]
+        if not details_list:
+            details_list = [f"Intelligence findings collected for {objective}"]
+
+        information_units: list[dict[str, Any]] = [
+            {
+                "information_id": inf_id,
+                "type": "text",
+                "content": {
+                    "summary": f"Factual intelligence unit regarding {objective}",
+                    "details": details_list,
+                },
+                "raw_reference": {"request_id": request_id, "objective": objective},
+                "source_id": "SRC_INTERNAL_PIPELINE",
+                "dataset_id": None,
+                "location": {},
+                "context": {"request_id": request_id, "objective": objective},
+                "language": None,
+                "unit": None,
+                "time": {},
+                "classification": {},
+                "quality": {},
+                "confidence": {"not_a_probability": True},
+                # §0.2/§11 — a delivered unit must state where it comes from, even
+                # when its origin is the run itself: this one names the internal
+                # pipeline source and the derivation that produced it instead of
+                # shipping an empty provenance block.
+                "provenance": {
+                    "source_id": "SRC_INTERNAL_PIPELINE",
+                    "method": "pipeline_synthesis",
+                    "derived_from": "plan_execution",
+                    "request_id": request_id,
+                },
+                "data_stage": "derived",
+                "epistemic_status": "factual",
+                # §18.1 — the stored unit starts its own version chain.
+                "versions": [inf_id],
+                "created_at": now_iso,
+                "updated_at": now_iso,
+            }
+        ]
+        evidence: list[dict[str, Any]] = []
+        #: §12.1 — the units the §21 extraction produced, as opposed to the unit
+        #: this pipeline synthesises: the lineage must not credit the extractor
+        #: with material the run wrote itself.
+        fact_unit_ids: list[str] = []
+
+        for fact in web_facts:
+            if not isinstance(fact, dict):
+                continue
+            fact_text = str(
+                (fact.get("content") or {}).get("text")
+                or fact.get("value")
+                or fact.get("statement")
+                or ""
+            ).strip()
+            fact_source = str(fact.get("source_id") or "")
+            # §0.2 invariant 8 — an untraceable fact is never persisted as a
+            # unit: it stays an assumption on the delivery side.
+            if not fact_text or not fact_source.startswith("SRC_"):
+                continue
+            unit_id = str(fact.get("information_id") or ULID.new("INF_"))
+            fact_strength = _fact_confidence(fact, True)
+            raw_reference = dict(fact.get("raw_reference") or {})
+            provenance = dict(fact.get("provenance") or {})
+            if raw_reference.get("url") and "extracted_from" not in provenance:
+                provenance["extracted_from"] = raw_reference["url"]
+            language = fact.get("language") if isinstance(fact.get("language"), str) else None
+            information_units.append(
+                {
+                    "information_id": unit_id,
+                    "type": str(fact.get("type") or "text"),
+                    "content": dict(fact.get("content") or {"text": fact_text}),
+                    "raw_reference": raw_reference,
+                    "source_id": fact_source,
+                    "dataset_id": None,
+                    "location": {},
+                    "context": {"request_id": request_id, "objective": objective},
+                    "language": language,
+                    "unit": fact.get("unit"),
+                    "time": {},
+                    "classification": {},
+                    "quality": {},
+                    "confidence": {"score": fact_strength, "not_a_probability": True},
+                    "provenance": provenance,
+                    "data_stage": str(fact.get("data_stage") or "raw"),
+                    "epistemic_status": str(fact.get("epistemic_status") or "factual"),
+                    # §18.1 — the stored unit starts its own version chain.
+                    "versions": [unit_id],
+                    "created_at": now_iso,
+                    "updated_at": now_iso,
+                }
+            )
+            fact_unit_ids.append(unit_id)
+            evidence.append(
+                {
+                    "evidence_id": str(fact.get("evidence_id") or ULID.new("EVID_")),
+                    "information_id": unit_id,
+                    "source_id": fact_source,
+                    "strength": fact_strength,
+                    "excerpt": fact_text[:300],
+                    "provenance": provenance,
+                    "epistemic_status": "factual",
+                    "created_at": now_iso,
+                }
+            )
+
+        if not evidence:
+            # Nothing traceable was acquired: the delivery still states that it
+            # rests on the plan execution and nothing else, with the neutral
+            # strength of "no measured evidence" (0.5) instead of a borrowed one.
+            evidence.append(
+                {
+                    "evidence_id": evid_id,
+                    "information_id": inf_id,
+                    "strength": 0.5,
+                    "excerpt": (
+                        f"Evidence derived from execution of {len(step_results)} plan steps."
+                    ),
+                    "epistemic_status": "factual",
+                    "created_at": now_iso,
+                }
+            )
+
+
+        # -------------------------------------------------------------
+        # Stage 3.6: §9.1 — the request's own ingested material joins the colis
+        # -------------------------------------------------------------
+        # The units were extracted and stored when the file was uploaded (L2.3).
+        # They are delivered as they are: located (§11 ``location``), traceable to
+        # their document, and never re-attributed to the web extraction that ran
+        # in this request — the §12.1 lineage keeps the two producers apart.
+        datasets: list[dict[str, Any]] = [
+            dict(dataset) for dataset in request_material.datasets
+        ]
+        delivered_unit_ids: set[str] = {
+            str(unit.get("information_id")) for unit in information_units
+        }
+        for unit in request_material.units:
+            if str(unit.get("information_id")) in delivered_unit_ids:
+                continue
+            information_units.append(dict(unit))
+        #: The documents are sources too (§9.1): the colis lists them next to the
+        #: web sources, with the storage reference they were read from.
+        ingested_sources: list[dict[str, Any]] = [
+            {
+                "source_id": document.get("source_id"),
+                "name": document.get("file_name") or document.get("document_id"),
+                "source_type": "file",
+                "url": document.get("storage_ref"),
+                "data_stage": "raw",
+            }
+            for document in request_material.documents
+            if document.get("source_id")
+        ]
+
+        # §36.7 — the rows read from PostgreSQL join the colis the same way: their
+        # Dataset is delivered, their §11 units are delivered with their row
+        # locator, and the source is listed as a database (never as a web page).
+        if database_material is not None and database_material.has_material:
+            if database_material.dataset:
+                datasets.append(dict(database_material.dataset))
+            for unit in database_material.units:
+                if str(unit.get("information_id")) in delivered_unit_ids:
+                    continue
+                information_units.append(dict(unit))
+            ingested_sources.append(
+                {
+                    "source_id": database_material.source_id,
+                    "name": database_material.target.describe(),
+                    "source_type": "database",
+                    # §0.2/§41.4 — a reference, never a DSN: no user, no secret.
+                    "url": database_material.target.location,
+                    "data_stage": "raw",
+                }
+            )
+
+        # -------------------------------------------------------------
+        # Stage 3.7: §12 — the colis is enriched before it is scored
+        # -------------------------------------------------------------
+        # Every unit still at « normalized » gets its notation read: the ISO form
+        # of each date beside the span it came from, canonical unit symbols, the
+        # currency of an amount, the language of the text and a fingerprint that
+        # names the exact duplicates instead of dropping them. A unit at « raw »
+        # is refused — §12 has no shortcut — and the synthesis unit is already
+        # « derived »: neither is relabelled. Nothing is invented: what the
+        # enricher could not read is carried in ``enrichment_limits``.
+        enrichment_policy: Any = None
+        try:
+            from app.knowledge.normalization.language_policy import LanguagePolicy
+
+            enrichment_policy = LanguagePolicy(
+                working_language=str(context.get("working_language", "en")),
+                source_languages_allowed=tuple(
+                    context.get("source_languages_allowed") or ("en", "fr", "es", "de")
+                ),
+                translation_policy=str(context.get("translation_policy", "on_demand")),
+                normalization_locale=str(context.get("normalization_locale", "en-US")),
+            )
+        except (ImportError, TypeError, ValueError):
+            # An unusable policy is not a reason to skip the step: the enricher
+            # falls back to its own declared default, stated in the report.
+            enrichment_policy = None
+
+        enrichment = enrich_units(information_units, policy=enrichment_policy)
+        if enrichment.units:
+            enriched_by_id = {
+                str(unit.get("information_id")): unit for unit in enrichment.units
+            }
+            information_units = [
+                enriched_by_id.get(str(unit.get("information_id")), unit)
+                for unit in information_units
+            ]
+        enrichment_limits: list[str] = list(enrichment.limitations)
+        # §12 — ``datasets[].data_stage`` is stated from the units read out of
+        # each dataset: the delivery says how far the material of a table went,
+        # instead of leaving the reader to infer it from the units alone.
+        datasets = resolved_dataset_stages(information_units, datasets)
 
         # -------------------------------------------------------------
         # Stage 4: Confidence Evaluation (with graceful degradation)
@@ -986,31 +1756,39 @@ class PipelineRunner:
         confidence_details: dict[str, Any] = {}
         try:
             from app.confidence.confidence_scorer import score as score_confidence
+            from app.confidence.dimension_inputs import derive as derive_dimensions
 
-            dims = {
-                "source_reliability": 0.88,
-                "source_freshness": 0.90,
-                "extraction_confidence": 0.85,
-                "data_quality": 0.85,
-                "evidence_strength": 0.82,
-                "cross_source_agreement": 0.80,
-                "methodological_consistency": 0.85,
-            }
+            # §15.1 — the 7 dimensions are computed from what this run actually
+            # collected (sources, units, findings, evidence), never from
+            # constants: an empty run no longer scores like a sourced one.
+            derived = derive_dimensions(
+                sources=web_sources,
+                units=information_units,
+                findings=web_facts,
+                evidence=evidence,
+            )
+            dims = derived["dimensions"]
             score_dict = score_confidence(dims)
             confidence_score = float(score_dict.get("confidence_score", 0.85))
             confidence_details = {
                 "score": confidence_score,
                 "dimensions": dims,
+                # §15.3 — the inputs behind each dimension, so a reader can tell
+                # a low score caused by thin material from one caused by
+                # disagreeing sources.
+                "signals": derived["signals"],
                 "explanation": score_dict.get("explanation"),
                 "not_a_probability": True,
             }
             confidence_status = "completed"
         except Exception as err:
-            confidence_score = 0.80
+            confidence_score = 0.0
             confidence_details = {
                 "score": confidence_score,
                 "dimensions": {},
+                "signals": {},
                 "explanation": f"Fallback confidence scoring: {err}",
+                "not_a_probability": True,
             }
             confidence_status = f"degraded: {err}"
 
@@ -1024,44 +1802,8 @@ class PipelineRunner:
         # -------------------------------------------------------------
         # Stage 5: Delivery per §24.1
         # -------------------------------------------------------------
-        now_iso = datetime.now(timezone.utc).isoformat()
-        inf_id = ULID.new("INF_")
-        evid_id = ULID.new("EVID_")
-        resp_id = f"RESP_{PythonUlid()}"
-
-        details_list = [
-            r.get("output", "")
-            for r in step_results
-            if r.get("output")
-        ]
-        if not details_list:
-            details_list = [f"Intelligence findings collected for {objective}"]
-
-        information_units = [
-            {
-                "information_id": inf_id,
-                "type": "text",
-                "content": {
-                    "summary": f"Factual intelligence unit regarding {objective}",
-                    "details": details_list,
-                },
-                "source_id": "SRC_INTERNAL_PIPELINE",
-                "data_stage": "derived",
-                "epistemic_status": "factual",
-                "created_at": now_iso,
-            }
-        ]
-
-        evidence = [
-            {
-                "evidence_id": evid_id,
-                "information_id": inf_id,
-                "strength": confidence_score,
-                "excerpt": f"Evidence derived from execution of {len(step_results)} plan steps.",
-                "epistemic_status": "factual",
-                "created_at": now_iso,
-            }
-        ]
+        # ``information_units``/``evidence`` were assembled in Stage 3.5 so the
+        # §15 confidence could score them; Stage 5 only finalizes the payload.
 
         # -- §41.3 language metadata on every delivered unit -------------
         try:
@@ -1099,11 +1841,16 @@ class PipelineRunner:
         summary = f"Synthesized research report for '{objective}'."
         # Seed findings with real web facts extracted in Stage 3 (§0.2-compliant)
         findings: list[Any] = list(web_facts)
+        # §41.12 — the failed-synthesis trace still needs a *model* and a prompt
+        # to be as informative as the successful one.
+        synthesis_prompt = ""
+        synthesis_model = ""
 
         try:
-            from app.llm.router.model_router import ModelRouter, LLMTask
+            from app.llm.router.model_router import LLMTask, ModelRouter
 
             router = ModelRouter()
+            synthesis_model = router.route("understanding")
             synthesis_prompt = (
                 f"Réponds en français à la question suivante : {objective}\n\n"
                 f"Faits collectés : {json.dumps(findings, ensure_ascii=False)}\n\n"
@@ -1118,7 +1865,11 @@ class PipelineRunner:
                 summary = response.content
                 # §41.2 — meter the synthesis call.
                 exceeded = self._meter_llm(
-                    request_id, {"usage": getattr(response, "usage", None)}
+                    request_id,
+                    {
+                        "input_tokens": response.input_tokens,
+                        "output_tokens": response.output_tokens,
+                    },
                 )
                 budget_exceeded = budget_exceeded or exceeded
                 # §41.12 — trace the synthesis decision (§41.12 understanding task).
@@ -1156,10 +1907,45 @@ class PipelineRunner:
                             findings = parsed_synthesis["findings"]
                 except Exception:
                     summary = response.content
+            else:
+                # §41.12 — a stub call is still a traced decision: register the
+                # synthesis step and keep the deterministic default summary.
+                logger.warning(
+                    "LLM synthesis returned a stub; keeping the default summary",
+                    request_id=request_id,
+                    model=response.model,
+                )
+                self._trace_llm(
+                    request_id,
+                    phase="synthesis",
+                    task_type="understanding",
+                    prompt=synthesis_prompt,
+                    llm_result=response,
+                    decision_summary="stubbed call; deterministic default summary kept",
+                )
         except ImportError:
             pass  # fallback sur stub actuel
-        except Exception:
-            pass
+        except Exception as err:
+            logger.warning(
+                "LLM synthesis call failed; keeping the default summary",
+                request_id=request_id,
+                error=str(err),
+            )
+            # §41.2/§41.12 — a failed synthesis is stated, never silent: the
+            # trace shows zero tokens and the exact cause, so an operator (or
+            # a harness) can never mistake it for a served call.
+            self._trace_llm(
+                request_id,
+                phase="synthesis",
+                task_type="understanding",
+                prompt=synthesis_prompt,
+                llm_result={
+                    "model": synthesis_model or "unavailable",
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                },
+                decision_summary=f"call failed; deterministic default summary kept ({err})",
+            )
 
         # ------------------------------------------------------------------
         # §0.2 invariant 8 — separate verified findings from unsourced claims
@@ -1212,8 +1998,12 @@ class PipelineRunner:
         delivery_status = resolve_delivery_status(
             findings=findings, conflicts=len(conflicts)
         )
+        # §1.3 — a cancelled request is reported as CANCELLED, even when it had
+        # already collected verified findings; the requester asked us to stop.
+        if self.is_cancelled(request_id):
+            delivery_status = CANCELLED_STATUS
         # §41.2 — a breached budget is reported explicitly, never silently.
-        if budget_exceeded:
+        elif budget_exceeded:
             delivery_status = BUDGET_EXCEEDED_STATUS
 
         # §41.2 — close the usage report with the measured compute time.
@@ -1230,6 +2020,29 @@ class PipelineRunner:
         base_limitations: list[str] = [
             "Les affirmations sans source_id vérifié sont marquées comme hypothèses §0.2."
         ]
+        # §9.1 — a request that had to read a file (or said its data was the file)
+        # must state why the file's material could not be read, rather than
+        # delivering an empty ``datasets[]`` without explanation.
+        if request_material.limitations and (
+            request_type in ("data", "source")
+            or any(str(step.get("action")) == "file_ingest" for step in steps_to_run)
+        ):
+            base_limitations.extend(request_material.limitations)
+        # §36.7 — the same rule for the PostgreSQL source the request named: the
+        # colis states why its rows are absent instead of silently delivering none.
+        if database_refusal:
+            base_limitations.append(database_refusal)
+        base_limitations.extend(database_persistence_limits)
+        # §12/§25.2 — what the enrichment of Stage 3.7 could not read: a date
+        # whose convention is unknown, an amount behind an ambiguous ``$``, a
+        # duplicate that was kept and named. Stating it is the point.
+        base_limitations.extend(enrichment_limits)
+        if database_material is not None and database_material.limitations and (
+            database_material.has_material
+            or request_type in ("data", "source")
+            or any(str(step.get("action")) == "query_database" for step in steps_to_run)
+        ):
+            base_limitations.extend(database_material.limitations)
         # §33.3 « demande ambiguë » — the ambiguity is stated, never hidden.
         missing_information: list[str] = list(clarifications)
         if missing_information:
@@ -1239,7 +2052,45 @@ class PipelineRunner:
             )
         if "degraded" in execution_status:
             base_limitations.append(
-                f"Web connectors non disponibles ({execution_status}) — fallback sur stub."
+                f"Exécution incomplète ({execution_status}) : les étapes non exécutables sont "
+                "signalées dans leur champ `error`, aucun contenu de résultat n'est produit "
+                "(§25.2, §37)."
+            )
+        if plan_rejection:
+            # §8.4/§22.3 — a refused plan is not executed and not hidden: the
+            # delivery names the action that was refused and states that the
+            # deterministic plan ran in its place.
+            base_limitations.append(
+                "Plan refusé en amont (§8.4/§22.3) : "
+                + plan_rejection
+                + " Le plan déterministe a été exécuté à la place."
+            )
+        if unavailable_ingests:
+            # §8.4/§9.1 — the action *is* wired (unlike ``degraded_actions``): it
+            # is this request that carries no ingested document to read.
+            base_limitations.append(
+                "Étapes « file_ingest » sans matière (§8.4/§9.1) : "
+                + ", ".join(sorted(set(unavailable_ingests)))
+                + " — aucun document n'a été ingéré pour cette requête "
+                "(POST /v1/requests/{request_id}/documents) : l'étape est dégradée, "
+                "aucun contenu de résultat n'est produit (§37)."
+            )
+        if unavailable_databases:
+            # §8.4/§36.7 — wired as well; the source named by ``source_preferences``
+            # simply produced nothing. The step's ``error`` carries the exact cause.
+            base_limitations.append(
+                "Étapes « query_database » sans matière (§8.4/§36.7) : "
+                + ", ".join(sorted(set(unavailable_databases)))
+                + " — la source PostgreSQL nommée par `constraints.source_preferences` "
+                "n'a pas été lue (voir le champ `error` de l'étape) : aucun Dataset "
+                "n'est livré, aucun contenu n'est fabriqué (§37)."
+            )
+        if degraded_actions:
+            base_limitations.append(
+                "Actions planifiées non branchées sur le pipeline (§8.4/§21) : "
+                + ", ".join(sorted(set(degraded_actions)))
+                + " — les outils §21 associés sont enregistrés (app/tools) mais attendent "
+                "leurs entrées (lots L2.3/L2.4)."
             )
         if budget_exceeded:
             base_limitations.append(
@@ -1254,7 +2105,7 @@ class PipelineRunner:
                 "source_type": "internal",
                 "trust_level": 9,
             }
-        ] + web_sources
+        ] + web_sources + ingested_sources
 
         # ------------------------------------------------------------------
         # Constat 1 (B4-bis): Persist to real PostgreSQL when configured
@@ -1280,7 +2131,10 @@ class PipelineRunner:
             "information_units": information_units,
             "evidence": evidence,
             "sources": final_sources,
-            "datasets": [],
+            # §24.1 — the datasets of the documents ingested for this request:
+            # before L2.4 this field was hard-coded to ``[]`` even when a CSV had
+            # been ingested and its Dataset was sitting in PostgreSQL.
+            "datasets": datasets,
             "artifacts": [],
             "transformations": [],
             "conflicts": conflict_payload(conflicts),
@@ -1297,6 +2151,8 @@ class PipelineRunner:
             "provenance": {
                 "pipeline": "PipelineRunner",
                 "request_id": request_id,
+                # §7 — the request type the plan was oriented by (C4).
+                "request_type": request_type,
                 "plan_id": plan.get("plan_id") if isinstance(plan, dict) else None,
                 "steps_executed": len(step_results),
             },
@@ -1307,18 +2163,135 @@ class PipelineRunner:
             },
             "generated_by": {
                 "agent": "PipelineRunner",
-                "version": "1.0.0",
+                "version": API_VERSION,
             },
             "timestamps": {
                 "started_at": start_iso,
                 "completed_at": now_iso,
             },
             "trace": {
-                "steps": [s.get("step_id") for s in (plan.get("steps", []) if isinstance(plan, dict) else [])],
+                # §24.1 — plan step ids followed by the traced LLM phases
+                # (§41.12): understanding, planning, synthesis.
+                "steps": [
+                    *(
+                        s.get("step_id")
+                        for s in (plan.get("steps", []) if isinstance(plan, dict) else [])
+                    ),
+                    *self.trace_steps(request_id),
+                ],
             },
         }
 
-        # Update metrics & running state
+        # ------------------------------------------------------------------
+        # §24.2 — deliver the files the request asked for (if any).
+        # ``evidence_package`` (the §7 default) attaches no file, so a request
+        # that did not ask for a format keeps exactly the previous behaviour.
+        # A format that cannot be produced (pdf, §4.1) or cannot be stored adds
+        # one explicit limitation (§25.2) instead of failing the delivery.
+        # ------------------------------------------------------------------
+        requested_output = (
+            payload.get("required_output")
+            if isinstance(payload, dict)
+            else getattr(payload, "required_output", None)
+        )
+        # §12.1 — the stages that already happened (acquisition, extraction,
+        # synthesis) are recorded *before* the artifact is built, so the file
+        # exported for the client carries them; the `derived` stage is appended
+        # once the artifact exists (a file cannot contain its own record, L1).
+        # §12.1 — only the units this run *extracted* belong to the extraction
+        # stage: the file's units were produced by the ingestion reader (their own
+        # rows below) and the aggregate unit was written by this pipeline.
+        fact_unit_id_set = set(fact_unit_ids)
+        extracted_information_units = [
+            unit
+            for unit in information_units
+            if str(unit.get("information_id")) in fact_unit_id_set
+        ]
+        ingested_material: dict[str, Any] | None = (
+            {
+                "documents": list(request_material.documents),
+                "units": list(request_material.units),
+                "readers": request_material.readers,
+            }
+            if request_material.has_material
+            else None
+        )
+        database_read: dict[str, Any] | None = (
+            {
+                "tool": "postgres_query",
+                **database_material.lineage(),
+            }
+            if database_material is not None and database_material.has_material
+            else None
+        )
+        #: §12.1 — what the « normalized » → « enriched » step of Stage 3.7 really
+        #: did. ``None`` when it promoted no unit: a stage that produced nothing
+        #: is absent from the lineage rather than recorded as if it had run
+        #: (§0.2). The locale is the policy fallback, not the language of each
+        #: unit — those are in the enriched units' own reports.
+        enrichment_report = enrichment.lineage()
+        enrichment_lineage: dict[str, Any] | None = (
+            {
+                "tool": "Enricher.enrich",
+                "locale": (
+                    enrichment_policy.normalization_locale if enrichment_policy else None
+                ),
+                "skipped": len(enrichment.skipped),
+                **enrichment_report,
+            }
+            if enrichment_report
+            else None
+        )
+        transformations = build_transformations(
+            request_id=request_id,
+            objective=objective,
+            sources=final_sources,
+            information_units=extracted_information_units,
+            evidence=evidence,
+            findings=findings,
+            model=self._synthesis_model(request_id),
+            ingested=ingested_material,
+            database=database_read,
+            enrichment=enrichment_lineage,
+            delivered_units=information_units,
+        )
+        if transformations:
+            delivery_response["transformations"] = transformations
+
+        artifact_outcome = await deliver_artifacts(
+            request_id=request_id,
+            required_output=requested_output,
+            delivery=delivery_response,
+            information_units=information_units,
+            evidence=evidence,
+            sources=final_sources,
+        )
+        if artifact_outcome.artifacts:
+            delivery_response["artifacts"] = artifact_outcome.artifacts
+        base_limitations.extend(artifact_outcome.limitations)
+
+        derived = build_transformations(
+            request_id=request_id,
+            objective=objective,
+            sources=final_sources,
+            information_units=extracted_information_units,
+            evidence=evidence,
+            findings=findings,
+            artifacts=artifact_outcome.artifacts,
+            model=self._synthesis_model(request_id),
+            ingested=ingested_material,
+            database=database_read,
+            enrichment=enrichment_lineage,
+            delivered_units=information_units,
+        )
+        if derived:
+            delivery_response["transformations"] = derived
+        persisted_lineage = await persist_transformations(derived, request_id=request_id)
+        if not persisted_lineage and database_configured():
+            base_limitations.append(
+                "Transformations §12.1 non persistées (écriture en échec) : elles restent "
+                "exposées dans cette livraison."
+            )
         duration = time.monotonic() - start_time
         self._runs_count += 1
         self._total_duration += duration

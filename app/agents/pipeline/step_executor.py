@@ -3,7 +3,7 @@
 from copy import deepcopy
 from typing import Any, Protocol
 
-from app.core.errors import ValidationError
+from app.core.errors import InfrastructureError, ValidationError
 
 
 class StepTool(Protocol):
@@ -28,7 +28,14 @@ class StepExecutor:
         result["status"] = "running"
         try:
             result["result"] = tool.execute(deepcopy(result))
-        except Exception as error:
+        except InfrastructureError as error:
+            # §25.2 — an unavailable tool degrades the step: the plan is sound,
+            # the dependency is not. The failure is named, and no output is
+            # invented to fill the hole (§37).
+            result["status"] = "degraded"
+            result["error"] = str(error)
+            return result
+        except Exception as error:  # noqa: BLE001 - a broken tool must not crash the plan
             result["status"] = "failed"
             result["error"] = str(error)
             return result

@@ -1,0 +1,44 @@
+# INIS — dépendances d'intégration pour la suite de tests (§33.2).
+#
+#   docker compose -f docker-compose.test.yml up -d
+#   export INIS_DATABASE_URL=postgresql+asyncpg://inis:inis_test_password@localhost:55432/inis_test
+#   export REDIS_URL=redis://localhost:56379/0
+#   python -m alembic upgrade head && python -m pytest -q
+#
+# La suite privilégie `testcontainers` (tests/containers.py) : ce fichier sert
+# aux exécutions manuelles et aux environnements sans API Docker accessible aux
+# tests, avec des ports décalés pour ne pas masquer une instance de dev.
+name: inis-test
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: inis-test-postgres
+    environment:
+      POSTGRES_USER: inis
+      POSTGRES_PASSWORD: inis_test_password
+      POSTGRES_DB: inis_test
+    ports:
+      - "55432:5432"
+    # Schéma jetable : les tests repartent d'une base migrée à chaque session.
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/00-inis-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inis -d inis_test"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: inis-test-redis
+    ports:
+      - "56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+

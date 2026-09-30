@@ -1,0 +1,79 @@
+# INIS — Docker build context exclusions (§4.1, §41.14)
+#
+# The application image only needs `app/`, `migrations/`, `configs/`,
+# `scripts/`, `pyproject.toml` and `alembic.ini`. Everything that is either
+# rebuilt inside the image, environment-specific, or secret must stay out of
+# the context so builds stay small and no credential can be baked into a layer.
+
+# -- Version control & editor state -----------------------------------------
+.git
+.gitignore
+.gitattributes
+.github
+.idea
+.vscode
+*.orig
+*.rej
+*.swp
+
+# -- Secrets & local configuration (§19.4) ----------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+configs/*.local.toml
+secrets/
+vault-data/
+
+# -- Python build & cache artifacts -----------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+junit*.xml
+pip-wheel-metadata/
+
+# -- Tests, tooling and docs (not needed at runtime) ------------------------
+tests/
+docs/
+deploy/
+benchmarks/
+.frontend-backup/
+
+# -- Frontend (built and served by its own image) ---------------------------
+frontend/node_modules/
+frontend/dist/
+node_modules/
+
+# -- Local runtime state ----------------------------------------------------
+*.log
+logs/
+tmp/
+.tmp/
+data/
+pgdata/
+miniodata/
+redisdata/
+*.sqlite
+*.db
+*.dump
+!docker/postgres/init.sql
+
+# -- OS noise ---------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+

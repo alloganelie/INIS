@@ -1,0 +1,65 @@
+# INIS — surcouche de production (§4, §19).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Différences avec la pile de développement :
+# * images immuables construites sans montage de sources (`docker/Dockerfile`) ;
+# * `restart: always`, aucune publication de port de base de données ;
+# * identifiants obligatoires : le démarrage échoue si `.env` est incomplet
+#   (`${VAR:?}`) — aucun mot de passe de développement n'est réutilisé ;
+# * migrations appliquées par un service `migrate` distinct, pour ne pas faire
+#   dépendre la disponibilité de l'API d'un `alembic upgrade` concurrent.
+name: inis-prod
+
+services:
+  postgres:
+    ports: !reset []
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+    restart: always
+
+  redis:
+    ports: !reset []
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: always
+
+  rabbitmq:
+    ports: !reset ["5672:5672"]
+    restart: always
+
+  object-storage:
+    restart: always
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    restart: always
+    volumes: !override []
+    environment:
+      ENVIRONMENT: production
+      INIS_AUTH_ENABLED: ${INIS_AUTH_ENABLED:-true}
+      INIS_RATE_LIMIT_ENABLED: ${INIS_RATE_LIMIT_ENABLED:-true}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      INIS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      SERPER_API_KEY: ${SERPER_API_KEY:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+
+  # §41.14 — les migrations sont un travail de déploiement, pas une dépendance
+  # de démarrage de l'API : ce service s'exécute une fois puis se termine.
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    restart: "no"
+

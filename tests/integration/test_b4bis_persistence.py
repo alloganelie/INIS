@@ -9,9 +9,6 @@ Acceptance criteria of B4-bis Constat 1:
 
 from __future__ import annotations
 
-import os
-from typing import Any
-
 import pytest
 from sqlalchemy import text
 
@@ -96,19 +93,35 @@ async def test_pipeline_persists_information_units_to_db(db_url: str, monkeypatc
                     {"id": inf_id},
                 )
             ).scalar_one()
-            trf_count = (
+            trf_rows = (
                 await conn.execute(
-                    text("SELECT count(*) FROM transformations WHERE justification LIKE :just"),
+                    text(
+                        "SELECT parameters->>'stage' AS stage, tool FROM transformations "
+                        "WHERE justification LIKE :just"
+                    ),
                     {"just": f"%{req_id}%"},
                 )
-            ).scalar_one()
+            ).mappings().all()
     finally:
         await engine.dispose()
 
     assert unit_row is not None
     assert unit_row["id"] == inf_id
     assert ev_count >= 1
-    assert trf_count >= 1
+    # §12.1 — one transformation per stage the run really executed, not a single
+    # generic TRF_ row (C11): the stages are readable from the row itself.
+    #
+    # The aggregate unit this run synthesises is **not** an extractor output, so
+    # no `normalized` row is claimed when no fact was extracted: a run that
+    # acquired sources and extracted nothing records `raw` and stops there.
+    #
+    # Uniqueness is asserted per ``(stage, tool)`` and not per row count: two
+    # producers may legitimately record the same stage (web acquisition and the
+    # reader that ingested a file), and counting rows would forbid the truth.
+    stages = {row["stage"] for row in trf_rows}
+    assert "raw" in stages
+    producers = [(row["stage"], row["tool"]) for row in trf_rows]
+    assert len(producers) == len(set(producers)), "one row per (stage, producer)"
 
 
 @pytest.mark.asyncio

@@ -1,10 +1,19 @@
 """S3/MinIO client per §4.3 (object storage)."""
 
+from __future__ import annotations
+
+from pathlib import Path
 from typing import Optional
 
 import boto3
 from botocore.client import Config
 from botocore.exceptions import ClientError
+
+from app.core.errors import ValidationError
+from app.core.size_limits import size_overflow_message
+
+#: Bytes read per iteration when streaming an object to disk (1 MiB).
+STREAM_CHUNK_SIZE = 1024 * 1024
 
 
 class S3Client:
@@ -89,9 +98,108 @@ class S3Client:
 
         Raises:
             ClientError: If the download fails.
+
+        ⚠️ The whole object lands in memory. For anything that can be large, use
+        :meth:`stream_to_file`, which refuses an oversized object **before** it is
+        loaded (§41.13).
         """
         response = self._s3_client.get_object(Bucket=self._bucket_name, Key=key)
         return response["Body"].read()
+
+    def head(self, key: str) -> dict:
+        """Return the metadata of one object without reading it.
+
+        Args:
+            key: Object key to inspect.
+
+        Returns:
+            ``{"size_bytes": int | None, "content_type": str | None, "etag": str | None}``
+            — the values the backend exposes, ``None`` when it exposes none.
+
+        Raises:
+            ClientError: If the object does not exist or the head fails.
+        """
+        response = self._s3_client.head_object(Bucket=self._bucket_name, Key=key)
+        size = response.get("ContentLength")
+        return {
+            "size_bytes": int(size) if isinstance(size, int) else None,
+            "content_type": response.get("ContentType") or None,
+            "etag": response.get("ETag") or None,
+        }
+
+    def stream_to_file(
+        self,
+        key: str,
+        path: str | Path,
+        *,
+        chunk_size: int = STREAM_CHUNK_SIZE,
+        max_bytes: int | None = None,
+        known_size: int | None = None,
+    ) -> int:
+        """Stream an object to *path*, chunk by chunk, refusing oversized ones.
+
+        Unlike :meth:`download`, the object is never materialised in memory as a
+        single blob: each chunk is written as it arrives, and the transfer is
+        aborted as soon as ``max_bytes`` is exceeded — so refusing a 10 GiB object
+        costs one chunk, not ten gigabytes of RAM (§41.13).
+
+        Args:
+            key: Object key to download.
+            path: Destination file; its parent directory is created if needed.
+            chunk_size: Bytes read per iteration.
+            max_bytes: Ceiling for this transfer; ``None`` means unbounded.
+            known_size: Size already learnt from :meth:`head`, to avoid a second
+                HEAD request when the caller has it.
+
+        Returns:
+            The number of bytes written.
+
+        Raises:
+            ValidationError: When the object exceeds *max_bytes* (checked on the
+                declared size first, then while streaming).
+            ClientError: If the download fails.
+
+        A refused or failed transfer leaves **no** partial file behind: a
+        half-downloaded source must never be mistaken for a complete one (§0.2).
+        """
+        target = Path(path)
+        if max_bytes is not None:
+            declared = known_size
+            if declared is None:
+                declared = self.head(key)["size_bytes"]
+            if declared is not None and declared > max_bytes:
+                raise ValidationError(
+                    size_overflow_message(
+                        max_bytes, int(declared), action="Téléchargement refusé"
+                    )
+                )
+
+        response = self._s3_client.get_object(Bucket=self._bucket_name, Key=key)
+        body = response["Body"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        written = 0
+        try:
+            with target.open("wb") as handle:
+                while True:
+                    chunk = body.read(chunk_size)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if max_bytes is not None and written > max_bytes:
+                        raise ValidationError(
+                            size_overflow_message(
+                                max_bytes, written, action="Téléchargement refusé"
+                            )
+                        )
+                    handle.write(chunk)
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+        finally:
+            close = getattr(body, "close", None)
+            if callable(close):
+                close()
+        return written
 
     def delete(self, key: str) -> bool:
         """Delete an object from S3/MinIO.

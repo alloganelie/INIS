@@ -30,24 +30,33 @@ class CapabilityIndex:
         self.add_agent(agent_id, new_capabilities)
 
     def get_agents_for_capability(self, capability: str) -> list[str]:
-        """Get all agent_ids that have the given capability."""
-        return list(self._index.get(capability, set()))
+        """Get all agent_ids that have the given capability.
+
+        The result is sorted: the index is backed by sets, so an unsorted
+        projection would return a different order in every process and make
+        routing decisions (§6) and registry exchanges (§5.3) non-reproducible.
+        """
+        return sorted(self._index.get(capability, set()))
 
     def get_capabilities_for_agent(self, agent_id: str) -> list[str]:
-        """Get all capabilities for a given agent."""
-        return list(self._agent_capabilities.get(agent_id, set()))
+        """Get all capabilities for a given agent, in a stable order."""
+        return sorted(self._agent_capabilities.get(agent_id, set()))
 
     def has_capability(self, capability: str) -> bool:
         """Check if any agent has the given capability."""
         return capability in self._index
 
     def list_capabilities(self) -> list[str]:
-        """List all indexed capabilities."""
-        return list(self._index.keys())
+        """List all indexed capabilities, in a stable order."""
+        return sorted(self._index.keys())
 
     def to_dict(self) -> dict[str, list[str]]:
-        """Export index as dictionary."""
-        return {cap: list(agents) for cap, agents in self._index.items()}
+        """Export index as dictionary.
+
+        Capabilities and their agents are sorted so the same index always
+        projects to the same payload (§5.3 idempotence).
+        """
+        return {cap: sorted(agents) for cap, agents in sorted(self._index.items())}
 
     @classmethod
     def from_dict(cls, data: dict[str, list[str]]) -> "CapabilityIndex":

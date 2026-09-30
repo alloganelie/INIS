@@ -58,6 +58,26 @@ class TestStepNormalization:
         plan = parse_plan(json.dumps({"steps": [{"action": "search"}]}))
         assert plan["steps"][0]["description"] == "search"
 
+    def test_a_declared_action_is_kept_as_an_action(self) -> None:
+        """§8.4 — the parser reports the declared ``action`` as an action."""
+        step = parse_plan(
+            json.dumps(
+                {"steps": [{"action": "collect_information", "description": "chercher"}]}
+            )
+        )["steps"][0]
+
+        assert step["action"] == "collect_information"
+        assert step["description"] == "chercher"
+
+    def test_prose_never_becomes_an_action(self) -> None:
+        """A step that declares no action carries none: the validator refuses it."""
+        step = parse_plan(json.dumps({"steps": [{"description": "lire le fichier"}]}))[
+            "steps"
+        ][0]
+
+        assert "action" not in step
+        assert step["description"] == "lire le fichier"
+
     def test_missing_optional_fields_become_empty_strings(self) -> None:
         """``tool`` and ``expected_output`` default to ``""`` (never None)."""
         step = parse_plan(json.dumps({"steps": [{"description": "a"}]}))["steps"][0]

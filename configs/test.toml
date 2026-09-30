@@ -1,0 +1,58 @@
+# INIS â€” profil de test (Â§33).
+#
+# Les tests n'ont pas de service externe : le rÃ©seau web est remplacÃ© par un
+# transport simulÃ© et le LLM par un stub. Ce profil sert de rÃ©fÃ©rence explicite
+# pour les valeurs que la suite suppose (garde-fous bas, budgets serrÃ©s).
+
+[environment]
+name = "test"
+
+# â”€â”€ Â§41.2 : budgets par requÃªte â€” bornÃ©s pour rendre les dÃ©passements testables
+[budgets]
+# max_llm_tokens = 8000
+# max_web_requests = 3
+# max_compute_seconds = 30
+
+# â”€â”€ Â§7 : contraintes par dÃ©faut d'une demande â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+[request_defaults]
+minimum_confidence = 0.8
+maximum_execution_time_seconds = 300
+maximum_iterations = 12
+maximum_web_depth = 3
+required_output_format = "evidence_package"
+ttl_seconds = 900
+
+# â”€â”€ Â§41.13 : garde-fous d'exÃ©cution â€” plus bas qu'en production â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+[limits]
+max_plan_steps = 50
+max_parallel_tool_calls = 10
+# §36.6 — taille maximale d'un document téléversé (25 Mio), miroir de
+# app/connectors/files/upload_policy.py::DEFAULT_MAX_UPLOAD_BYTES.
+max_upload_bytes = 26214400
+
+# ADR 007 §41.6 — nombre d'unités §11 au-delà duquel l'extraction se fait par
+# tronçons, miroir de app/knowledge/normalization/limits.py.
+max_information_units_per_request = 50
+
+# â”€â”€ Â§41.5 : cache â€” L1 en mÃ©moire uniquement, aucun Redis requis â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+[cache]
+l1_enabled = true
+redis_ttl_seconds = 60
+redis_prefix = "inis-test"
+
+# â”€â”€ Â§22 : LLM â€” le stub est le comportement attendu en test â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+[llm]
+provider = "stub"
+default_model = "stub"
+probe_max_tokens = 8
+# Â§41.8 â€” mÃªme budget qu'en production, pour tester le chemin rÃ©el du routeur.
+retry_attempts = 3
+# Â§22.2 â€” chaÃ®ne vide : les tests ne doivent jamais joindre un fournisseur.
+fallback_models = []
+
+# â”€â”€ Â§9 : recherche web â€” fournisseur simulÃ©, jamais d'appel sortant â”€â”€â”€â”€â”€â”€â”€â”€
+[web]
+provider = "mock"
+fallback_provider = "mock"
+results_per_query = 3
+

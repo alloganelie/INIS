@@ -1,0 +1,152 @@
+{
+  "uid": "inis-34",
+  "title": "INIS — métriques obligatoires §34",
+  "description": "Un panneau par métrique de §34. Les séries sont exposées par GET /v1/metrics?format=prometheus (app/observability/metrics.py).",
+  "tags": ["inis", "spec-34"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "editable": true,
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "request_success_rate",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "request_success_rate" }]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "request_latency (p95)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "request_latency_p95" }]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "source_failure_rate",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "source_failure_rate" }]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "tool_failure_rate",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "tool_failure_rate" }]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "agent_success_rate",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "agent_success_rate" }]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "confidence_distribution (p50)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "confidence_distribution_p50" }]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "conflict_rate",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "conflict_rate" }]
+    },
+
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "stale_data_rate",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "stale_data_rate" }]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "cache_hit_rate",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "cache_hit_rate" }]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "vector_search_latency (p95)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "vector_search_latency_p95" }]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "postgres_latency (p95)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "postgres_latency_p95" }]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "broker_latency (p95)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "broker_latency_p95" }]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "llm_cost (total)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 32 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "llm_cost_total" }]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "llm_latency (p95)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 32 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [{ "refId": "A", "expr": "llm_latency_p95" }]
+    }
+  ]
+}
+

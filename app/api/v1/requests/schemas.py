@@ -9,15 +9,22 @@ contract cannot drift away from the domain contract (see
 
 from __future__ import annotations
 
-from typing import Any
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from app.domain.value_objects.request_constraints import DEFAULT_CONSTRAINTS
-from app.domain.value_objects.request_constraints import DEFAULT_REQUIRED_OUTPUT
-from app.domain.value_objects.request_constraints import OutputFormat
+from app.domain.value_objects.request_constraints import (
+    DEFAULT_CONSTRAINTS,
+    DEFAULT_REQUIRED_OUTPUT,
+    OutputFormat,
+)
 from app.governance.budget.quotas import Budget
+from app.storage.object_storage.object_storage_factory import split_storage_ref
+
+#: §5.2/§9.1 — the only schemes a client may name as a source without multipart.
+#: A local path would hand the API a read primitive over the host filesystem
+#: (§19), and an ``http://`` reference would turn creation into an SSRF vector.
+SOURCE_REF_SCHEMES: tuple[str, ...] = ("s3://",)
 
 
 class RequestBudget(BaseModel):
@@ -85,6 +92,42 @@ class InformationRequestCreate(BaseModel):
     budget: RequestBudget | None = None
     #: §41.1 — TTL of the request; expiry delivers a PARTIAL_SUCCESS.
     ttl_seconds: int = Field(default=900, ge=1)
+    #: §5.2/§9.1 — object already stored in the deployment's bucket, for clients
+    #: that speak the protocol instead of HTTP multipart. Ingested **before** the
+    #: run starts, so the request's plan sees the document it owns.
+    source_ref: str | None = Field(
+        default=None,
+        description="Object already in the INIS bucket (s3://bucket/cle), §5.2",
+    )
+
+    @field_validator("source_ref")
+    @classmethod
+    def _validate_source_ref(cls, value: str | None) -> str | None:
+        """Refuse a source reference INIS cannot read, naming why (§25.2).
+
+        Raises:
+            ValueError: When the reference is empty, names a scheme other than
+                the accepted ones, or is not a complete ``s3://bucket/cle``.
+        """
+        if value is None:
+            return None
+        candidate = value.strip()
+        if not candidate:
+            raise ValueError(
+                "source_ref vide : omettre le champ, ou nommer un objet "
+                "s3://bucket/chemin (§5.2)."
+            )
+        if not candidate.startswith(SOURCE_REF_SCHEMES):
+            raise ValueError(
+                f"source_ref refusée : schéma attendu {' ou '.join(SOURCE_REF_SCHEMES)} "
+                f"(reçu : {candidate!r}). Un chemin local ou une URL HTTP n'est pas une "
+                "source admissible (§9.1, §19)."
+            )
+        if split_storage_ref(candidate) is None:
+            raise ValueError(
+                f"source_ref incomplète : attendu s3://bucket/chemin (reçu : {candidate!r})."
+            )
+        return candidate
 
 
 class InformationRequestResponse(BaseModel):
@@ -106,6 +149,10 @@ class InformationRequestResponse(BaseModel):
     required_output: RequiredOutput = Field(default_factory=RequiredOutput)
     requester: dict[str, Any] = Field(default_factory=dict)
     permissions: dict[str, Any] = Field(default_factory=dict)
+    #: §41.2 — the budget the request was created with. Exposed so an ingestion
+    #: endpoint can enforce ``max_storage_bytes`` against the request itself
+    #: instead of a global default the requester never agreed to.
+    budget: RequestBudget | None = None
     status: str = "received"
     created_at: str | None = None
     pipeline_state: dict[str, Any] | None = None

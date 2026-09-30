@@ -5,9 +5,13 @@ from ulid import ULID as PythonUlid
 from app.core.constants import ULID_PREFIXES as CORE_ULID_PREFIXES
 
 
-ULID_PREFIXES = CORE_ULID_PREFIXES | frozenset({"PLAN_", "STEP_", "ITER_", "VER_"})
+ULID_PREFIXES = CORE_ULID_PREFIXES | frozenset({"PLAN_", "STEP_", "ITER_", "VER_", "BUDG_"})
 #: ``VER_`` — §18.1 record version ids (extension of the §0.3 registry,
 #: following the ``PLAN_``/``STEP_``/``ITER_`` planning-zone precedent).
+#: ``BUDG_`` — §27 ``budget_usage`` row ids: the table is created by migration
+#: ``0005`` and has no entry in the §0.3 identifier table, so its identifier
+#: belongs to this extension set rather than to ``app.core.constants``.
+
 
 
 class ULID:

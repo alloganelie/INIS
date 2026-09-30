@@ -172,6 +172,10 @@ logs/
 
 # -----------------------------------------------------------------------------
 # Artefacts agents (à ajuster selon ta réponse Q5)
+
+# Livrable produit par un run de démonstration (pas une source).
+deliverable_*.pdf
+
 # -----------------------------------------------------------------------------
 agent_workspace/tasks/*
 agent_workspace/reports/*
@@ -187,3 +191,4 @@ tree.txt
 *.bak
 *.tmp
 *.orig
+start.bat 

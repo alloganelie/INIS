@@ -34,3 +34,32 @@ def create_engine_or_none(database_url: str, echo: bool = False) -> AsyncEngine 
         return create_engine(database_url, echo=echo)
     except Exception:
         return None
+
+
+#: Process-wide engine built from ``INIS_DATABASE_URL`` (one per process).
+_DEFAULT_ENGINE: AsyncEngine | None = None
+_DEFAULT_URL: str | None = None
+
+
+def get_default_engine() -> AsyncEngine | None:
+    """Return the engine of ``INIS_DATABASE_URL``, or ``None`` when unset.
+
+    The URL is re-read on every call so an environment change (tests, admin
+    tooling) is picked up without a process restart; the engine itself is
+    cached per URL to avoid leaking connection pools.
+    """
+    global _DEFAULT_ENGINE, _DEFAULT_URL
+    db_url = os.getenv("INIS_DATABASE_URL")
+    if not db_url:
+        return None
+    if _DEFAULT_ENGINE is None or _DEFAULT_URL != db_url:
+        _DEFAULT_ENGINE = create_engine(db_url)
+        _DEFAULT_URL = db_url
+    return _DEFAULT_ENGINE
+
+
+def set_default_engine(engine: AsyncEngine | None) -> None:
+    """Override (or clear) the process-wide engine, for tests and tooling."""
+    global _DEFAULT_ENGINE, _DEFAULT_URL
+    _DEFAULT_ENGINE = engine
+    _DEFAULT_URL = None

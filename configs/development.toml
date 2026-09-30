@@ -1,0 +1,58 @@
+# INIS â€” profil de dÃ©veloppement (chargÃ© par dÃ©faut en local).
+#
+# MÃªme structure que `configs/default.toml` ; seules les valeurs de confort
+# local diffÃ¨rent. Aucun secret ici : les identifiants viennent de `.env`.
+
+[environment]
+name = "development"
+
+# â”€â”€ Â§41.2 : budgets par requÃªte â€” non bornÃ©s, une demande fixe les siens â”€â”€â”€â”€
+[budgets]
+# max_llm_tokens = 200000
+# max_web_requests = 20
+# max_api_calls = 40
+
+# â”€â”€ Â§7 : contraintes par dÃ©faut d'une demande â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+[request_defaults]
+minimum_confidence = 0.8
+maximum_execution_time_seconds = 300
+maximum_iterations = 12
+maximum_web_depth = 3
+required_output_format = "evidence_package"
+ttl_seconds = 900
+
+# â”€â”€ Â§41.13 : garde-fous d'exÃ©cution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+[limits]
+max_plan_steps = 50
+max_parallel_tool_calls = 10
+# §36.6 — taille maximale d'un document téléversé (25 Mio), miroir de
+# app/connectors/files/upload_policy.py::DEFAULT_MAX_UPLOAD_BYTES.
+max_upload_bytes = 26214400
+
+# ADR 007 §41.6 — nombre d'unités §11 au-delà duquel l'extraction se fait par
+# tronçons, miroir de app/knowledge/normalization/limits.py.
+max_information_units_per_request = 50
+
+# â”€â”€ Â§41.5 : cache â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+[cache]
+l1_enabled = true
+redis_ttl_seconds = 300
+redis_prefix = "inis"
+
+# â”€â”€ Â§22 : LLM â€” sans clÃ©, rÃ©ponses stub explicitement marquÃ©es â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+[llm]
+provider = "openrouter"
+default_model = "openai/gpt-4"
+probe_max_tokens = 16
+# Â§41.8 â€” tentatives totales par modÃ¨le, premiÃ¨re comprise.
+retry_attempts = 3
+# Â§22.2 â€” chaÃ®ne de repli ordonnÃ©e (prÃ©fÃ©rÃ© â†’ moins prÃ©fÃ©rÃ©), dÃ©finie par le
+# dÃ©ploiement via LLM_MODEL_FALLBACKS ; vide par dÃ©faut dans le code.
+fallback_models = []
+
+# â”€â”€ Â§9 : recherche web â€” Wikipedia assure la dÃ©gradation sans clÃ© Serper â”€â”€â”€â”€
+[web]
+provider = "serper"
+fallback_provider = "wikipedia"
+results_per_query = 5
+

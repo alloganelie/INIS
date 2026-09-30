@@ -13,8 +13,11 @@ from app.api.v1.requests.schemas import (
     InformationRequestCreate,
     InformationRequestResponse,
 )
+from app.core.errors import InisError
+from app.core.statuses import CANCELLED_STATUS
 from app.domain.value_objects.ulid import ULID
 from app.governance.budget.quotas import GLOBAL_USAGE
+from app.knowledge.ingestion.object_intake import intake_source_ref
 
 router = APIRouter(prefix="/requests", tags=["requests"])
 usage_router = APIRouter(prefix="/usage", tags=["usage"])
@@ -28,12 +31,39 @@ _REQUESTS_STORE: dict[str, InformationRequestResponse] = {}
     status_code=status.HTTP_201_CREATED,
     summary="Create a new Information Request",
 )
-def create_request(
+async def create_request(
     payload: InformationRequestCreate,
     background_tasks: BackgroundTasks = BackgroundTasks(),
 ) -> InformationRequestResponse:
-    """Create a new information request, trigger the pipeline runner, and return generated request_id."""
+    """Create a new information request, trigger the pipeline runner, and return generated request_id.
+
+    When the payload names a ``source_ref`` (§5.2), the object is **ingested
+    before** the run is scheduled: the plan must know the document the request
+    owns, otherwise the source it named would be invisible to its own run. A
+    source that cannot be read is a refusal naming the cause, not a request
+    created around a source that does not exist (§25.2).
+
+    Raises:
+        HTTPException: 422 when the named source cannot be ingested.
+    """
     req_id = ULID.new("REQ_")
+
+    if payload.source_ref:
+        try:
+            await intake_source_ref(
+                request_id=req_id,
+                source_ref=payload.source_ref,
+                budget=payload.budget,
+            )
+        except InisError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    f"Source '{payload.source_ref}' refusée : "
+                    f"{type(exc).__name__} — {exc}"
+                ),
+            ) from exc
+
     created_at = datetime.now(timezone.utc).isoformat()
     item = InformationRequestResponse(
         request_id=req_id,
@@ -46,6 +76,7 @@ def create_request(
         required_output=payload.required_output,
         requester=payload.requester,
         permissions=payload.permissions,
+        budget=payload.budget,
         status="received",
         created_at=created_at,
     )
@@ -74,6 +105,30 @@ def get_request(id: str) -> InformationRequestResponse:
     if state:
         item.status = state.get("status", item.status)
         item.pipeline_state = state
+    return item
+
+
+@router.post(
+    "/{id}/cancel",
+    response_model=InformationRequestResponse,
+    summary="Cancel an Information Request (§32)",
+)
+def cancel_request(id: str) -> InformationRequestResponse:
+    """Cancel a request and return its updated state (§1.3 ``CANCELLED``).
+
+    Cancellation is idempotent: cancelling an already-cancelled request returns
+    the same state instead of failing, so a client retry after a timeout is
+    safe. An unknown request is a 404, never a silent success.
+    """
+    if id not in _REQUESTS_STORE:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Information request '{id}' not found",
+        )
+    item = _REQUESTS_STORE[id]
+    state = pipeline_runner.cancel(id)
+    item.status = str(state.get("status") or CANCELLED_STATUS)
+    item.pipeline_state = state
     return item
 
 

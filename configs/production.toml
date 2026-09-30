@@ -1,0 +1,63 @@
+# INIS â€” profil de production (Â§19, Â§41.2).
+#
+# Aucun secret dans ce fichier : `JWT_SECRET`, `POSTGRES_PASSWORD`, clÃ©s LLM et
+# Serper sont fournis par l'environnement (`.env`, secrets k8s/Vault). Les
+# budgets y sont *bornÃ©s* : un agent ne peut plus consommer sans plafond.
+
+[environment]
+name = "production"
+
+# â”€â”€ Â§41.2 : budgets par requÃªte â€” bornage par dÃ©faut en production â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+[budgets]
+# max_llm_tokens = 200000
+# max_web_requests = 20
+# max_api_calls = 40
+# max_compute_seconds = 300
+# max_total_cost_usd = 0.50
+# Ã€ recopier dans la `budget` de la requÃªte : ces valeurs ne sont pas injectÃ©es
+# implicitement, une demande reste maÃ®tresse de ses propres limites.
+
+# â”€â”€ Â§7 : contraintes par dÃ©faut d'une demande â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+[request_defaults]
+minimum_confidence = 0.8
+maximum_execution_time_seconds = 300
+maximum_iterations = 12
+maximum_web_depth = 3
+required_output_format = "evidence_package"
+ttl_seconds = 900
+
+# â”€â”€ Â§41.13 : garde-fous d'exÃ©cution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+[limits]
+max_plan_steps = 50
+max_parallel_tool_calls = 10
+# §36.6 — taille maximale d'un document téléversé (25 Mio), miroir de
+# app/connectors/files/upload_policy.py::DEFAULT_MAX_UPLOAD_BYTES.
+max_upload_bytes = 26214400
+
+# ADR 007 §41.6 — nombre d'unités §11 au-delà duquel l'extraction se fait par
+# tronçons, miroir de app/knowledge/normalization/limits.py.
+max_information_units_per_request = 50
+
+# â”€â”€ Â§41.5 : cache â€” partagÃ© via Redis (L1 processuel toujours actif) â”€â”€â”€â”€â”€â”€â”€
+[cache]
+l1_enabled = true
+redis_ttl_seconds = 300
+redis_prefix = "inis"
+
+# â”€â”€ Â§22 : LLM â€” modÃ¨le par dÃ©faut, surchargeable par LLM_MODEL_DEFAULT â”€â”€â”€â”€â”€
+[llm]
+provider = "openrouter"
+default_model = "openai/gpt-4"
+probe_max_tokens = 16
+# Â§41.8 â€” tentatives totales par modÃ¨le, premiÃ¨re comprise.
+retry_attempts = 3
+# Â§22.2 â€” chaÃ®ne de repli ordonnÃ©e : renseigner explicitement les modÃ¨les
+# gratuits validÃ©s pour la production (aucune valeur par dÃ©faut dans le code).
+fallback_models = []
+
+# â”€â”€ Â§9 : recherche web â€” Serper avec repli Wikipedia â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+[web]
+provider = "serper"
+fallback_provider = "wikipedia"
+results_per_query = 5
+

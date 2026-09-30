@@ -19,7 +19,8 @@ The fixtures below are the shared contract:
 
 from __future__ import annotations
 
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
@@ -35,9 +36,9 @@ from tests.containers import (  # noqa: F401 - fixtures re-exported for the suit
     postgres_container,
     postgres_url,
     redis_container,
+    run_alembic_upgrade,
 )
 from tests.containers import redis_url as _redis_url_from_container
-from tests.containers import run_alembic_upgrade
 
 
 @pytest.fixture(autouse=True)
@@ -65,7 +66,7 @@ def reset_pipeline_state():
 
 
 @pytest.fixture(scope="session")
-def db_url(postgres_container: Any) -> Iterator[str]:
+def db_url(postgres_container: Any) -> Iterator[str]:  # noqa: F811 - fixture dependency
     """Provide a migrated PostgreSQL URL for the session (§4.2, §27).
 
     The ``pgvector`` container is started once, ``alembic upgrade head`` is
@@ -78,14 +79,13 @@ def db_url(postgres_container: Any) -> Iterator[str]:
 
 
 @pytest.fixture(scope="session")
-def redis_url(redis_container: Any) -> str:
+def redis_url(redis_container: Any) -> str:  # noqa: F811 - fixture dependency
     """Provide a live Redis endpoint for the session (§19, §41.5)."""
     return _redis_url_from_container(redis_container)
 
 
-
 @pytest.fixture(scope="session")
-def minio_url(minio_container: Any) -> str:
+def minio_url(minio_container: Any) -> str:  # noqa: F811 - fixture dependency
     """Provide a live MinIO endpoint for the session (§4.3)."""
     return minio_endpoint(minio_container)
 
@@ -96,18 +96,42 @@ class MockLLMControl:
     Attributes:
         content: Text returned by every ``complete`` call.
         stub: Value of ``LLMResponse.stub`` the stub reports.
+        input_tokens: ``LLMResponse.input_tokens`` reported (§41.2 metering).
+        output_tokens: ``LLMResponse.output_tokens`` reported (§41.2 metering).
+        error: Exception raised instead of returning a response, when set (§25).
         calls: ``(task, prompt)`` pairs recorded for assertions.
     """
 
     def __init__(self) -> None:
         self.content: str = ""
         self.stub: bool = False
+        self.input_tokens: int = 0
+        self.output_tokens: int = 0
+        self.error: BaseException | None = None
         self.calls: list[tuple[Any, str]] = []
 
-    def configure(self, content: str, *, stub: bool = False) -> "MockLLMControl":
+    def configure(
+        self,
+        content: str,
+        *,
+        stub: bool = False,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+    ) -> MockLLMControl:
         """Set the canned answer and return ``self`` for fluent use."""
         self.content = content
         self.stub = stub
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        return self
+
+    def fail_with(self, error: BaseException) -> MockLLMControl:
+        """Make every call raise *error* — the §25 failure path.
+
+        The stub then behaves like a routed provider that is unreachable, which
+        lets a test assert what the caller does when nothing can be synthesised.
+        """
+        self.error = error
         return self
 
 
@@ -120,10 +144,14 @@ def mock_llm(monkeypatch: pytest.MonkeyPatch) -> MockLLMControl:
 
     async def _complete(self: Any, task: Any, prompt: str, **kwargs: Any) -> Any:
         control.calls.append((task, prompt))
+        if control.error is not None:
+            raise control.error
         return model_router_module.LLMResponse(
             content=control.content,
             model="mock-llm",
             stub=control.stub,
+            input_tokens=control.input_tokens,
+            output_tokens=control.output_tokens,
         )
 
     monkeypatch.setattr(model_router_module.ModelRouter, "complete", _complete)
@@ -181,4 +209,3 @@ def mock_web(monkeypatch: pytest.MonkeyPatch) -> Any:
 
     monkeypatch.setattr(httpx.AsyncClient, "__init__", _init)
     return handler
-

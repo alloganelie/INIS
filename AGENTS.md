@@ -17,6 +17,7 @@ Fichier lu automatiquement par les agents (Codex, Cursor, OpenCode…).
 | Sujet | Fichier |
 |---|---|
 | Spécification complète | `INIS_SPEC.md` (4000 lignes — NE PAS lire en entier) |
+| **Plan de conformité spec (checklist d'avancement)** | `docs/SPEC_CONFORMANCE_PLAN.md` |
 | Arborescence | `ARCHITECTURE.md` |
 | Contrats entre modules | `CONTRACTS.md` |
 | Règles de code | `CODING_RULES.md` |

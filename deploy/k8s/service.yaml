@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: inis-api-service
+  namespace: inis
+  labels:
+    app.kubernetes.io/name: inis
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: inis
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
+

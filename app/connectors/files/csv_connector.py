@@ -11,6 +11,17 @@ from app.connectors.base import (
     SourceCandidate,
     SourceMetadata,
 )
+from app.connectors.files.explicit_target import (
+    TargetSpec,
+    explicit_candidate,
+    explicit_target,
+    read_candidate,
+)
+
+CONTENT_TYPE = "text/csv"
+
+#: §9.1 — what this connector reads, and how (§8.2/§11 traceability).
+SPEC = TargetSpec(kind="csv", suffixes=(".csv",), content_type=CONTENT_TYPE)
 
 
 class CSVConnector:
@@ -31,11 +42,22 @@ class CSVConnector:
         """Discover CSV files matching the query.
 
         Args:
-            query: Query for source discovery.
+            query: Query for source discovery; a ``filters["location"]`` names one
+                exact file (path or ``s3://bucket/key``), otherwise the base
+                directory is globbed (§9.1/C3).
 
         Returns:
             List of source candidates.
+
+        Raises:
+            ValidationError: When an explicit target is not a ``.csv`` file.
         """
+        target = explicit_target(query)
+        if target is not None:
+            # §9.1/C3 — the requester named one file: an uploaded document or an
+            # S3 object is not in the base directory and would be invisible here.
+            return [explicit_candidate(target, SPEC)]
+
         candidates: list[SourceCandidate] = []
         for csv_file in self._base_path.glob("*.csv"):
             if query.query_string.lower() in csv_file.name.lower():
@@ -55,17 +77,16 @@ class CSVConnector:
             candidate: Source candidate to retrieve.
 
         Returns:
-            Raw source data.
+            Raw source data, whose ``metadata`` carries the ``content_type`` and
+            the ``location`` it was read from (§11).
+
+        Raises:
+            FileNotFoundError: When the file does not exist.
+            InfrastructureError: When the object storage is not configured for an
+                ``s3://`` target.
+            ValidationError: When the source exceeds ``[limits].max_upload_bytes``.
         """
-        file_path = Path(candidate.location)
-        with file_path.open("r", encoding="utf-8") as f:
-            content = f.read()
-        return RawSource(
-            source_id=candidate.source_id,
-            data=content,
-            content_type="text/csv",
-            metadata=candidate.metadata,
-        )
+        return read_candidate(candidate, SPEC)
 
     async def inspect(self, raw: RawSource) -> SourceMetadata:
         """Inspect raw CSV data to extract metadata.

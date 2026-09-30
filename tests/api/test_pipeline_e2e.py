@@ -386,3 +386,118 @@ async def test_pipeline_real_web_search_wiring(monkeypatch: pytest.MonkeyPatch) 
 
     # §0.2 limitation notice still present
     assert any("§0.2" in lim for lim in delivery["limitations"])
+
+
+@pytest.mark.asyncio
+async def test_pipeline_calls_llm_synthesis_and_meters_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The synthesis stage must invoke the router and meter its real tokens (§41.2).
+
+    Regression: the runner metered ``response.usage`` — an attribute
+    ``LLMResponse`` does not have — so every synthesis call reported
+    ``tokens_llm_input/output == 0`` in the delivery usage report.
+    """
+    from app.llm.router.model_router import LLMResponse, LLMTask
+
+    synthesis_prompts: list[str] = []
+
+    async def mock_complete(
+        self: Any, task: LLMTask, prompt: str, **kwargs: Any
+    ) -> LLMResponse:
+        if "Réponds en français" in prompt:
+            synthesis_prompts.append(prompt)
+            return LLMResponse(
+                content=json.dumps({
+                    "summary": "Synthèse pilotée par le LLM.",
+                    "findings": [],
+                }),
+                model="test-model",
+                stub=False,
+                input_tokens=111,
+                output_tokens=42,
+            )
+        return LLMResponse(content="stub", model="test-model", stub=True)
+
+    monkeypatch.setattr(
+        "app.llm.router.model_router.ModelRouter.complete", mock_complete
+    )
+
+    runner = PipelineRunner()
+    delivery = await runner.run(
+        ULID.new("REQ_"),
+        {"objective": "Quelle est la capitale du Bénin ?", "request_type": "research"},
+    )
+
+    # The LLM really is called for the synthesis stage — exactly once.
+    assert len(synthesis_prompts) == 1
+    # §41.2 — the routed tokens land in the delivery usage report.
+    report = delivery["usage_report"]
+    assert report["tokens_llm_input"] >= 111
+    assert report["tokens_llm_output"] >= 42
+    assert delivery["summary"] == "Synthèse pilotée par le LLM."
+    # §41.12 — the synthesis phase is part of the delivery trace.
+    assert "synthesis" in delivery["trace"]["steps"]
+    assert runner.trace_steps(delivery["request_id"])["synthesis"].startswith("STEP_")
+
+
+@pytest.mark.asyncio
+async def test_synthesis_stub_keeps_the_default_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stub router answer must fall back to the deterministic summary (§22)."""
+    from app.llm.router.model_router import LLMResponse, LLMTask
+
+    async def mock_complete(
+        self: Any, task: LLMTask, prompt: str, **kwargs: Any
+    ) -> LLMResponse:
+        return LLMResponse(
+            content="[stub:test] task received", model="test-model", stub=True
+        )
+
+    monkeypatch.setattr(
+        "app.llm.router.model_router.ModelRouter.complete", mock_complete
+    )
+
+    runner = PipelineRunner()
+    objective = "stub synthesis probe"
+    delivery = await runner.run(
+        ULID.new("REQ_"),
+        {"objective": objective, "request_type": "research"},
+    )
+
+    # The default summary is kept when the LLM answer is a stub.
+    assert delivery["summary"] == f"Synthesized research report for '{objective}'."
+    # The stub decision is still traced, so "synthesis" is a delivery step.
+    assert "synthesis" in delivery["trace"]["steps"]
+    assert delivery["usage_report"]["tokens_llm_input"] == 0
+
+
+@pytest.mark.asyncio
+async def test_delivery_generated_by_uses_api_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§24.1 ``generated_by.version`` must come from the single version source."""
+    from app.core.version import API_VERSION
+    from app.llm.router.model_router import LLMResponse, LLMTask
+
+    async def mock_complete(
+        self: Any, task: LLMTask, prompt: str, **kwargs: Any
+    ) -> LLMResponse:
+        return LLMResponse(
+            content="[stub:test] task received", model="test-model", stub=True
+        )
+
+    monkeypatch.setattr(
+        "app.llm.router.model_router.ModelRouter.complete", mock_complete
+    )
+
+    runner = PipelineRunner()
+    delivery = await runner.run(
+        ULID.new("REQ_"),
+        {"objective": "version probe", "request_type": "research"},
+    )
+
+    assert delivery["generated_by"]["agent"] == "PipelineRunner"
+    assert delivery["generated_by"]["version"] == API_VERSION
+
