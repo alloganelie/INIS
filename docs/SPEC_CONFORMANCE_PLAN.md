@@ -229,8 +229,21 @@ puis `L6` (unification `SourceRepository` requise dès que L2 écrit des sources
 >
 > **Reste ouvert dans L1**
 >
-> - [ ] `ETag` / `X-Checksum-Sha256` sur le download (headers non posés aujourd'hui).
-> - [ ] Refus de téléchargement d'un artefact `status="deleted"` (§18.2).
+> - [x] `ETag` / `X-Checksum-Sha256` sur le download.
+>   ✅ Les deux en-têtes portent la **même** empreinte, recalculée sur les octets **réellement
+>   servis** (jamais sur ceux du record) ; un objet dont l'empreinte diffère de celle publiée est
+>   refusé en `502` au lieu d'être servi sous un faux checksum, et `If-None-Match` est évalué sur
+>   les octets lus — un contenu changé ne peut donc pas répondre `304`. Un refus d'autorisation
+>   n'annonce aucune empreinte.
+>   *preuve : `tests/api/test_artifact_download_integrity.py` (14 cas)*
+> - [x] Refus de téléchargement d'un artefact `status="deleted"` (§18.2).
+>   ✅ `410 Gone` — décision `0016` incluse — prononcé **avant toute lecture du stockage**, sur le
+>   téléchargement, le détail, l'historique et le lignage, et disparition des listes : connaître
+>   l'identifiant ne suffit jamais. La raison exacte est auditée (`result=denied`), le corps ne
+>   dit rien de l'artefact ; la projection expose `deleted_at` pour distinguer « supprimé » de
+>   « jamais livré ».
+>   *preuve : `tests/api/test_artifact_download_integrity.py` (14 cas)*
+
 > - [x] Autorisation §19.3 (`check_permission`) sur le download.
 >   ✅ `app/security/authz/artifact_access.py` réutilise les primitives existantes (identité du
 >   middleware `auth_middleware`, `PermissionChecker`+`PolicyEvaluator` du §19.3) et n'ajoute que
@@ -382,7 +395,16 @@ Le frontend **appelle déjà** (C14) : `GET /artifacts?request_id=` et `GET /art
   `evidence_package`, l'inconnu est normalisé sans être deviné)
 - [~] Persister chaque artefact (`artifact_repository`) + `artifact_versions` (v1) +
   `artifact_lineage` (source/dataset/transformation ids réels) + `artifact_delivery_events`.
-  *preuve : `tests/integration/test_artifact_delivery_e2e.py` (requête complète → lignes en base → S3 → download)*
+  ✅ **Fait** : l'artefact, sa version v1, son lignage (sources **et datasets réellement
+  associés**, plus les `information_id` livrés) et ses événements de livraison sont écrits par
+  le chemin réel ; les datasets sont lus depuis les relations existantes
+  (`information_units.dataset_id`, puis `datasets.request_id` dont la `source_id` fait partie
+  des sources livrées) — jamais fabriqués, et une requête sans dataset reste vide.
+  ⚠️ **Reste dû** : les `transformation_ids` du lignage (`deliver_artifacts` ne reçoit toujours
+  aucune transformation), donc la case reste `[~]`.
+  *preuves : `tests/integration/test_artifact_versions_lineage.py` (18 cas, dont 4 sur les
+  datasets) ; `tests/integration/test_artifact_delivery_e2e.py` (requête complète → lignes en base → S3 → download)*
+
 - [x] Corriger le chemin stub `_ToolAdapter` (`pipeline_runner.py:1031-1040`, C6) :
   il ne doit plus produire de contenu textuel fabriqué ; s'il est conservé comme
   secours, il doit renvoyer `status="degraded"` **sans** texte prétendant être un résultat.

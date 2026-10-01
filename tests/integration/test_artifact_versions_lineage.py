@@ -378,8 +378,201 @@ class TestALogicalDeletionKeepsTheHistory:
             return {str(row[0]) for row in result.all()}
 
 
+class TestTheDeliveredFileNamesItsDatasets:
+    """§24.2 — le dataset qui a contribué est nommé, celui qui n'existe pas est absent."""
+
+    @staticmethod
+    def _units_from(dataset_source: str, rows: list[dict], count: int = 2) -> list[dict]:
+        """Build the §11 units a delivery would produce from *rows*.
+
+        Aucune unité ne nomme de dataset : c'est la situation du pipeline, et
+        c'est la relation ``dataset → source → unité`` que le lignage doit
+        retrouver tout seul.
+        """
+        return [
+            {
+                "information_id": ULID.new("INF_"),
+                "type": "text",
+                "content": {"summary": f"ligne {index}", "details": [str(row)]},
+                "raw_reference": {"url": "file://ventes.csv"},
+                "source_id": dataset_source,
+                "dataset_id": None,
+                "location": {},
+                "context": {},
+                "language": "fr",
+                "unit": None,
+                "time": {},
+                "classification": {},
+                "quality": {},
+                "confidence": {"score": 0.9, "not_a_probability": True},
+            }
+            for index, row in enumerate(rows[:count])
+        ]
+
+    async def _ingest_csv(
+        self, db_url: str, tmp_path: Any, request_id: str
+    ) -> dict[str, Any]:
+        """Ingest a real CSV through the real reader and persist its dataset."""
+        from app.storage.repositories.dataset_repository import DatasetRepository
+        from app.tools.files.csv_reader import load_csv
+
+        source_id = ULID.new("SRC_")
+        csv_path = tmp_path / "ventes.csv"
+        csv_path.write_text("produit,montant\nstylo,12\ncahier,7\n", encoding="utf-8")
+        dataset, rows = load_csv(str(csv_path), source_id=source_id)
+        # ``load_csv`` rend un mapping (c'est ainsi que le routeur d'import le
+        # persiste) : le test utilise donc la même forme que le chemin réel.
+        record = {**dict(dataset), "name": "ventes.csv", "request_id": request_id}
+
+        engine = create_engine(db_url)
+        try:
+            await DatasetRepository.create(engine, record)
+        finally:
+            await engine.dispose()
+        return {"dataset": record, "rows": rows, "source_id": source_id}
+
+    @pytest.mark.asyncio
+    async def test_a_dataset_that_contributed_is_named_once(
+        self, db_url: str, monkeypatch: pytest.MonkeyPatch, storage: MemoryStorage, tmp_path: Any
+    ) -> None:
+        """Deux unités du même dataset : un seul identifiant, des relations réelles."""
+        from app.artifacts.delivery.delivery_service import deliver_artifacts
+
+        monkeypatch.setenv("INIS_DATABASE_URL", db_url)
+        reset_session_maker()
+        request_id = ULID.new("REQ_")
+        ingested = await self._ingest_csv(db_url, tmp_path, request_id)
+        dataset_id = ingested["dataset"]["dataset_id"]
+        units = self._units_from(ingested["source_id"], ingested["rows"])
+
+        outcome = await deliver_artifacts(
+            request_id=request_id,
+            required_output={"format": "json"},
+            information_units=units,
+            storage=storage,
+        )
+
+        record = outcome.artifacts[0]
+        assert record["dataset_ids"] == [dataset_id], (
+            "le dataset lié par sa source à une unité livrée doit être nommé, une fois"
+        )
+        assert record["source_ids"] == [ingested["source_id"]]
+
+        engine = create_engine(db_url)
+        try:
+            lineage = await ArtifactLineageRepository.get_for_version(
+                engine, record["artifact_id"], str(record["version"])
+            )
+            version = await ArtifactVersionRepository.current(engine, record["artifact_id"])
+        finally:
+            await engine.dispose()
+
+        assert lineage is not None
+        assert lineage["dataset_ids"] == [dataset_id], (
+            "le lignage de la version porte le dataset, pas seulement le record"
+        )
+        assert set(lineage["source_ids"]) == {ingested["source_id"]}
+        # La chaîne est donc lisible de bout en bout :
+        # source → dataset → information → artefact.
+        assert version is not None
+        assert version["metadata"]["information_ids"] == [
+            unit["information_id"] for unit in units
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_dataset_that_did_not_contribute_is_not_named(
+        self, db_url: str, monkeypatch: pytest.MonkeyPatch, storage: MemoryStorage
+    ) -> None:
+        """Un dataset d'une autre source n'est pas attribué à ce fichier."""
+        from app.artifacts.delivery.delivery_service import deliver_artifacts
+
+        monkeypatch.setenv("INIS_DATABASE_URL", db_url)
+        reset_session_maker()
+        units = self._units_from(ULID.new("SRC_"), [{"a": 1}, {"a": 2}])
+
+        outcome = await deliver_artifacts(
+            request_id=ULID.new("REQ_"),
+            required_output={"format": "json"},
+            information_units=units,
+            storage=storage,
+        )
+
+        assert outcome.artifacts[0]["dataset_ids"] == [], (
+            "aucun dataset n'est associé : rien ne doit être fabriqué"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_dataset_named_by_a_unit_is_kept(
+        self, db_url: str, monkeypatch: pytest.MonkeyPatch, storage: MemoryStorage
+    ) -> None:
+        """La relation directe unité → dataset est respectée telle quelle."""
+        from app.artifacts.delivery.delivery_service import deliver_artifacts
+
+        monkeypatch.setenv("INIS_DATABASE_URL", db_url)
+        reset_session_maker()
+        units = self._units_from(ULID.new("SRC_"), [{"a": 1}])
+        named = ULID.new("DATA_")
+        units[0]["dataset_id"] = named
+
+        outcome = await deliver_artifacts(
+            request_id=ULID.new("REQ_"),
+            required_output={"format": "json"},
+            information_units=units,
+            storage=storage,
+        )
+
+        assert outcome.artifacts[0]["dataset_ids"] == [named]
+
+    @pytest.mark.asyncio
+    async def test_a_new_version_keeps_its_own_dataset_lineage(
+        self, db_url: str, monkeypatch: pytest.MonkeyPatch, storage: MemoryStorage, tmp_path: Any
+    ) -> None:
+        """Une version ultérieure a son propre lignage, sans réécrire le précédent."""
+        from app.artifacts.delivery.delivery_service import deliver_artifacts
+
+        monkeypatch.setenv("INIS_DATABASE_URL", db_url)
+        reset_session_maker()
+        request_id = ULID.new("REQ_")
+        ingested = await self._ingest_csv(db_url, tmp_path, request_id)
+        first_dataset = ingested["dataset"]["dataset_id"]
+        second_dataset = ULID.new("DATA_")
+        units = self._units_from(ingested["source_id"], ingested["rows"], count=1)
+
+        delivery = await deliver_artifacts(
+            request_id=request_id,
+            required_output={"format": "json"},
+            information_units=units,
+            storage=storage,
+        )
+        record = delivery.artifacts[0]
+
+        engine = create_engine(db_url)
+        try:
+            published = await publish_new_version(
+                engine, record, kind="minor", dataset_ids=[second_dataset]
+            )
+            first_lineage = await ArtifactLineageRepository.get_for_version(
+                engine, record["artifact_id"], "1.0.0"
+            )
+            second_lineage = await ArtifactLineageRepository.get_for_version(
+                engine, record["artifact_id"], "1.1.0"
+            )
+        finally:
+            await engine.dispose()
+
+        assert published["version"]["version"] == "1.1.0"
+        assert first_lineage is not None and second_lineage is not None
+        assert first_lineage["dataset_ids"] == [first_dataset], (
+            "la version précédente garde son lignage"
+        )
+        assert second_lineage["dataset_ids"] == [second_dataset], (
+            "chaque version nomme son propre dataset"
+        )
+
+
 class TestTheRoutesExposeHistoryAndLineage:
     """§32 — ce que le client (et la future UI) peut lire."""
+
 
     @pytest.fixture(autouse=True)
     def _bind(self, db_url: str, monkeypatch: pytest.MonkeyPatch) -> Any:

@@ -203,6 +203,62 @@ def _information_ids(information_units: Sequence[Mapping[str, Any]]) -> list[str
     )
 
 
+def _direct_dataset_ids(information_units: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Return the ``DATA_`` identifiers the delivered units already name.
+
+    C'est la relation la plus directe : une unité qui dit de quel dataset elle
+    vient. Rien n'est fabriqué — une unité sans dataset n'en produit pas.
+    """
+    return list(
+        dict.fromkeys(
+            str(unit.get("dataset_id"))
+            for unit in information_units
+            if str(unit.get("dataset_id") or "").startswith("DATA_")
+        )
+    )
+
+
+async def _dataset_ids(
+    engine: Any,
+    request_id: str,
+    information_units: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    """Return the datasets **really** associated with the delivered units (§24.2).
+
+    Deux relations existantes, et seulement elles :
+
+    * ``information_units.dataset_id`` — l'unité nomme son dataset ;
+    * ``datasets.request_id`` **et** ``datasets.source_id ∈ sources des unités
+      livrées`` — un dataset créé pour cette requête, dont la source fait partie
+      de celles qui ont fourni les unités livrées, a contribué au fichier.
+
+    Aucun identifiant n'est inventé : une requête sans dataset, ou dont les
+    datasets ne partagent aucune source avec les unités livrées, obtient une
+    liste vide — et le comportement d'avant ce câblage est donc conservé.
+
+    Returns:
+        Les identifiants triés et dédoublonnés : un dataset cité par dix unités
+        n'apparaît qu'une fois.
+    """
+    direct = _direct_dataset_ids(information_units)
+    if engine is None:
+        return sorted(direct)
+
+    from app.storage.repositories.dataset_repository import DatasetRepository
+
+    sources = {
+        str(unit.get("source_id"))
+        for unit in information_units
+        if str(unit.get("source_id") or "").startswith("SRC_")
+    }
+    related = [
+        str(row["dataset_id"])
+        for row in await DatasetRepository.list_for_request(engine, request_id)
+        if row.get("dataset_id") and str(row.get("source_id")) in sources
+    ]
+    return sorted({*direct, *related})
+
+
 def _confidence_score(delivery: Mapping[str, Any]) -> float | None:
     """Return the §15 overall confidence score of *delivery*, when it exists."""
     confidence = delivery.get("confidence")
@@ -377,6 +433,19 @@ async def deliver_artifacts(
     units_rows = tabular_projection(information_units)
     packager = ArtifactPackager(storage if storage is not None else build_object_storage())
 
+    # §24.2 — les datasets qui ont réellement contribué au fichier, lus depuis les
+    # relations existantes (unité → dataset, dataset → source/requête). Une lecture
+    # impossible est signalée comme une limite, jamais remplacée par une invention.
+    try:
+        dataset_ids = await _dataset_ids(engine, request_id, information_units)
+    except Exception as exc:  # noqa: BLE001 - §25.2: the gap is reported
+        dataset_ids = _direct_dataset_ids(information_units)
+        outcome.add_limitation(
+            "Datasets du lignage non récupérés depuis la base "
+            f"({type(exc).__name__}: {exc}) : seuls ceux que les unités nomment "
+            "sont enregistrés."
+        )
+
     try:
         result = packager.package(
             artifact_id=artifact_id,
@@ -401,7 +470,7 @@ async def deliver_artifacts(
             if output_format in SPREADSHEET_FORMATS
             else None,
             source_ids=_source_ids(information_units),
-            dataset_ids=(),
+            dataset_ids=dataset_ids,
             transformation_ids=(),
             quality_score=None,
             confidence_score=_confidence_score(delivery or {}),
