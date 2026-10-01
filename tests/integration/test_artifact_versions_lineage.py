@@ -16,6 +16,7 @@ l'historique est append-only, une suppression logique ne doit pas l'effacer.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 from typing import Any
 
@@ -44,6 +45,11 @@ artifacts_router = importlib.import_module("app.api.v1.artifacts.router")
 
 #: The three tables this lot fills, and the one column they must **not** carry.
 APPEND_ONLY_TABLES = ("artifact_versions", "artifact_lineage", "artifact_delivery_events")
+
+#: Les octets que le double de stockage sert, et l'empreinte qui les décrit : le
+#: record inséré publie cette empreinte, comme une livraison réelle le fait.
+ARTIFACT_BYTES = b"a,b\n1,2\n"
+ARTIFACT_SHA256 = hashlib.sha256(ARTIFACT_BYTES).hexdigest()
 
 
 class MemoryStorage:
@@ -101,8 +107,8 @@ def artifact_like(db_url: str) -> dict[str, Any]:
         "file_name": "colis.csv",
         "mime_type": "text/csv",
         "version": "1.0.0",
-        "size_bytes": 12,
-        "sha256": "b" * 64,
+        "size_bytes": len(ARTIFACT_BYTES),
+        "sha256": ARTIFACT_SHA256,
         "storage_ref": "s3://inis-artifacts/colis.csv",
         "purpose": "livraison",
         "source_ids": ["SRC_01M3T0000000000000000000001"],
@@ -420,7 +426,7 @@ class TestTheRoutesExposeHistoryAndLineage:
         self, db_url: str, artifact_like: dict[str, Any], storage: MemoryStorage
     ) -> None:
         """Le dernier maillon : un téléchargement est enregistré et relu."""
-        storage.objects["colis.csv"] = b"a,b\n1,2\n"
+        storage.objects["colis.csv"] = ARTIFACT_BYTES
 
         downloaded = client.get(f"/v1/artifacts/{artifact_like['artifact_id']}/download")
         assert downloaded.status_code == 200, downloaded.text

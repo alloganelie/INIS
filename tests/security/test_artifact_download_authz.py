@@ -14,6 +14,7 @@ Ce fichier prouve trois choses distinctes :
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import time
 import uuid
@@ -42,6 +43,11 @@ client = TestClient(app)
 ARTIFACT_ID = "ART_2026_900001"
 STORAGE_REF = "s3://inis-artifacts/colis.json"
 
+#: Les octets réellement servis, et l'empreinte qui les décrit. Le record publie
+#: cette empreinte : c'est la cohérence que le téléchargement vérifie (§24.2).
+PAYLOAD = b"colis-bytes"
+PAYLOAD_SHA256 = hashlib.sha256(PAYLOAD).hexdigest()
+
 #: Un identifiant plausible qui n'existe pas : la route doit répondre 404.
 UNKNOWN_ARTIFACT_ID = "ART_2026_999999"
 
@@ -60,8 +66,8 @@ RECORD: dict[str, Any] = {
     "file_name": "colis.json",
     "mime_type": "application/json",
     "version": "1.0.0",
-    "size_bytes": 11,
-    "sha256": "a" * 64,
+    "size_bytes": len(PAYLOAD),
+    "sha256": PAYLOAD_SHA256,
     "storage_ref": STORAGE_REF,
     "purpose": "livraison complète",
     "source_ids": ["SRC_01M3T00000000000000000000C3"],
@@ -78,7 +84,7 @@ RECORD: dict[str, Any] = {
 class FakeStorage:
     """Object-store double returning the delivered bytes (§24.2)."""
 
-    def __init__(self, payload: bytes = b"colis-bytes") -> None:
+    def __init__(self, payload: bytes = PAYLOAD) -> None:
         self.payload = payload
         self.downloads: list[str] = []
 

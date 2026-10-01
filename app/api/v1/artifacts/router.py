@@ -22,6 +22,8 @@ Honesty rules of this router (they are what the tests assert):
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
@@ -75,6 +77,14 @@ _NO_PERSISTENCE = (
 #: response — the reason goes to the audit trail, where it is readable by those
 #: allowed to read it.
 _ACCESS_DENIED = "Access denied: the caller is not allowed to read this artifact."
+
+#: §18.2 — le corps d'un refus pour artefact supprimé. Comme pour le refus
+#: d'autorisation, il ne dit rien de l'artefact lui-même : ni nom, ni empreinte,
+#: ni `storage_ref`. La raison précise (statut ou suppression logique) reste dans
+#: l'audit.
+_ARTIFACT_DELETED = (
+    "Artifact is gone: it was deleted and is no longer downloadable (§18.2)."
+)
 
 
 def _subject(request: Request) -> dict[str, Any]:
@@ -151,6 +161,46 @@ async def _require_read_access(
     return subject
 
 
+def _deletion_of(record: Mapping[str, Any]) -> str | None:
+    """Return how *record* is deleted, or ``None`` when it is still served.
+
+    Two marks mean "gone" and both are checked here, because both are real in
+    this codebase:
+
+    * ``status == "deleted"`` — the §18.2 status, which the plan's L1 asks to
+      refuse;
+    * ``deleted_at`` set — the soft delete of decision ``0016``, which hides the
+      row from nothing on its own (the repositories keep it readable).
+    """
+    if str(record.get("status") or "").strip().lower() == "deleted":
+        return "status=deleted (§18.2)"
+    if record.get("deleted_at"):
+        return "deleted_at renseigné (décision 0016)"
+    return None
+
+
+async def _require_not_deleted(request: Request, record: Mapping[str, Any]) -> None:
+    """Refuse a deleted artifact **before** anything is read from storage.
+
+    The refusal is a ``410 Gone``: the artifact existed, it is not available any
+    more — a ``404`` would claim it was never delivered, which is a different
+    (and false) statement. It is audited like every other refusal, so the reason
+    lives in the trail and not in the response body.
+    """
+    marker = _deletion_of(record)
+    if marker is None:
+        return
+    subject = _subject(request)
+    await _audit_access(
+        subject,
+        action=ARTIFACT_READ_ACTION,
+        resource_id=str(record.get("artifact_id") or ""),
+        outcome="denied",
+        reason=f"artifact is deleted ({marker}) — §18.2",
+    )
+    raise HTTPException(status_code=status.HTTP_410_GONE, detail=_ARTIFACT_DELETED)
+
+
 def _records_from_pipeline_state(request_id: str) -> list[dict] | None:
     """Return the artifacts a live run holds, or ``None`` for an unknown request."""
     state = pipeline_runner.get_state(request_id)
@@ -196,6 +246,18 @@ async def list_artifacts(
                     reason=f"filtered out of the list: {decision.reason}",
                 )
                 continue
+            if _deletion_of(row) is not None:
+                # §18.2 — un artefact supprimé ne s'expose pas dans une liste : il
+                # ne doit être lisible ni par le détail, ni par le téléchargement,
+                # ni ici. Rien n'est dit dans le corps, la trace est dans l'audit.
+                await _audit_access(
+                    subject,
+                    action=ARTIFACT_READ_ACTION,
+                    resource_id=row.get("artifact_id"),
+                    outcome="denied",
+                    reason=f"filtered out of the list: deleted ({_deletion_of(row)}) — §18.2",
+                )
+                continue
             readable.append(ArtifactResponse(**row))
         return ArtifactList(artifacts=readable, total=len(readable))
 
@@ -235,6 +297,7 @@ async def get_artifact(artifact_id: str, request: Request) -> ArtifactResponse:
             detail=f"Artifact '{artifact_id}' not found",
         )
     await _require_read_access(request, record)
+    await _require_not_deleted(request, record)
     return ArtifactResponse(**record)
 
 
@@ -256,6 +319,10 @@ async def download_artifact(artifact_id: str, request: Request) -> Response:
             detail=f"Artifact '{artifact_id}' not found",
         )
     await _require_read_access(request, record)
+    # §18.2 / décision 0016 — un artefact supprimé n'est pas téléchargeable, et le
+    # refus tombe **avant** toute lecture du stockage : connaître l'identifiant ne
+    # suffit jamais.
+    await _require_not_deleted(request, record)
 
     storage_ref = str(record.get("storage_ref") or "")
     if storage_ref.startswith(UNSTORED_REF_SCHEME):
@@ -297,15 +364,65 @@ async def download_artifact(artifact_id: str, request: Request) -> Response:
         ) from exc
 
     file_name = str(record.get("file_name") or f"{artifact_id}.bin")
+    # §24.2 — l'empreinte annoncée décrit les octets **réellement servis**. Elle est
+    # donc recalculée ici, à partir de `content`, et comparée à celle que le record
+    # publie : des octets qui ne correspondent pas à l'empreinte publiée sont un
+    # défaut d'intégrité, pas un téléchargement à servir sous un faux nom.
+    integrity = _integrity_headers(content, record)
+
     # §24.3 — le dernier maillon de la chaîne est tracé : le téléchargement servi.
     # Best effort : une trace manquante est signalée dans le journal, mais elle ne
     # prive pas l'appelant autorisé du fichier qu'il vient de demander.
     await _record_delivery_event(engine, artifact_id, target="http_download")
+
+    # La condition `If-None-Match` est évaluée sur l'empreinte des octets lus,
+    # jamais sur celle du record : un objet corrompu ne peut donc pas produire un
+    # « 304 Not Modified » pour un contenu qui a changé.
+    if request.headers.get("if-none-match") in (integrity["ETag"], integrity["X-Checksum-Sha256"]):
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=integrity)
+
     return Response(
         content=content,
         media_type=str(record.get("mime_type") or "application/octet-stream"),
-        headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{file_name}"',
+            **integrity,
+        },
     )
+
+
+def _integrity_headers(content: Any, record: Mapping[str, Any]) -> dict[str, str]:
+    """Return the §24.2 integrity headers of *content*, verified against *record*.
+
+    ``ETag`` and ``X-Checksum-Sha256`` carry the **same** digest, computed from
+    the bytes that are about to be returned: a client that verifies either one
+    verifies what it received. When the artifact record publishes a different
+    digest, the bytes are not the delivered file any more — the call is refused
+    with an explicit ``502`` instead of a header that would look fine.
+
+    Raises:
+        HTTPException: 502 when the stored bytes do not match the published
+            digest.
+    """
+    digest = hashlib.sha256(content).hexdigest()
+    published = str(record.get("sha256") or "").strip().lower()
+    if published and published != digest:
+        logger.warning(
+            "artifact bytes do not match the published digest",
+            artifact_id=record.get("artifact_id"),
+            published_sha256=published,
+            served_sha256=digest,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                "The stored bytes do not match the digest published for this artifact: "
+                "the file is refused rather than served under a wrong checksum (§24.2)."
+            ),
+        )
+    # A strong ETag (quoted, byte-exact representation): the same content yields
+    # the same ETag on every call, on every worker.
+    return {"ETag": f'"{digest}"', "X-Checksum-Sha256": digest}
 
 
 async def _record_delivery_event(engine: Any, artifact_id: str, *, target: str) -> dict[str, Any]:
@@ -350,6 +467,7 @@ async def list_artifact_versions(artifact_id: str, request: Request) -> Artifact
             detail=f"Artifact '{artifact_id}' not found",
         )
     await _require_read_access(request, record)
+    await _require_not_deleted(request, record)
 
     versions = await ArtifactVersionRepository.list_for_artifact(engine, artifact_id)
     return ArtifactVersionList(
@@ -378,6 +496,7 @@ async def get_artifact_lineage(artifact_id: str, request: Request) -> ArtifactLi
             detail=f"Artifact '{artifact_id}' not found",
         )
     await _require_read_access(request, record)
+    await _require_not_deleted(request, record)
 
     versions = await ArtifactVersionRepository.list_for_artifact(engine, artifact_id)
     events = await ArtifactDeliveryEventRepository.list_for_artifact(engine, artifact_id)

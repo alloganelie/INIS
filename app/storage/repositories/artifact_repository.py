@@ -125,6 +125,10 @@ def to_artifact_response(row: Mapping[str, Any]) -> dict[str, Any]:
         "provenance_complete": bool(data.get("provenance_complete")),
         "status": data.get("status") or "available",
         "created_at": as_iso(data.get("created_at")),
+        # Décision ``0016`` : un artefact supprimé logiquement reste en base, et la
+        # date de suppression fait partie de ce que l'API doit dire — sans elle, un
+        # appelant ne peut pas distinguer « supprimé » de « jamais livré ».
+        "deleted_at": as_iso(data.get("deleted_at")),
     }
 
 

@@ -45,6 +45,8 @@ class ArtifactResponse(BaseModel):
     provenance_complete: bool = False
     status: str = "available"
     created_at: str | None = None
+    #: Décision ``0016`` — renseigné quand l'artefact a été supprimé logiquement.
+    deleted_at: str | None = None
 
 
 class ArtifactList(BaseModel):
