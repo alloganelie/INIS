@@ -22,12 +22,22 @@ Honesty rules of this router (they are what the tests assert):
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, status
+from typing import Any
+
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import Response
 
+from app.api.middleware.auth_middleware import is_auth_enabled
 from app.api.v1.artifacts.schemas import ArtifactList, ArtifactResponse
 from app.api.v1.requests.pipeline_runner import pipeline_runner
 from app.artifacts.packager.artifact_packager import UNSTORED_REF_SCHEME
+from app.core.logging import get_logger
+from app.governance.audit.audit_writer import AuditWriter
+from app.security.authz.artifact_access import (
+    ARTIFACT_READ_ACTION,
+    authorize_artifact,
+    subject_from_identity,
+)
 from app.storage.object_storage.object_storage_factory import (
     build_object_storage,
     split_storage_ref,
@@ -37,11 +47,95 @@ from app.storage.repositories.information_unit_repository import get_database_en
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 
+logger = get_logger(__name__)
+
+
 #: Explains the missing-database degradation of every route below.
 _NO_PERSISTENCE = (
     "Artifacts are not persisted (INIS_DATABASE_URL not configured): only a request "
     "still held in memory by the running pipeline can be inspected."
 )
+
+#: §19.3 — the body of a refusal. It is a **constant**: the caller learns that
+#: access was denied, and nothing else. The identifier it probed, the file name,
+#: the size, the storage reference and the policy reason all stay out of the
+#: response — the reason goes to the audit trail, where it is readable by those
+#: allowed to read it.
+_ACCESS_DENIED = "Access denied: the caller is not allowed to read this artifact."
+
+
+def _subject(request: Request) -> dict[str, Any]:
+    """Return the §19.3 subject of the caller, as the middleware identified it."""
+    return subject_from_identity(
+        getattr(request.state, "actor_id", None),
+        getattr(request.state, "scopes", None),
+    )
+
+
+async def _audit_access(
+    subject: dict[str, Any],
+    *,
+    action: str,
+    resource_id: str | None,
+    outcome: str,
+    reason: str,
+) -> dict[str, Any]:
+    """Write the §20 authorization event; never turn a delivery into a crash.
+
+    An audit that cannot be persisted (no database configured) still reaches the
+    structured log — the decision is never silently dropped, it is merely not
+    queryable in the database.
+    """
+    event = {
+        "actor_type": "user" if subject.get("actor_id") not in (None, "anonymous") else "anonymous",
+        "actor_id": str(subject.get("agent_id") or "anonymous"),
+        "action": f"artifact.{action}",
+        "resource_type": "artifact",
+        "resource_id": resource_id or "",
+        "request_id": "",
+        "result": outcome,
+        "reason": reason,
+    }
+    engine = get_database_engine()
+    try:
+        if engine is None:
+            # No database: the decision is still recorded — in the structured
+            # log — but the event is not claimable as persisted.
+            logger.info("artifact_access", **event)
+            return {**event, "persisted": False}
+        return await AuditWriter(engine).write(event)
+    except Exception as exc:  # noqa: BLE001 - §25.2: an audit failure is reported
+        logger.warning(
+            "artifact access event not persisted", outcome=outcome, error=str(exc)
+        )
+        return {**event, "persisted": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+async def _require_read_access(
+    request: Request, record: dict[str, Any] | None = None, *, resource_id: str | None = None
+) -> dict[str, Any]:
+    """Refuse a caller that may not read the artifact (§19.3), and audit it.
+
+    Two calls, two purposes: ``record=None`` is the check made **before** any
+    lookup — it needs no attribute and therefore reveals nothing; the call with a
+    ``record`` applies the rules carried by the resource (classification,
+    conditions). Both go through :func:`authorize_artifact`, so the decision is
+    pronounced by the same §19.3 code in both cases.
+    """
+    subject = _subject(request)
+    decision = authorize_artifact(
+        subject, record, action=ARTIFACT_READ_ACTION, require_role=is_auth_enabled()
+    )
+    await _audit_access(
+        subject,
+        action=ARTIFACT_READ_ACTION,
+        resource_id=resource_id or (record or {}).get("artifact_id"),
+        outcome="success" if decision.allowed else "denied",
+        reason=decision.reason,
+    )
+    if not decision.allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_ACCESS_DENIED)
+    return subject
 
 
 def _records_from_pipeline_state(request_id: str) -> list[dict] | None:
@@ -58,18 +152,39 @@ def _records_from_pipeline_state(request_id: str) -> list[dict] | None:
     summary="List delivered artifacts, optionally filtered by request_id (§24.2)",
 )
 async def list_artifacts(
+    request: Request,
     request_id: str | None = Query(default=None, description="Filter by request_id"),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> ArtifactList:
-    """Return the §24.2 artifacts delivered for a request (or all of them)."""
+    """Return the §24.2 artifacts delivered for a request (or all of them).
+
+    §19.3 — what a caller cannot read is not listed. The refusal is pronounced
+    **before** the lookup when authentication is configured, and every artifact
+    that survives the lookup is still checked individually: a list is not a
+    permission to read what it contains.
+    """
+    await _require_read_access(request)
     engine = get_database_engine()
     if engine is not None:
         if request_id:
             rows = await ArtifactRepository.list_for_request(engine, request_id, limit)
         else:
             rows = await ArtifactRepository.list_all(engine, limit)
-        items = [ArtifactResponse(**row) for row in rows]
-        return ArtifactList(artifacts=items, total=len(items))
+        readable: list[ArtifactResponse] = []
+        for row in rows:
+            subject = _subject(request)
+            decision = authorize_artifact(subject, row, require_role=is_auth_enabled())
+            if not decision.allowed:
+                await _audit_access(
+                    subject,
+                    action=ARTIFACT_READ_ACTION,
+                    resource_id=row.get("artifact_id"),
+                    outcome="denied",
+                    reason=f"filtered out of the list: {decision.reason}",
+                )
+                continue
+            readable.append(ArtifactResponse(**row))
+        return ArtifactList(artifacts=readable, total=len(readable))
 
     if not request_id:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_NO_PERSISTENCE)
@@ -89,8 +204,13 @@ async def list_artifacts(
     response_model=ArtifactResponse,
     summary="Get one artifact by ID (§24.2)",
 )
-async def get_artifact(artifact_id: str) -> ArtifactResponse:
-    """Return one §24.2 artifact, or 404 when it was never delivered."""
+async def get_artifact(artifact_id: str, request: Request) -> ArtifactResponse:
+    """Return one §24.2 artifact, or 404 when it was never delivered.
+
+    §19.3 — the same check as the download: reading the *metadata* of an artifact
+    is reading it. An unauthorized caller learns only that access was denied.
+    """
+    await _require_read_access(request, resource_id=artifact_id)
     engine = get_database_engine()
     if engine is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_NO_PERSISTENCE)
@@ -101,6 +221,7 @@ async def get_artifact(artifact_id: str) -> ArtifactResponse:
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Artifact '{artifact_id}' not found",
         )
+    await _require_read_access(request, record)
     return ArtifactResponse(**record)
 
 
@@ -108,8 +229,9 @@ async def get_artifact(artifact_id: str) -> ArtifactResponse:
     "/{artifact_id}/download",
     summary="Download the bytes of an artifact (§24.2)",
 )
-async def download_artifact(artifact_id: str) -> Response:
-    """Return the delivered file with its §24.2 ``mime_type`` and name."""
+async def download_artifact(artifact_id: str, request: Request) -> Response:
+    """Return the delivered file with its §24.2 ``mime_type`` and name (§19.3)."""
+    await _require_read_access(request, resource_id=artifact_id)
     engine = get_database_engine()
     if engine is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_NO_PERSISTENCE)
@@ -120,6 +242,7 @@ async def download_artifact(artifact_id: str) -> Response:
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Artifact '{artifact_id}' not found",
         )
+    await _require_read_access(request, record)
 
     storage_ref = str(record.get("storage_ref") or "")
     if storage_ref.startswith(UNSTORED_REF_SCHEME):

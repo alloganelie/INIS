@@ -231,7 +231,18 @@ puis `L6` (unification `SourceRepository` requise dès que L2 écrit des sources
 >
 > - [ ] `ETag` / `X-Checksum-Sha256` sur le download (headers non posés aujourd'hui).
 > - [ ] Refus de téléchargement d'un artefact `status="deleted"` (§18.2).
-> - [ ] Autorisation §19.3 (`check_permission`) sur le download.
+> - [x] Autorisation §19.3 (`check_permission`) sur le download.
+>   ✅ `app/security/authz/artifact_access.py` réutilise les primitives existantes (identité du
+>   middleware `auth_middleware`, `PermissionChecker`+`PolicyEvaluator` du §19.3) et n'ajoute que
+>   la table de rôles du domaine artefact. Deux contrôles : **avant** toute lecture quand
+>   l'authentification est configurée (le refus ne révèle donc même pas l'existence), puis sur la
+>   ressource (classement `restricted` refusé même en dev). Appliqué aux **trois** routes — liste,
+>   détail, téléchargement — et le corps d'un refus est une constante : ni identifiant, ni nom, ni
+>   empreinte, ni `storage_ref`. Accord et refus sont audités (§20).
+>   *preuve : `tests/security/test_artifact_download_authz.py`* (22 cas : décision, refus explicite,
+>   absence de fuite, non-contournement par l'ID, filtrage de la liste, 401/403/404, audit sur
+>   PostgreSQL réel)
+
 > - [ ] `artifact_versions` (v1), `artifact_lineage`, `artifact_delivery_events` : tables existantes
 >   (0005/0007) mais **toujours vides** — seul `artifacts` est écrit.
 > - [ ] `_ToolAdapter` (C6/P1) fabrique encore du texte : à neutraliser.
@@ -323,7 +334,9 @@ Le frontend **appelle déjà** (C14) : `GET /artifacts?request_id=` et `GET /art
   `app.main`, donc montées ; un identifiant inconnu répond 404 et non une liste vide)
   ⚠️ Fichier dédié `test_artifacts_routes_registered.py` **jamais créé** : appeler réellement les
   routes via `app.main` prouve plus fort que vérifier une liste d'imports.
-- [ ] Autorisation : appliquer les politiques §19.3 (`check_permission`) sur le téléchargement.
+- [x] Autorisation : appliquer les politiques §19.3 (`check_permission`) sur le téléchargement.
+  ✅ Fait avec les primitives existantes ; détail dans l'état d'avancement ci-dessus.
+
   *preuve : `tests/security/test_artifact_download_authz.py`*
 
 #### L1.5 — Pipeline : produire et exposer les artefacts (Devin + Antigravity)

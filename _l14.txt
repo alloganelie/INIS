@@ -1,0 +1,44 @@
+acts/`, `app/connectors/`, `app/storage/`, `migrations/`) | Codex (`app/knowledge/`, `app/planning/`, `app/agents/`) | Antigravity (`app/api/`, `frontend/`) |
+|---|---|---|---|
+| V1 | L1.1–L1.3 | — | L1.4–L1.6 |
+| V2 | L2.1 (stockage upload), L2.4 | L2.2 (dispatch), L3.1 | L2.3 (schémas/routeur) |
+| V3 | L3.3, L6 | L4, L5 | — |
+
+**Convention de branche** : une branche par lot, `feat(<zone>): <description>`
+(ex. `feat(artifacts): generate and deliver §24.2 artifacts`).
+
+---
+
+## 4. Lots de travail
+
+> **Convention de preuve** : une preuve citée est soit un test **existant** (à ne pas casser),
+> soit un **test à créer** (le plus fréquent ici). Les critères §36 déjà `[x]` ne citent que des
+> tests existants. Pour vérifier : `Test-Path tests\api\test_artifacts.py` (PowerShell).
+
+### L0 — Préparation (0,5 j) · propriétaire : intégrateur désigné
+
+- [ ] `git stash`/commit de l'arbre courant ; repartir d'un arbre propre sur la branche de lot — *preuve : `git status --short` vide*
+- [ ] Capturer la mesure de référence : `python -m pytest -q` (noter le nombre de verts) et `make check-all` — *preuve : sortie collée dans §6 « Journal »*
+- [ ] Vérifier les conteneurs requis (PostgreSQL+pgvector, Redis/Valkey, RustFS/MinIO, RabbitMQ) : `docker compose up -d` puis `make migrate` — *preuve : `alembic current` = `0012 (head)`*
+- [ ] Ouvrir une branche `feat/conformance-v1` (ou une branche par lot) — *preuve : nom de branche dans le journal*
+- [ ] Lire (et non modifier) ces 6 points d'ancrage : `pipeline_runner.py:1000-1060`, `pipeline_runner.py:1500-1560`, `pipeline_persistence.py:15-100`, `app/api/v1/requests/router.py:23-60`, `app/api/v1/router.py:32-46`, `app/main.py:91-105`
+
+**Critère de sortie L0** : arbre propre, baseline chiffrée, migration `0012` appliquée.
+
+---
+
+### L1 — Artefacts §24.2 / §24.3, API et UI (3–4 j) · Devin + Antigravity
+
+**Objectif** : qu'une livraison produise des fichiers réels, traçables, téléchargeables.
+
+> ### ⚙️ État d'avancement L1 au 2026-09-29 (branche `feat/conformance-v1`)
+>
+> **Fait et prouvé (N2 sur le chemin nominal)** — preuves réelles :
+>
+> | Sous-lot | Preuve |
+> |---|---|
+> | L1.1 générateurs CSV/JSON/XML/XLSX + refus PDF | `tests/unit/artifacts/test_generators.py` (22 cas) |
+> | L1.1/§24.3 onglets du classeur | `tests/unit/artifacts/test_delivery_service.py::TestDeliverArtifacts::test_xlsx_delivery_fills_the_spec_sheets` |
+> | L1.2 séquence `ART_{YYYY}_{SEQ6}` (unit) | `tests/unit/artifacts/test_artifact_packager.py::TestArtifactSequence` |
+> | L1.2 séquence **en base** (monotonie, par année, survit à un nouvel engine) | `tests/integration/storage/test_artifact_repository.py::TestIdentifierAllocation` |
+> | L1.2 packager (stagin
