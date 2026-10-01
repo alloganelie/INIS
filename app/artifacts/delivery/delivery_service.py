@@ -259,6 +259,40 @@ async def _dataset_ids(
     return sorted({*direct, *related})
 
 
+def _transformation_ids(
+    transformations: Sequence[Mapping[str, Any]],
+    information_units: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    """Return the ``TRF_`` ids of the transformations that produced the file.
+
+    La relation est réelle et vérifiable : une transformation n'est retenue que
+    si ses ``output_ids`` contiennent au moins une unité **livrée**. Le fichier est
+    construit à partir de ces unités ; nommer une transformation qui ne les a pas
+    produites serait une fiction (§0.2, §12.1), et l'absence de transformation
+    correspondante laisse la liste vide plutôt que de l'inventer.
+    """
+    delivered = {
+        str(unit.get("information_id"))
+        for unit in information_units
+        if str(unit.get("information_id") or "").startswith("INF_")
+    }
+    if not delivered:
+        return []
+    produced: list[str] = []
+    for transformation in transformations:
+        identifier = str(transformation.get("transformation_id") or "")
+        if not identifier.startswith("TRF_"):
+            continue
+        outputs = {
+            str(item)
+            for item in (transformation.get("output_ids") or [])
+            if str(item)
+        }
+        if outputs & delivered:
+            produced.append(identifier)
+    return list(dict.fromkeys(produced))
+
+
 def _confidence_score(delivery: Mapping[str, Any]) -> float | None:
     """Return the §15 overall confidence score of *delivery*, when it exists."""
     confidence = delivery.get("confidence")
@@ -378,6 +412,7 @@ async def deliver_artifacts(
     information_units: Sequence[Mapping[str, Any]] = (),
     evidence: Sequence[Mapping[str, Any]] = (),
     sources: Sequence[Mapping[str, Any]] = (),
+    transformations: Sequence[Mapping[str, Any]] = (),
     storage: Any | None = None,
     file_stem: str | None = None,
 ) -> DeliveryOutcome:
@@ -471,7 +506,7 @@ async def deliver_artifacts(
             else None,
             source_ids=_source_ids(information_units),
             dataset_ids=dataset_ids,
-            transformation_ids=(),
+            transformation_ids=_transformation_ids(transformations, information_units),
             quality_score=None,
             confidence_score=_confidence_score(delivery or {}),
         )

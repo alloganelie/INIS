@@ -2837,6 +2837,9 @@ class PipelineRunner:
             information_units=information_units,
             evidence=evidence,
             sources=final_sources,
+            # §12.1 — les transformations réellement exécutées par ce run : le
+            # fichier livré nomme celles qui ont produit ses unités.
+            transformations=transformations,
         )
         if artifact_outcome.artifacts:
             delivery_response["artifacts"] = artifact_outcome.artifacts
@@ -2856,9 +2859,21 @@ class PipelineRunner:
             enrichment=enrichment_lineage,
             delivered_units=information_units,
         )
-        if derived:
-            delivery_response["transformations"] = derived
-        persisted_lineage = await persist_transformations(derived, request_id=request_id)
+        # §12.1 — le second appel **régénère** les étapes ``raw``/``normalized``/
+        # ``enriched`` avec de nouveaux identifiants. Ne persister que ce second
+        # jeu laissait donc l'artefact citant des ``TRF_`` qui n'existaient nulle
+        # part : une provenance pendante, découverte par le parcours E2E. On garde
+        # le jeu **déjà cité** et on n'ajoute du second appel que l'étape
+        # ``derived``, la seule qui dépende des artefacts livrés.
+        derived_only = [
+            item
+            for item in derived
+            if str((item.get("parameters") or {}).get("stage")) == "derived"
+        ]
+        transformations = [*transformations, *derived_only]
+        if transformations:
+            delivery_response["transformations"] = transformations
+        persisted_lineage = await persist_transformations(transformations, request_id=request_id)
         if not persisted_lineage and database_configured():
             base_limitations.append(
                 "Transformations §12.1 non persistées (écriture en échec) : elles restent "
