@@ -88,3 +88,66 @@ class TestErrorsAreNotSwallowed:
         """The comment states the rule, so the next reader does not relearn it."""
         source = _read(CLIENT)
         assert "404" in source and "propagates" in source
+
+
+PANEL = FRONTEND_SRC / "components" / "ArtifactsPanel.tsx"
+ERROR_MAP = FRONTEND_SRC / "api" / "artifactErrors.ts"
+REQUEST_STATUS = FRONTEND_SRC / "pages" / "RequestStatus.tsx"
+
+
+class TestTheArtefactsUIUsesTheExistingContracts:
+    """§24.2/§18.1/§19.3 — la UI consomme l'API, elle ne la réinvente pas."""
+
+    def test_the_client_exposes_the_history_and_the_download(self) -> None:
+        source = _read(CLIENT)
+        for function in ("listArtifactVersions", "getArtifactLineage", "downloadArtifact"):
+            assert f"export async function {function}" in source, f"{function} manque"
+
+    def test_the_client_uses_the_backend_routes(self) -> None:
+        source = _read(CLIENT)
+        for route in ("/artifacts/${id}/versions", "/artifacts/${id}/lineage", "/download"):
+            assert route in source, f"la route {route} doit être appelée telle quelle"
+
+    def test_the_types_of_the_new_contracts_exist(self) -> None:
+        types = _read(TYPES_API)
+        for name in (
+            "ArtifactVersion",
+            "ArtifactVersionList",
+            "ArtifactLineage",
+            "ArtifactLineageView",
+            "ArtifactDeliveryEvent",
+        ):
+            assert re.search(rf"export interface {name}\b", types), f"{name} manque"
+
+    def test_the_error_mapping_distinguishes_every_refusal(self) -> None:
+        """403, 401, 404, 503, 5xx et l'absence de réponse sont distingués."""
+        source = _code_only(_read(ERROR_MAP))
+        for status in ("401", "403", "404", "503"):
+            assert status in source, f"le statut {status} doit être décrit"
+        assert ">= 500" in source, "les erreurs serveur doivent être nommées"
+        assert "isAxiosError" in source and "status === undefined" in source, (
+            "l'absence de réponse (réseau) doit être distinguée d'un statut HTTP"
+        )
+        assert "message" in source and "kind" in source
+
+    def test_the_panel_never_swallows_an_error(self) -> None:
+        """Aucun ``catch`` sans liaison, et chaque échec devient visible."""
+        code = _code_only(_read(PANEL))
+        assert not re.search(r"catch\s*\{", code), "aucun catch silencieux dans la UI"
+        blocks = re.split(r"catch\s*\(", code)[1:]
+        assert blocks, "la UI doit capturer les erreurs pour les montrer"
+        offenders = [block[:80] for block in blocks if "setState" not in block]
+        assert offenders == [], f"catch qui n'affiche rien : {offenders}"
+        assert 'role="alert"' in _read(PANEL), "les erreurs doivent être annoncées"
+
+    def test_the_panel_goes_through_the_api_module(self) -> None:
+        """La UI n'appelle pas axios directement : le contrat reste dans `api/`."""
+        source = _read(PANEL)
+        assert "from '../api/artifacts'" in source
+        assert "axios" not in _code_only(source)
+        assert "describeArtifactError" in source
+
+    def test_the_page_renders_the_panel(self) -> None:
+        """La page d'état expose la section « Artefacts » (§31.1)."""
+        source = _read(REQUEST_STATUS)
+        assert "ArtifactsPanel" in source and "<ArtifactsPanel" in source

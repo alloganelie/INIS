@@ -258,7 +258,19 @@ puis `L6` (unification `SourceRepository` requise dès que L2 écrit des sources
 >   téléchargement)
 
 > - [ ] `_ToolAdapter` (C6/P1) fabrique encore du texte : à neutraliser.
-> - [ ] Page/section « Artefacts » dans l'UI (`pages/RequestStatus.tsx`).
+> - [x] Page/section « Artefacts » dans l'UI (`pages/RequestStatus.tsx`).
+>   ✅ `components/ArtifactsPanel.tsx` : liste (fichier, type, statut, taille), **version**
+>   courante lue depuis `/v1/artifacts/{id}/versions`, téléchargement par
+>   `/v1/artifacts/{id}/download` quand l'autorisation est accordée, et **refus explicites**
+>   (`api/artifactErrors.ts` distingue 401 / 403 / 404 / 503 / 5xx / réseau). Aucun `catch`
+>   silencieux : chaque échec devient une alerte visible, et une livraison vide est dite
+>   différemment d'une erreur. La UI consomme les contrats existants (aucun axios direct,
+>   aucune règle métier reconstruite) ; styles dans `styles/App.css`.
+>   *preuve : `frontend/src/components/ArtifactsPanel.test.tsx` (8 cas) +
+>   `frontend/src/api/artifactErrors.test.ts` (7 cas) + garde-fou source
+>   `tests/unit/frontend/test_artifacts_client_contract.py` (14 cas) ; `npx tsc --noEmit` OK,
+>   `npx vitest run` → 4 fichiers verts*
+
 
 #### L1.1 — Générateurs (Devin · `app/artifacts/generators/`)
 

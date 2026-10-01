@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { useRequest } from '../hooks/useRequest';
 import ProgressStepper from '../components/ProgressStepper';
+import ArtifactsPanel from '../components/ArtifactsPanel';
 
 export const RequestStatus: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -98,6 +99,12 @@ export const RequestStatus: React.FC = () => {
           </div>
 
           {progress && <ProgressStepper progress={progress} />}
+
+          {/* §24.2 — les fichiers livrés : listés, versionnés, téléchargeables
+              quand l'autorisation est accordée, avec un refus explicite sinon. */}
+          <div className="card">
+            <ArtifactsPanel requestId={request.request_id} />
+          </div>
 
           <div className="quick-nav-actions">
             <Link

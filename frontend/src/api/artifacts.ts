@@ -1,6 +1,6 @@
 import axios from 'axios';
 import apiClient from './client';
-import { Artifact } from '../types';
+import { Artifact, ArtifactLineageView, ArtifactVersionList } from '../types';
 
 /**
  * The §24.2 record exactly as the backend exposes it.
@@ -71,4 +71,61 @@ export async function getArtifact(id: string): Promise<Artifact | null> {
     }
     throw error;
   }
+}
+
+/**
+ * The version history of one artifact (§18.1).
+ *
+ * Only a 404 is turned into `null` — the artifact was never delivered. Every
+ * other failure propagates, for the same reason as in `listArtifacts`: a
+ * refused or broken history must not be rendered as "this artifact has no
+ * version".
+ */
+export async function listArtifactVersions(
+  id: string,
+): Promise<ArtifactVersionList | null> {
+  try {
+    const res = await apiClient.get<ArtifactVersionList>(`/artifacts/${id}/versions`);
+    return res.data;
+  } catch (error: unknown) {
+    if (axios.isAxiosError(error) && error.response?.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * The lineage and deliveries of one artifact: `source → … → download` (§24.2/§24.3).
+ *
+ * Same rule as above: a 404 means the artifact does not exist, anything else
+ * propagates to the caller, which is what lets the panel say *why* it could not
+ * read the chain instead of showing an empty one.
+ */
+export async function getArtifactLineage(
+  id: string,
+): Promise<ArtifactLineageView | null> {
+  try {
+    const res = await apiClient.get<ArtifactLineageView>(`/artifacts/${id}/lineage`);
+    return res.data;
+  } catch (error: unknown) {
+    if (axios.isAxiosError(error) && error.response?.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Download the bytes of one artifact (§24.2, §19.3).
+ *
+ * Nothing is caught here on purpose: the caller renders the refusal it gets
+ * (`describeArtifactError`) instead of receiving an empty file. A `403` must
+ * reach the UI — the whole point of §19.3 is that the refusal is visible.
+ */
+export async function downloadArtifact(id: string): Promise<Blob> {
+  const res = await apiClient.get(`/artifacts/${id}/download`, {
+    responseType: 'blob',
+  });
+  return res.data as Blob;
 }
