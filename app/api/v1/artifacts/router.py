@@ -28,7 +28,15 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import Response
 
 from app.api.middleware.auth_middleware import is_auth_enabled
-from app.api.v1.artifacts.schemas import ArtifactList, ArtifactResponse
+from app.api.v1.artifacts.schemas import (
+    ArtifactDeliveryEventResponse,
+    ArtifactLineageResponse,
+    ArtifactLineageView,
+    ArtifactList,
+    ArtifactResponse,
+    ArtifactVersionList,
+    ArtifactVersionResponse,
+)
 from app.api.v1.requests.pipeline_runner import pipeline_runner
 from app.artifacts.packager.artifact_packager import UNSTORED_REF_SCHEME
 from app.core.logging import get_logger
@@ -43,6 +51,11 @@ from app.storage.object_storage.object_storage_factory import (
     split_storage_ref,
 )
 from app.storage.repositories.artifact_repository import ArtifactRepository
+from app.storage.repositories.artifact_version_repository import (
+    ArtifactDeliveryEventRepository,
+    ArtifactLineageRepository,
+    ArtifactVersionRepository,
+)
 from app.storage.repositories.information_unit_repository import get_database_engine
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
@@ -284,8 +297,105 @@ async def download_artifact(artifact_id: str, request: Request) -> Response:
         ) from exc
 
     file_name = str(record.get("file_name") or f"{artifact_id}.bin")
+    # §24.3 — le dernier maillon de la chaîne est tracé : le téléchargement servi.
+    # Best effort : une trace manquante est signalée dans le journal, mais elle ne
+    # prive pas l'appelant autorisé du fichier qu'il vient de demander.
+    await _record_delivery_event(engine, artifact_id, target="http_download")
     return Response(
         content=content,
         media_type=str(record.get("mime_type") or "application/octet-stream"),
         headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
+    )
+
+
+async def _record_delivery_event(engine: Any, artifact_id: str, *, target: str) -> dict[str, Any]:
+    """Record one §24.3 delivery event; never fail the download because of it."""
+    from app.storage.repositories.artifact_version_repository import (
+        ArtifactDeliveryEventRepository,
+    )
+
+    try:
+        return await ArtifactDeliveryEventRepository.record(
+            engine, artifact_id, target=target
+        )
+    except Exception as exc:  # noqa: BLE001 - §25.2: reported, not hidden
+        logger.warning(
+            "artifact delivery event not recorded", artifact_id=artifact_id, error=str(exc)
+        )
+        return {"artifact_id": artifact_id, "target": target, "recorded": False}
+
+
+@router.get(
+    "/{artifact_id}/versions",
+    response_model=ArtifactVersionList,
+    summary="Version history of an artifact and the version currently delivered",
+)
+async def list_artifact_versions(artifact_id: str, request: Request) -> ArtifactVersionList:
+    """Return every version of an artifact, oldest first, and the current one.
+
+    §18.1 — the history is append-only: a version is never rewritten. An artifact
+    delivered **before** this history existed has no version row; the response
+    then reports the version the `artifacts` row carries and an empty history
+    rather than inventing a past.
+    """
+    await _require_read_access(request, resource_id=artifact_id)
+    engine = get_database_engine()
+    if engine is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_NO_PERSISTENCE)
+
+    record = await ArtifactRepository.get(engine, artifact_id)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Artifact '{artifact_id}' not found",
+        )
+    await _require_read_access(request, record)
+
+    versions = await ArtifactVersionRepository.list_for_artifact(engine, artifact_id)
+    return ArtifactVersionList(
+        artifact_id=artifact_id,
+        current_version=(versions[-1]["version"] if versions else record.get("version")),
+        versions=[await _version_with_lineage(engine, artifact_id, row) for row in versions],
+    )
+
+
+@router.get(
+    "/{artifact_id}/lineage",
+    response_model=ArtifactLineageView,
+    summary="Lineage and deliveries of an artifact: source → … → download",
+)
+async def get_artifact_lineage(artifact_id: str, request: Request) -> ArtifactLineageView:
+    """Return the per-version lineage and every recorded delivery (§24.2/§24.3)."""
+    await _require_read_access(request, resource_id=artifact_id)
+    engine = get_database_engine()
+    if engine is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=_NO_PERSISTENCE)
+
+    record = await ArtifactRepository.get(engine, artifact_id)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Artifact '{artifact_id}' not found",
+        )
+    await _require_read_access(request, record)
+
+    versions = await ArtifactVersionRepository.list_for_artifact(engine, artifact_id)
+    events = await ArtifactDeliveryEventRepository.list_for_artifact(engine, artifact_id)
+    return ArtifactLineageView(
+        artifact_id=artifact_id,
+        versions=[await _version_with_lineage(engine, artifact_id, row) for row in versions],
+        delivery_events=[ArtifactDeliveryEventResponse(**event) for event in events],
+    )
+
+
+async def _version_with_lineage(
+    engine: Any, artifact_id: str, version_row: dict[str, Any]
+) -> ArtifactVersionResponse:
+    """Attach the lineage recorded for one version to its version row."""
+    lineage = await ArtifactLineageRepository.get_for_version(
+        engine, artifact_id, str(version_row["version"])
+    )
+    return ArtifactVersionResponse(
+        **version_row,
+        lineage=ArtifactLineageResponse(**lineage) if lineage else None,
     )

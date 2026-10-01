@@ -37,6 +37,7 @@ from app.core.version import API_VERSION
 from app.domain.value_objects.request_constraints import DEFAULT_REQUIRED_OUTPUT
 from app.storage.object_storage.object_storage_factory import build_object_storage
 from app.storage.repositories.artifact_repository import ArtifactRepository
+from app.storage.repositories.artifact_version_repository import record_delivered_version
 from app.storage.repositories.information_unit_repository import get_database_engine
 
 __all__ = [
@@ -183,6 +184,22 @@ def _source_ids(information_units: Sequence[Mapping[str, Any]]) -> list[str]:
             for unit in information_units
             if str(unit.get("source_id") or "").startswith("SRC_")
         }
+    )
+
+
+def _information_ids(information_units: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Return the ``INF_`` identifiers of the units the file was built from.
+
+    C'est le maillon « information » de la chaîne
+    ``source → transformation → information → artefact`` : les unités livrées
+    sont ce qui relie les sources aux octets.
+    """
+    return list(
+        dict.fromkeys(
+            str(unit.get("information_id"))
+            for unit in information_units
+            if str(unit.get("information_id") or "").startswith("INF_")
+        )
     )
 
 
@@ -411,4 +428,19 @@ async def deliver_artifacts(
                 f"Artefact {artifact_id} non persisté ({type(exc).__name__}: {exc}) — il "
                 "reste publié dans la livraison mais n'est pas listable via /v1/artifacts."
             )
+        else:
+            # §18.1/§24.2 — la version livrée et son lignage sont écrits juste après
+            # l'artefact, depuis les mêmes entrées : les informations livrées
+            # complètent les sources et transformations que le §24.2 porte déjà.
+            try:
+                await record_delivered_version(
+                    engine,
+                    record,
+                    information_ids=_information_ids(information_units),
+                )
+            except Exception as exc:  # noqa: BLE001 - §25.2: report, never hide
+                outcome.add_limitation(
+                    f"Version/lignage de l'artefact {artifact_id} non enregistrés "
+                    f"({type(exc).__name__}: {exc}) — l'historique des versions est incomplet."
+                )
     return outcome

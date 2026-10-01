@@ -243,8 +243,20 @@ puis `L6` (unification `SourceRepository` requise dès que L2 écrit des sources
 >   absence de fuite, non-contournement par l'ID, filtrage de la liste, 401/403/404, audit sur
 >   PostgreSQL réel)
 
-> - [ ] `artifact_versions` (v1), `artifact_lineage`, `artifact_delivery_events` : tables existantes
->   (0005/0007) mais **toujours vides** — seul `artifacts` est écrit.
+> - [x] `artifact_versions` (v1), `artifact_lineage`, `artifact_delivery_events` : les trois tables
+>   sont désormais écrites sur le **chemin réel** (une livraison enregistre sa version et son
+>   lignage juste après la ligne `artifacts`), via
+>   `app/storage/repositories/artifact_version_repository.py` — append-only, ids déterministes
+>   `AV_<artifact>_<version>` / `AL_<artifact>_<version>`, **aucune** de ces tables ne reçoit de
+>   `deleted_at` (décision `0016` : elles sont l'historique). `publish_new_version` ajoute une
+>   version (bump semver, `supersedes`, lignage propre) et avance `artifacts.version`, donc
+>   « quelle version est livrée » se lit sur l'artefact et reste cohérent avec l'historique.
+>   Deux routes : `GET /v1/artifacts/{id}/versions` et `GET /v1/artifacts/{id}/lineage` (§19.3).
+>   *preuve : `tests/integration/test_artifact_versions_lineage.py`* (14 cas sur PostgreSQL réel :
+>   v1 + lignage depuis la provenance réelle, chaîne source → information → artefact, nouvelle
+>   version, immuabilité, suppression logique qui préserve l'historique, routes et événement de
+>   téléchargement)
+
 > - [ ] `_ToolAdapter` (C6/P1) fabrique encore du texte : à neutraliser.
 > - [ ] Page/section « Artefacts » dans l'UI (`pages/RequestStatus.tsx`).
 

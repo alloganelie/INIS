@@ -1,0 +1,78 @@
+"""In-memory and database-backed lineage graphs for INIS transformations.
+
+Persistence is asynchronous and observable: :meth:`LineageTracker.record`
+schedules a write when an event loop is running, :meth:`LineageTracker.flush`
+awaits the pending writes (including records queued outside a loop), and every
+failure is captured in :attr:`LineageTracker.persistence_errors` instead of
+being silently lost.
+"""
+
+import asyncio
+import json
+from datetime import UTC, datetime
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from app.core.errors import InfrastructureError
+
+
+class LineageTracker:
+    """Record resource transformations and retrieve transitive lineage."""
+
+    def __init__(self, engine: AsyncEngine | None = None) -> None:
+        self._engine = engine
+        self._transformations: dict[str, dict[str, tuple[str, ...]]] = {}
+        self._parents: dict[str, set[str]] = {}
+        self._children: dict[str, set[str]] = {}
+        self._pending_records: list[dict] = []
+        self._persistence_tasks: list[asyncio.Task[None]] = []
+        self._persistence_errors: list[str] = []
+
+    @property
+    def persistence_enabled(self) -> bool:
+        """Whether transformations are written to a database engine."""
+        return self._engine is not None
+
+    @property
+    def persistence_errors(self) -> list[str]:
+        """Failures captured from background or flushed persistence attempts."""
+        return list(self._persistence_errors)
+
+    @property
+    def pending_records(self) -> int:
+        """Records queued outside a running event loop, awaiting :meth:`flush`."""
+        return len(self._pending_records)
+
+    def record(
+        self,
+        transformation_id: str,
+        input_ids: list[str],
+        output_ids: list[str],
+    ) -> None:
+        """Record links from each input resource to each output resource."""
+        self._transformations[transformation_id] = {
+            "input_ids": tuple(input_ids),
+            "output_ids": tuple(output_ids),
+        }
+        for input_id in input_ids:
+            self._children.setdefault(input_id, set()).update(output_ids)
+        for output_id in output_ids:
+            self._parents.setdefault(output_id, set()).update(input_ids)
+
+        if self._engine is not None:
+            record = self._persistence_record(transformation_id, input_ids, output_ids)
+            try:
+                task = asyncio.get_running_loop().create_task(
+                    self._persist_record(self._engine, record)
+                )
+            except RuntimeError:
+                # No running loop: the record waits for flush() instead of being
+                # dropped on the floor.
+                self._pending_records.append(record)
+            else:
+                task.add_done_callback(self._on_persistence_done)
+                self._persistence_tasks.append(task)
+
+    def _on_persistence_done(self, task: asyncio.Task[None]) -> None:
+        """Capture background failures so they are ne
