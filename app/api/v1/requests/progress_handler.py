@@ -55,20 +55,20 @@ class ResumeResponse(BaseModel):
     response_model=RequestProgress,
     summary="Get progress of an Information Request",
 )
-def get_request_progress(id: str) -> RequestProgress:
+async def get_request_progress(id: str) -> RequestProgress:
     """Return the current execution progress of an information request.
 
     The snapshot is read from the real :class:`RequestLifecycle` maintained by
     the pipeline runner (§41.1) instead of being derived from the request
     status. Requests that never entered the pipeline fall back to the
     nominal §28 step count so callers always get a coherent payload.
-    """
-    if id not in _REQUESTS_STORE:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Information request '{id}' not found",
-        )
 
+    §41.1 — la progression est aussi **persistée** (table ``progress``, écrite au
+    même moment que le point de reprise). Quand l'état en mémoire a disparu —
+    redémarrage du worker, autre processus, requête servie par une autre
+    instance — la dernière projection connue est relue en base plutôt que
+    d'inventer un état ou de renvoyer un 404 sur une requête qui existe.
+    """
     expired = pipeline_runner.collect_expired(id)
     if expired is not None:
         return RequestProgress(
@@ -83,7 +83,32 @@ def get_request_progress(id: str) -> RequestProgress:
     if snapshot is not None:
         return RequestProgress(**snapshot.to_dict())
 
-    req = _REQUESTS_STORE[id]
+    if id in _REQUESTS_STORE:
+        return _progress_from_status(_REQUESTS_STORE[id])
+
+    persisted = await _persisted_progress(id)
+    if persisted is not None:
+        return RequestProgress(**persisted)
+
+    if await _request_exists(id):
+        # La requête existe mais n'a jamais produit de progression : l'état
+        # initial est dit tel quel, jamais un état avancé inventé.
+        return RequestProgress(
+            steps_total=PIPELINE_STEPS_TOTAL,
+            steps_done=0,
+            current_step="RECEIVING",
+            estimated_completion=None,
+            partial_findings_available=False,
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Information request '{id}' not found",
+    )
+
+
+def _progress_from_status(req: Any) -> RequestProgress:
+    """Derive the nominal progress of a request that never entered the pipeline."""
     steps_done = 0
     current_step = "RECEIVING"
     if req.status == "processing":
@@ -92,7 +117,6 @@ def get_request_progress(id: str) -> RequestProgress:
     elif req.status not in ("received", "queued"):
         steps_done = PIPELINE_STEPS_TOTAL
         current_step = "DELIVERY"
-
     return RequestProgress(
         steps_total=PIPELINE_STEPS_TOTAL,
         steps_done=steps_done,
@@ -100,6 +124,36 @@ def get_request_progress(id: str) -> RequestProgress:
         estimated_completion=None,
         partial_findings_available=steps_done > 0,
     )
+
+
+async def _persisted_progress(id: str) -> dict[str, Any] | None:
+    """Read the last persisted progress of *id*, or ``None`` (§41.1)."""
+    from app.storage.repositories.information_unit_repository import get_database_engine
+    from app.storage.repositories.progress_repository import ProgressRepository
+
+    engine = get_database_engine()
+    if engine is None:
+        return None
+    try:
+        return await ProgressRepository.get(engine, id)
+    except Exception:  # noqa: BLE001 - a progress gap must not fail the endpoint
+        return None
+
+
+async def _request_exists(id: str) -> bool:
+    """Return whether *id* is a known request, in memory or in PostgreSQL."""
+    from app.storage.repositories.information_unit_repository import get_database_engine
+    from app.storage.repositories.request_repository import RequestRepository
+
+    if id in _REQUESTS_STORE:
+        return True
+    engine = get_database_engine()
+    if engine is None:
+        return False
+    try:
+        return await RequestRepository.get(engine, id) is not None
+    except Exception:  # noqa: BLE001 - an unreadable database is not a 500 here
+        return False
 
 
 @router.get(

@@ -1121,6 +1121,7 @@ class PipelineRunner:
         step_index: int,
         payload: list[dict[str, Any]],
         resumable: bool = True,
+        steps_total: int | None = None,
     ) -> None:
         """Write the §41.1 checkpoint of a run, never raising.
 
@@ -1128,9 +1129,15 @@ class PipelineRunner:
         must not stop a delivery that is already in progress. When it cannot be
         written, the run continues and the resume projection simply stays empty —
         a run that cannot be resumed is not a run that fails.
+
+        La **progression** (§41.1, ``GET /v1/requests/{id}/progress``) est écrite
+        dans le même appel, à partir des mêmes nombres : ce n'est pas une seconde
+        machine à états, mais la projection du même fait. Un run terminé
+        (``resumable=False``) est donc publié comme terminé, jamais « en cours ».
         """
         from app.storage.database.engine import get_default_engine
         from app.storage.repositories.checkpoint_repository import CheckpointRepository
+        from app.storage.repositories.progress_repository import ProgressRepository
 
         engine = get_default_engine()
         if engine is None:
@@ -1146,6 +1153,21 @@ class PipelineRunner:
             )
         except Exception as exc:  # noqa: BLE001 - §25.2: never lose the colis
             logger.warning("checkpoint not written", request_id=request_id, error=str(exc))
+        try:
+            await ProgressRepository.save(
+                engine,
+                request_id,
+                # Le total est celui que le run a réellement planifié : le déduire
+                # du préfixe committé inventerait un plan (§0.2).
+                steps_total=steps_total if steps_total is not None else len(payload) + 1,
+                steps_done=step_index,
+                # §41.1 — un run fini annonce sa dernière étape ; un run en cours
+                # annonce l'étape qu'il va exécuter.
+                current_step="DELIVERY" if not resumable else (last_committed_step or "RECEIVING"),
+                partial_findings_available=bool(payload),
+            )
+        except Exception as exc:  # noqa: BLE001 - §25.2: a progress gap is reported
+            logger.warning("progress not written", request_id=request_id, error=str(exc))
 
     async def resume_interrupted(
         self, request_id: str, payload: Any = None
@@ -1641,6 +1663,7 @@ class PipelineRunner:
                     ),
                     step_index=len(step_results),
                     payload=step_results,
+                    steps_total=len(steps_to_run),
                 )
                 # §1.3 — a cancelled request stops at the next step boundary
                 # instead of continuing acquisition for nobody.
@@ -2646,6 +2669,7 @@ class PipelineRunner:
             step_index=len(step_results),
             payload=step_results,
             resumable=False,
+            steps_total=len(steps_to_run),
         )
         if resumed_from is not None:
             base_limitations.append(
