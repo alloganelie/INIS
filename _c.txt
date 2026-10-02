@@ -1,0 +1,88 @@
+sée si sa `source_freshness` est inférieure au seuil de fraîcheur de la requête courante.
+
+---
+
+### 41.6 Gestion des données structurées volumineuses
+
+La spec couvre l'ingestion de fichiers mais pas le traitement de datasets dépassant la mémoire disponible :
+
+**Stratégie de traitement par chunks :**
+
+```python
+class ChunkedDatasetProcessor(Protocol):
+    async def stream(self, dataset_id: str, chunk_size: int) -> AsyncIterator[DataChunk]: ...
+    async def process_chunk(self, chunk: DataChunk) -> ChunkResult: ...
+    async def merge_results(self, results: list[ChunkResult]) -> Dataset: ...
+```
+
+**Seuils à configurer `[CONFIG]` :**
+
+```text
+max_in_memory_rows        # au-delà, passage en streaming
+max_in_memory_bytes       # au-delà, passage en streaming
+chunk_size_rows           # taille des chunks
+parallel_chunks           # chunks traités en parallèle
+```
+
+---
+
+### 41.7 Détection de désinformation et de manipulation de source
+
+La spec détecte les contradictions inter-sources mais ne prévoit pas :
+
+- La détection de sources synthétiques ou générées par IA.
+- La détection de sites miroirs ou de copie de contenu.
+- La détection de manipulation éditoriale (biais systématique d'une source).
+- La détection de fraîcheur artificielle (contenu ancien re-daté).
+
+**Signal de suspicion `[CONFIG]` :**
+
+```json
+{
+  "source_suspicion": {
+    "synthetic_content_detected": false,
+    "mirror_of": "<SRC_{ULID} | null>",
+    "editorial_bias_score": "<float 0-1>",
+    "freshness_manipulation_suspected": false,
+    "suspicion_reason": "<description | null>"
+  }
+}
+```
+
+Une source avec `synthetic_content_detected = true` NE DOIT PAS contribuer à un `Finding` sans avertissement explicite.
+
+---
+
+### 41.8 Politique de retry et circuit breaker
+
+La spec liste les états d'erreur mais ne définit pas la politique de retry :
+
+**Structure `[CONFIG]` :**
+
+```json
+{
+  "retry_policy": {
+    "max_attempts": "<entier>",
+    "initial_delay_ms": "<entier>",
+    "backoff_multiplier": "<float>",
+    "max_delay_ms": "<entier>",
+    "retryable_errors": ["SOURCE_UNAVAILABLE", "TOOL_FAILURE", "TIMEOUT"]
+  },
+  "circuit_breaker": {
+    "failure_threshold": "<entier>",
+    "recovery_timeout_seconds": "<entier>",
+    "half_open_max_calls": "<entier>"
+  }
+}
+```
+
+Le circuit breaker s'applique par connecteur, par fournisseur Web et par agent externe. L'état `open | closed | half_open` DOIT être exposé dans `/v1/health`.
+
+---
+
+### 41.9 Gestion du consentement et des droits sur les données
+
+La spec couvre PII et politiques d'accès, mais pas :
+
+- Le droit à l'oubli (RGPD Article 17) : comment propager une suppression logique dans toute la chaîne de provenance.
+- Le droit de rectification : comment corrig

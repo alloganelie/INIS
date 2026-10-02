@@ -1,0 +1,26 @@
+trait. Les unités de
+   prose sont de type `document_fragment`, celles d'un tableau `record` : le
+   récit (`document_fragment`) reste distinct du fait atomique.
+5. **Transparence** — en deçà du seuil, aucun processeur n'est instancié ; au
+   delà, le résultat est **identique** (mêmes unités, même ordre), ce qui est
+   verrouillé par `tests/unit/knowledge/test_ingestion_chunking.py` et
+   `tests/integration/test_chunked_ingestion.py`.
+
+## Conséquences
+
+- Un fichier de 5 000 lignes produit 5 000 unités construites par paquets de 50 :
+  la mémoire de travail est bornée par le tronçon, pas par le fichier.
+- Le seuil est visible par le déploiement (TOML + variable d'environnement),
+  donc testable et ajustable sans toucher au code.
+- Un enregistrement qui ne peut pas devenir une unité §11 est **nommé** dans
+  `limitations` (§25.2) au lieu d'interrompre l'ingestion du reste du fichier.
+
+## Limites assumées
+
+- `max_in_memory_bytes` conserve son défaut §41.6 (512 Mio) : un document
+  téléversé est déjà borné par `[limits].max_upload_bytes` (§36.6), le seuil de
+  lignes est celui qui peut réellement être franchi.
+- Le traitement des tronçons est exécuté séquentiellement (`run()` attend chaque
+  tronçon) : `parallel_chunks` borne les tronçons en vol, il n'ordonnance pas de
+  parallélisme réel aujourd'hui.
+
