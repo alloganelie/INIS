@@ -1,0 +1,22 @@
+ cache et invalidation
+
+La spec couvre la mémoire vectorielle mais pas le cache opérationnel :
+
+**Niveaux de cache à distinguer :**
+
+```text
+L1 — Redis     : résultats de recherche Web récents, réponses API (TTL court)
+L2 — PostgreSQL: information units déjà extraites et validées (TTL configurable)
+L3 — pgvector  : embeddings persistants (invalidés par nouvelle version)
+```
+
+**Politique d'invalidation `[CONFIG]` :**
+
+```json
+{
+  "cache_invalidation": {
+    "on_source_update": true,
+    "on_conflict_detected": true,
+    "on_quality_failure": true,
+    "max_ttl_seconds": "<entier>",
+    "freshne

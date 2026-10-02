@@ -31,6 +31,7 @@ from app.storage.repositories.table_repository import as_dict, as_iso
 __all__ = [
     "DEFAULT_DATA_STAGES",
     "EmbeddingRepository",
+    "parse_vector",
     "to_embedding_response",
     "to_unit_row",
 ]
@@ -62,6 +63,15 @@ _LIST_FOR_OWNER = text(
     WHERE owner_type = :owner_type AND owner_id = :owner_id
     ORDER BY created_at DESC
     LIMIT :limit
+    """  # nosec: B608 - the interpolated fragment is a fixed column list
+)
+
+#: §41.5 L3 — read one vector **with its values** (the reuse lookup).
+_SELECT_ONE = text(
+    f"""
+    SELECT {_SELECT_COLUMNS}, vector::text AS vector
+    FROM embeddings
+    WHERE embedding_id = CAST(:embedding_id AS uuid)
     """  # nosec: B608 - the interpolated fragment is a fixed column list
 )
 
@@ -148,6 +158,29 @@ def _vector_literal(value: Any) -> str:
     raise ValueError("an embedding row requires a non-empty vector")
 
 
+def parse_vector(value: Any) -> list[float]:
+    """Return the pgvector literal ``[a,b,c]`` of *value* as a list of floats.
+
+    ``vector::text`` rend cette forme : la lire ainsi évite de dépendre du type
+    ``vector`` côté Python (asyncpg le rend en texte), et un contenu illisible
+    donne une liste vide — jamais une valeur inventée.
+    """
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [float(item) for item in value]
+    if not isinstance(value, str) or not value.strip():
+        return []
+    body = value.strip().strip("[]")
+    if not body:
+        return []
+    parsed: list[float] = []
+    for part in body.split(","):
+        try:
+            parsed.append(float(part))
+        except ValueError:
+            return []
+    return parsed
+
+
 class EmbeddingRepository:
     """§16.1 — the ``embeddings`` table, and the units still missing from it."""
 
@@ -226,6 +259,27 @@ class EmbeddingRepository:
             result = await connection.execute(_COUNT, {"owner_type": owner_type})
             row = result.mappings().first()
         return int(row["total"]) if row else 0
+
+    @classmethod
+    async def get(cls, engine: Any, embedding_id: str) -> dict[str, Any] | None:
+        """Return one stored vector **with its values**, or ``None`` (§16.1).
+
+        Cette lecture est le point d'entrée du niveau **L3** du cache (§41.5) :
+        c'est elle qui permet de réutiliser un vecteur déjà calculé au lieu de
+        rappeler le fournisseur. Le vecteur est demandé en texte (``vector::text``)
+        et rendu comme une liste de flottants — la représentation que le
+        générateur sait réinsérer telle quelle.
+        """
+        async with engine.connect() as connection:
+            result = await connection.execute(
+                _SELECT_ONE, {"embedding_id": embedding_id}
+            )
+            row = result.mappings().first()
+        if row is None:
+            return None
+        record = to_embedding_response(row)
+        record["vector"] = parse_vector(row.get("vector"))
+        return record
 
     @classmethod
     async def list_units_without_embedding(

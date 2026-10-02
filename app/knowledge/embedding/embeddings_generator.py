@@ -51,6 +51,9 @@ __all__ = [
     "EMBEDDING_OWNER_TYPE",
     "EmbeddingOutcome",
     "EmbeddingRecord",
+    "default_embedding_cache",
+    "embedding_cache_key",
+    "embedding_row_id",
     "generate_embeddings",
     "persist_embeddings",
 ]
@@ -60,6 +63,46 @@ __all__ = [
 #: ``tests/unit/knowledge/test_embeddings_generator.py``: a row the searcher
 #: cannot see would be dead weight.
 EMBEDDING_OWNER_TYPE = "information_unit"
+
+
+def embedding_cache_key(
+    unit_id: str, text_hash: str, model: str, dimension: int, version: str | None
+) -> tuple[str, ...]:
+    """Return the L3 cache parts of one unit's embedding (§41.5).
+
+    Tout ce qui décide de l'identité du vecteur entre dans la clé : le texte
+    (par son empreinte), le modèle, la largeur, **et** la version courante de
+    l'unité. Une nouvelle version de l'unité change donc la clé, ce qui est
+    exactement l'invalidation « par nouvelle version » du §41.5 — sans quoi un
+    vecteur calculé avant la révision serait servi pour le texte révisé.
+    """
+    return (
+        EMBEDDING_OWNER_TYPE,
+        str(unit_id),
+        str(text_hash),
+        str(model),
+        str(dimension),
+        str(version or ""),
+    )
+
+
+def default_embedding_cache() -> Any | None:
+    """Return a cache with the L3 (pgvector) level, or ``None`` without a database.
+
+    Sans base configurée il n'y a pas de L3 : rendre ``None`` vaut mieux qu'un
+    cache qui prétendrait retenir quelque chose. L'import est paresseux, comme
+    celui de ``ModelRouter``, pour que ``app.knowledge`` ne dépende pas de
+    ``app.storage`` au chargement.
+    """
+    try:
+        from app.storage.cache.cache_store import CacheStore
+        from app.storage.cache.vector_backend import PgVectorCacheBackend
+    except Exception:  # noqa: BLE001 - no storage layer, no L3
+        return None
+    backend = PgVectorCacheBackend()
+    if not backend.available:
+        return None
+    return CacheStore(l3_async_backend=backend)
 
 
 def vector_literal(vector: Sequence[float]) -> str:
@@ -117,6 +160,9 @@ class EmbeddingOutcome:
     skipped: tuple[dict[str, Any], ...] = ()
     limitations: tuple[str, ...] = ()
     input_tokens: int = 0
+    #: §41.5 L3 — how many of ``records`` were served by the pgvector cache
+    #: instead of being computed and paid for again.
+    reused: int = 0
 
     @property
     def owner_ids(self) -> list[str]:
@@ -141,6 +187,11 @@ class EmbeddingOutcome:
             "model": self.model,
             "dimension": self.dimension,
             "vectors": self.vector_count,
+            # §41.5 L3 — combien de vecteurs viennent du cache : le gain de
+            # l'appel évité est lisible, et il l'est sans le confondre avec les
+            # vecteurs réellement calculés.
+            "reused": self.reused,
+            "computed": self.vector_count - self.reused,
             "skipped": len(self.skipped),
             "tokens": self.input_tokens,
         }
@@ -165,6 +216,53 @@ def _candidates(
             continue
         candidates.append((unit_id, text))
     return candidates, skipped
+
+
+def _expected_model(router: Any, override: str | None) -> str:
+    """Return the model the router will probably answer with, or ``""``.
+
+    Un modèle vide signifie « inconnu » : la réutilisation L3 est alors
+    **désactivée** pour ce lot, parce qu'un identifiant calculé sur un modèle
+    inconnu ne peut pas être comparé sans risque.
+    """
+    if override:
+        return str(override)
+    getter = getattr(router, "embeddings_model", None)
+    if callable(getter):
+        try:
+            return str(getter() or "")
+        except Exception:  # noqa: BLE001 - an unreadable model is an unknown model
+            return ""
+    return ""
+
+
+def _version_head(unit: Mapping[str, Any]) -> str | None:
+    """Return the current version of one unit (§18.1), or ``None``.
+
+    La version courante de l'unité entre dans la clé L3 : un texte révisé produit
+    donc une autre entrée, ce qui est l'invalidation « par nouvelle version » du
+    §41.5 — l'ancienne ligne reste l'historique, elle n'est jamais servie pour le
+    texte révisé.
+    """
+    versions = unit.get("versions")
+    if isinstance(versions, Sequence) and not isinstance(versions, (str, bytes)):
+        return str(versions[-1]) if versions else None
+    return str(versions) if versions else None
+
+
+def embedding_row_id(owner_id: str, text_hash: str, model: str, dimension: int) -> str:
+    """Return the deterministic ``embeddings.embedding_id`` of one vector.
+
+    L'identifiant est un UUID parce que c'est le type de la colonne (``0003``),
+    et il est **déterministe** parce que c'est la réutilisation qui l'exige : le
+    même propriétaire, le même texte, le même modèle et la même largeur
+    retombent sur la même ligne, ce qui rend l'insertion idempotente sans clé
+    secondaire. Le propriétaire en fait partie : deux unités qui portent le même
+    texte restent deux lignes (la recherche §16.2 joint sur ``owner_id``).
+    """
+    from app.storage.cache.vector_backend import PgVectorCacheBackend
+
+    return PgVectorCacheBackend.embedding_key(owner_id, text_hash, model, dimension)
 
 
 def _metadata(unit: Mapping[str, Any], text: str, request_id: str | None) -> dict[str, Any]:
@@ -251,6 +349,8 @@ async def generate_embeddings(
     trace_writer: Any | None = None,
     request_id: str | None = None,
     step_id: str = "embedding",
+    cache: Any | None = None,
+    use_cache: bool = True,
 ) -> EmbeddingOutcome:
     """Embed the §11 units of a colis, or state why no vector was produced.
 
@@ -263,6 +363,9 @@ async def generate_embeddings(
         trace_writer: §41.12 writer receiving one ``embedding`` trace per call.
         request_id: Request the vectors belong to (kept in the trace/metadata).
         step_id: Step the trace is attached to.
+        cache: §41.5 cache holding the L3 (pgvector) level. When omitted, one is
+            built from ``INIS_DATABASE_URL``; without a database there is no L3.
+        use_cache: Set ``False`` to compute everything (measurement, tests).
 
     Returns:
         An :class:`EmbeddingOutcome`: one :class:`EmbeddingRecord` per unit that
@@ -285,56 +388,150 @@ async def generate_embeddings(
         return EmbeddingOutcome(skipped=tuple(skipped), limitations=tuple(limitations))
 
     active_router = router or ModelRouter()
-    try:
-        response: EmbeddingResponse = await active_router.embed(
-            [text for _, text in candidates],
-            model=model,
-            dimension=dimension,
-            batch_size=batch_size,
-        )
-    except InfrastructureError as exc:
-        return EmbeddingOutcome(
-            skipped=tuple(skipped),
-            limitations=(
-                (
-                    f"Aucun vecteur §16.1 produit ({exc}) : le volet sémantique de "
-                    "§16.2 reste indisponible pour ce colis, et aucun vecteur nul "
-                    "n'est inventé (§0.2)."
-                ),
-            ),
-        )
+    active_cache = cache
+    if active_cache is None and use_cache:
+        active_cache = default_embedding_cache()
 
-    _observe_embedding_latency(response.latency_ms)
     by_id = {
         str(unit.get("information_id") or ""): unit
         for unit in units
         if isinstance(unit, Mapping)
     }
-    records = tuple(
-        EmbeddingRecord(
-            owner_id=unit_id,
-            vector=tuple(vector),
-            model=response.model,
-            metadata=_metadata(by_id.get(unit_id, {}), text, request_id),
+    text_hashes = {unit_id: sha256_hex(text) for unit_id, text in candidates}
+    # Le modèle qui va répondre est celui que le routeur annonce ; s'il en annonce
+    # un autre, la clé L3 ne vaut plus et la lecture est abandonnée (plus bas),
+    # plutôt que de risquer un hit du mauvais modèle.
+    expected_model = _expected_model(active_router, model)
+
+    reused: dict[str, list[float]] = {}
+    reused_metadata: dict[str, dict[str, Any]] = {}
+    if active_cache is not None and expected_model:
+        for unit_id, _text in candidates:
+            unit = by_id.get(unit_id, {})
+            found = await active_cache.aget_l3(
+                "embedding",
+                embedding_cache_key(
+                    unit_id, text_hashes[unit_id], expected_model, dimension, _version_head(unit)
+                ),
+                owner_id=unit_id,
+                text_hash=text_hashes[unit_id],
+                model=expected_model,
+                dimension=dimension,
+            )
+            if found:
+                reused[unit_id] = [float(item) for item in found]
+                reused_metadata[unit_id] = {
+                    "cache": {
+                        "hit": True,
+                        "level": "L3",
+                        "text_hash": text_hashes[unit_id],
+                        "model": expected_model,
+                        "dimension": dimension,
+                    }
+                }
+
+    to_compute = [(unit_id, text) for unit_id, text in candidates if unit_id not in reused]
+    limitations_list: list[str] = []
+    response: EmbeddingResponse | None = None
+    if to_compute:
+        try:
+            response = await active_router.embed(
+                [text for _, text in to_compute],
+                model=model,
+                dimension=dimension,
+                batch_size=batch_size,
+            )
+        except InfrastructureError as exc:
+            if not reused:
+                return EmbeddingOutcome(
+                    skipped=tuple(skipped),
+                    limitations=(
+                        (
+                            f"Aucun vecteur §16.1 produit ({exc}) : le volet sémantique de "
+                            "§16.2 reste indisponible pour ce colis, et aucun vecteur nul "
+                            "n'est inventé (§0.2)."
+                        ),
+                    ),
+                )
+            # Le cache a déjà couvert une partie du colis : la panne est dite, et
+            # les vecteurs réutilisés restent livrés tels quels — jamais complétés
+            # par des valeurs inventées.
+            limitations_list.append(
+                "Vecteurs §16.1 partiellement réutilisés (cache L3) ; le calcul des "
+                f"{len(to_compute)} restant(s) a échoué ({exc})."
+            )
+
+    if response is not None and expected_model and response.model != expected_model:
+        # Le provider a répondu avec un autre modèle : les identifiants calculés
+        # avec le modèle annoncé ne décrivent plus ces vecteurs. On les recalcule
+        # avec le modèle réel, et la réutilisation est abandonnée pour ce lot.
+        limitations_list.append(
+            "Le fournisseur d'embeddings a répondu avec un autre modèle que celui "
+            f"configuré ({expected_model} → {response.model}) : la réutilisation L3 est "
+            "abandonnée pour ce lot (§41.5)."
         )
-        for (unit_id, text), vector in zip(candidates, response.vectors, strict=True)
+        reused = {}
+        reused_metadata = {}
+        to_compute = list(candidates)
+
+    _observe_embedding_latency(response.latency_ms if response is not None else 0)
+    computed = (
+        {
+            unit_id: tuple(vector)
+            for (unit_id, _text), vector in zip(to_compute, response.vectors, strict=True)
+        }
+        if response is not None
+        else {}
     )
-    limitations = list(
-        _trace_embedding(
-            trace_writer,
-            [text for _, text in candidates],
-            response,
-            step_id=step_id,
-            request_id=request_id,
+    active_model = response.model if response is not None else expected_model
+    records_list: list[EmbeddingRecord] = []
+    for unit_id, text in candidates:
+        unit = by_id.get(unit_id, {})
+        if unit_id in reused:
+            vector = tuple(reused[unit_id])
+            metadata = {**_metadata(unit, text, request_id), **reused_metadata[unit_id]}
+        elif unit_id in computed:
+            vector = computed[unit_id]
+            metadata = {
+                **_metadata(unit, text, request_id),
+                "cache": {
+                    "hit": False,
+                    "level": "L3",
+                    "text_hash": text_hashes[unit_id],
+                },
+            }
+        else:
+            continue
+        records_list.append(
+            EmbeddingRecord(
+                owner_id=unit_id,
+                vector=vector,
+                model=str(active_model or ""),
+                metadata=metadata,
+                embedding_id=embedding_row_id(
+                    unit_id, text_hashes[unit_id], str(active_model or ""), len(vector)
+                ),
+            )
         )
-    )
+
+    if response is not None:
+        limitations_list.extend(
+            _trace_embedding(
+                trace_writer,
+                [text for _, text in to_compute],
+                response,
+                step_id=step_id,
+                request_id=request_id,
+            )
+        )
     return EmbeddingOutcome(
-        records=records,
-        model=response.model,
+        records=tuple(records_list),
+        model=active_model,
         dimension=dimension,
         skipped=tuple(skipped),
-        limitations=tuple(limitations),
-        input_tokens=response.input_tokens,
+        limitations=tuple(limitations_list),
+        input_tokens=response.input_tokens if response is not None else 0,
+        reused=len(reused),
     )
 
 

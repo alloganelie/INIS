@@ -211,6 +211,9 @@ class TestWhatIsLeftOutIsNamed:
             "model": "fake-embedding",
             "dimension": DIMENSION,
             "vectors": 1,
+            # §41.5 — le lignage dit désormais quel niveau a servi le vecteur.
+            "reused": 0,
+            "computed": 1,
             "skipped": 0,
             "tokens": 7,
         }
