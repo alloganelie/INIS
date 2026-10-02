@@ -1,0 +1,115 @@
+13. Qualité des données — contrôles et score
+
+### 13.1 Interface de contrôle
+
+```python
+class QualityCheck(Protocol):
+    async def run(self, target: InformationUnit | Dataset | Document) -> QualityResult: ...
+```
+
+### 13.2 Contrôles V1 obligatoires
+
+- complétude
+- validité
+- cohérence
+- unicité
+- conformité aux types
+- doublons
+- anomalies
+- fraîcheur
+- provenance
+- cohérence temporelle
+- cohérence inter-sources
+
+### 13.3 Formule du score qualité
+
+```text
+quality_score = weighted_mean(
+  completeness,
+  validity,
+  consistency,
+  uniqueness,
+  type_conformity,
+  freshness,
+  provenance_completeness
+)
+```
+
+Poids par défaut `[CONFIG]` :
+
+```json
+{
+  "completeness": 0.15,
+  "validity": 0.15,
+  "consistency": 0.15,
+  "uniqueness": 0.10,
+  "type_conformity": 0.10,
+  "freshness": 0.15,
+  "provenance_completeness": 0.20
+}
+```
+
+---
+
+## 14. Preuves et contradictions
+
+### 14.1 Structure d'un Claim
+
+```json
+{
+  "claim_id": "<CLM_{ULID}>",
+  "statement": "<affirmation factuelle>",
+  "information_ids": ["<INF_{ULID}>"],
+  "evidence_ids": ["<EVID_{ULID}>"],
+  "confidence": "<float 0-1>",
+  "epistemic_status": "fact | hypothesis | assumption | uncertainty"
+}
+```
+
+### 14.2 Structure d'une Evidence
+
+```json
+{
+  "evidence_id": "<EVID_{ULID}>",
+  "claim_id": "<CLM_{ULID}>",
+  "information_id": "<INF_{ULID}>",
+  "document_id": "<DOC_{ULID}>",
+  "source_id": "<SRC_{ULID}>",
+  "excerpt": "<extrait de la source>",
+  "location": {},
+  "strength": "<float 0-1>"
+}
+```
+
+### 14.3 Structure d'un Conflict
+
+```json
+{
+  "conflict_id": "<CONFLICT_{ULID}>",
+  "information_a": "<INF_{ULID}>",
+  "information_b": "<INF_{ULID}>",
+  "difference_type": "value | definition | date | methodology | scope",
+  "severity": "low | medium | high",
+  "resolution_status": "open | investigated | unresolved | resolved",
+  "resolution_evidence": []
+}
+```
+
+### 14.4 Algorithme de détection de contradictions
+
+```python
+async def detect_conflicts(units: list[InformationUnit]) -> list[Conflict]:
+    conflicts = []
+    grouped = group_by_subject_and_predicate(units)
+    for group in grouped:
+        for a, b in combinations(group, 2):
+            if values_differ(a, b):
+                conflicts.append(Conflict(
+                    information_a=a.information_id,
+                    information_b=b.information_id,
+                    difference_type=classify_difference(a, b),
+                    severity=assess_severity(a, b),
+                    resolution_status="open"
+                ))
+    return conflicts
+```

@@ -98,20 +98,47 @@ async def test_a_dirty_csv_is_uploaded_and_its_defects_are_delivered(
     assert block["checks"]["uniqueness"] < 1.0, "le doublon est vu"
 
     # Le troisième défaut est une *cellule* qui ne tient pas dans sa colonne.
-    # Constat **reproductible** de la chaîne réelle : l'ingestion stocke les
-    # cellules d'un CSV en texte, donc la colonne est homogène pour les contrôles
-    # (cohérence 1.0, schéma inféré « string ») et la cellule n'est pas isolée.
-    # Ce que le colis fait, en revanche, c'est le **dire** : il signale que rien
-    # de mesurable n'a été trouvé, au lieu de laisser croire à une donnée propre.
-    # Pour que §13.2 nomme la cellule elle-même, l'ingestion devrait typer la
-    # colonne (constat consigné dans le plan, item L5 encore `[~]`).
-    assert block["checks"]["validity"] >= 0.0, "le contrôle de schéma a bien tourné"
+    # §13.2/ADR 007 — l'anomalie est désormais **nommée** : le contrôle de
+    # conformité raisonne sur la nature observée de chaque cellule (un texte qui
+    # se lit comme un nombre compte comme un nombre), donc la cellule
+    # « beaucoup » d'une colonne numérique est isolée, avec sa ligne et sa
+    # colonne, **sans** que les valeurs stockées soient modifiées.
+    assert block["checks"]["validity"] < 1.0, "la cellule hors-type est vue"
+    violations = block["details"]["validity"]["violations"]
+    assert violations, "une violation de schéma doit être décrite"
+    # Le score est le rapport des violations aux lignes examinées : il est donc
+    # recalculable depuis ce que le colis publie, sans chiffre magique.
+    assert block["checks"]["validity"] == pytest.approx(
+        1 - len(violations) / block["rows_examined"], abs=1e-6
+    )
+    odd = [item for item in violations if item["field"] == "population"]
+    assert odd, f"la colonne numérique doit être nommée : {violations}"
+    assert all(item["expected"] == "integer" for item in odd), (
+        f"le type de la colonne est dit : {odd}"
+    )
+    kinds = {item["observed"] for item in odd}
+    assert "string" in kinds, (
+        f"la cellule « beaucoup » doit être isolée comme texte : {odd}"
+    )
+    assert "null" in kinds, "et la cellule manquante reste vue comme telle"
+    assert sorted(item["row_index"] for item in odd) == sorted(
+        item["row_index"] for item in odd
+    ), "chaque violation nomme la ligne de la cellule source"
+    assert len({item["row_index"] for item in odd}) == len(odd), (
+        "deux cellules fautives = deux lignes distinctes"
+    )
     assert delivery["limitations"], "un colis ne peut pas être muet sur sa qualité"
 
-    # §37 — les deux défauts visibles sur la chaîne réelle sont nommés.
+    # §37 — les trois défauts visibles sur la chaîne réelle sont nommés.
     limitations = " | ".join(delivery["limitations"])
     assert "population" in limitations, "la valeur manquante est nommée"
     assert "doublon" in limitations, "le doublon est nommé"
+    # La cellule fautive est nommée par sa ligne, sa colonne et son type observé.
+    assert "attendu integer" in limitations and "observé string" in limitations, (
+        f"la cellule hors-type doit être nommée précisément : {limitations}"
+    )
+    # Et rien n'a été inventé ni supprimé : les lignes valides restent livrées.
+    assert block["rows_examined"] >= 4, "aucune ligne valide n'a été perdue"
 
     # §13.2/§41.5 — la fraîcheur des sources livrées a réellement été évaluée.
     assert delivery["source_quality"]["assessed_sources"] >= 1
