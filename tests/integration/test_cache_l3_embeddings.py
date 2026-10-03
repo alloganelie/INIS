@@ -40,6 +40,10 @@ MODEL = "fake-embedding-model"
 #: ce qui rend le refus « dimensions incompatibles » observable.
 DIMENSION = EMBEDDING_DIMENSION
 
+#: Propriétaires dont **ce module** a écrit un vecteur, vidés après chaque test :
+#: ``embeddings`` est partagée, donc un test qui écrit doit nettoyer derrière lui.
+_WRITTEN_OWNERS: list[str] = []
+
 
 class CountingRouter:
     """Fournisseur double qui **compte** les appels : c'est la mesure du gain."""
@@ -98,13 +102,51 @@ def _fresh_engine(db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
     reset_session_maker()
 
 
+@pytest.fixture(autouse=True)
+def _clean_embeddings(db_url: str) -> Any:
+    """Remove the vectors this test wrote, so the shared table stays clean.
+
+    ``embeddings`` est une table **partagée** : y laisser des vecteurs de test
+    change le classement d'autres tests (le corpus de ``test_pgvector.py``
+    interroge la même table avec une limite, et un vecteur oublié ici en
+    évinçait une unité attendue). Un test qui écrit doit donc rendre la table
+    telle qu'il l'a trouvée.
+    """
+    _WRITTEN_OWNERS.clear()
+    yield
+    owners = list(_WRITTEN_OWNERS)
+    _WRITTEN_OWNERS.clear()
+    if not owners:
+        return
+    engine = create_engine(db_url)
+    try:
+        for owner_id in owners:
+            asyncio.run(_delete_owner(engine, owner_id))
+    finally:
+        asyncio.run(engine.dispose())
+
+
+async def _delete_owner(engine: Any, owner_id: str) -> None:
+    """Delete every vector stored for one owner."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "DELETE FROM embeddings WHERE owner_type = :t AND owner_id = :o"
+            ),
+            {"t": EMBEDDING_OWNER_TYPE, "o": owner_id},
+        )
+
+
 def _cache(db_url: str) -> CacheStore:
     """Return a store whose L3 level reads the real ``embeddings`` table."""
     return CacheStore(l3_async_backend=PgVectorCacheBackend(create_engine(db_url)))
 
 
 async def _generate_and_persist(
-    db_url: str, units: list[dict], router: CountingRouter, cache: CacheStore
+    db_url: str,
+    units: list[dict],
+    router: CountingRouter,
+    cache: CacheStore,
 ) -> EmbeddingOutcome:
     """Run the real generation (with L3) and persist what it produced."""
     outcome = await generate_embeddings(
@@ -117,6 +159,7 @@ async def _generate_and_persist(
         await engine.dispose()
     assert not limitations, f"la persistance doit aboutir sans limite : {limitations}"
     assert written == len(outcome.records), "chaque vecteur produit devient une ligne"
+    _WRITTEN_OWNERS.extend(record.owner_id for record in outcome.records)
     return outcome
 
 
