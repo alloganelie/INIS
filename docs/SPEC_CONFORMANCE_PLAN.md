@@ -1213,8 +1213,32 @@ incohérence produit un colis où ces trois défauts sont **explicitement listé
   une valeur servie depuis L2 est promue en L1 ; l'étape web du pipeline utilise ce chemin
   (le fournisseur n'est pas rappelé après vidage de L1).
   *preuve : `tests/integration/test_cache_l2_postgres.py`*
-- [ ] **Cache L3 pgvector** : réutilisation d'embeddings déjà calculés (clé = `sha256` du texte
-  normalisé) — évite de recalculer un vecteur identique. *preuve : `tests/integration/test_cache_l3_embeddings.py`*
+- [x] **Cache L3 pgvector** : réutilisation d'embeddings déjà calculés.
+  ✅ Le contrat §41.5 (« L3 — pgvector : embeddings persistants, invalidés par nouvelle version ») est
+  lu littéralement : ce **n'est pas** une troisième paire clé/valeur à TTL, mais la table `embeddings`
+  (§16.1) — déjà écrite par le générateur, déjà lue par la recherche §16.2 — que le `CacheStore` lit
+  pour éviter un appel au fournisseur (`aget_l3`/`aset_l3`, compteurs `l3_hits`/`l3_writes` distincts
+  de L1/L2). `PgVectorCacheBackend` **ne crée aucune table** et n'écrit rien : `persist_embeddings`
+  reste le seul écrivain, donc aucun second chemin d'écriture.
+  L'identité d'un vecteur est `(propriétaire, empreinte du texte, modèle, largeur)` et **chaque
+  critère est revérifié sur la ligne relue** : propriétaire, modèle ou largeur différents ⇒ pas de
+  hit. ⚠️ Décision documentée : un embedding est une fonction du **texte** et du modèle, pas de la
+  version de l'unité — une nouvelle version au texte identique réutilise légitimement le vecteur, une
+  version au texte révisé recalcule. ⚠️ Un test existant a montré qu'un dédoublonnage par texte seul
+  ferait partager une ligne à deux unités distinctes (la recherche joint sur `owner_id`).
+  *preuve : `tests/integration/test_cache_l3_embeddings.py`* (10 cas, PostgreSQL/pgvector réels)
+- [x] §41.6 : `ChunkedDatasetProcessor` branché au seuil de l'ADR 007 **dans le chemin réel** —
+  ✅ **branché en L2.6** (`document_ingestor._chunked_units` + `app/knowledge/normalization/limits.py`),
+  et le **reste dû de L7 est fait** : la borne de travail sous charge est mesurée et le contrat exact du
+  seuil est verrouillé (unité = la ligne, défaut ADR 50, `should_stream` **strictement** au-dessus du
+  seuil, au seuil/juste en dessous ⇒ aucun processeur, vide ⇒ aucun tronçon, seuil ≤ 0 ⇒ refusé, valeur
+  d'environnement illisible ⇒ retour au défaut). ⚠️ Mesure mémoire **honnête** : le pic tracé du chemin
+  découpé (389 792 octets) est légèrement **supérieur** à celui du chemin direct (359 716) — le résultat
+  fusionné contient toujours toutes les unités. C'est donc la **borne structurelle** (aucun tronçon
+  au-delà du seuil) qui est prouvée, et le test dit lui-même ce qu'il ne mesure pas.
+  *preuves : `tests/performance/test_chunked_threshold.py` (22 cas) ; `tests/integration/test_chunked_ingestion.py`*
+
+
 - [x] §41.6 : `ChunkedDatasetProcessor` branché au seuil de l'ADR 007 **dans le chemin réel** —
   ✅ **branché en L2.6** (`document_ingestor._chunked_units` + `app/knowledge/normalization/limits.py`).
   ⚠️ Ce qui reste de ce lot : valider la **borne mémoire** sous charge et la reprise (§41.1), pas le
