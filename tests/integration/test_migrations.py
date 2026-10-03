@@ -153,3 +153,179 @@ class TestDowngrade:
         run_alembic_upgrade(scratch_database)
         assert await _tables(scratch_database) == upgraded
 
+
+class TestRevision0016:
+    """§18.2 soft delete + §7 request payload, on a real PostgreSQL database."""
+
+    async def test_upgrade_adds_the_columns_it_promises(self, scratch_database: str) -> None:
+        """The content tables get ``deleted_at``, ``requests`` gets ``payload``."""
+        run_alembic_upgrade(scratch_database)
+
+        for table in SOFT_DELETE_TABLES:
+            assert "deleted_at" in await _columns_of(scratch_database, table), table
+        assert "payload" in await _columns_of(scratch_database, "requests")
+
+    async def test_append_only_tables_are_left_alone(self, scratch_database: str) -> None:
+        """Lineage, versions and audit keep their history (§12.1, §18.1, §20)."""
+        run_alembic_upgrade(scratch_database)
+
+        for table in APPEND_ONLY_TABLES:
+            assert "deleted_at" not in await _columns_of(scratch_database, table), table
+
+    async def test_partial_indexes_carry_the_not_deleted_predicate(
+        self, scratch_database: str
+    ) -> None:
+        """The §18.2 read path (``deleted_at IS NULL``) is really indexed."""
+        run_alembic_upgrade(scratch_database)
+
+        for table in SOFT_DELETE_TABLES:
+            definition = await _index_definition(scratch_database, f"ix_{table}_not_deleted")
+            assert definition is not None, f"index partiel absent pour {table}"
+            assert "deleted_at IS NULL" in definition
+
+    async def test_downgrade_removes_exactly_what_the_upgrade_added(
+        self, scratch_database: str
+    ) -> None:
+        """The reverse path is symmetric: no column and no index left behind."""
+        run_alembic_upgrade(scratch_database)
+        _alembic(["downgrade", "0015"], scratch_database)
+
+        for table in SOFT_DELETE_TABLES:
+            assert "deleted_at" not in await _columns_of(scratch_database, table), table
+            assert await _index_definition(scratch_database, f"ix_{table}_not_deleted") is None
+        assert "payload" not in await _columns_of(scratch_database, "requests")
+
+    async def test_existing_rows_survive_the_upgrade(self, scratch_database: str) -> None:
+        """Rows written before 0016 are still there after it, untouched."""
+        _alembic(["upgrade", "0015"], scratch_database)
+        await _seed_rows(scratch_database)
+
+        run_alembic_upgrade(scratch_database)
+
+        assert await _row_count(scratch_database, "sources") >= 1
+        assert await _row_count(scratch_database, "requests") >= 1
+        engine = create_async_engine(scratch_database)
+        try:
+            async with engine.connect() as conn:
+                source = (
+                    await conn.execute(
+                        text("SELECT url, deleted_at FROM sources WHERE id = 'SRC_0016_SEED'")
+                    )
+                ).mappings().first()
+                request = (
+                    await conn.execute(
+                        text(
+                            "SELECT objective, payload FROM requests "
+                            "WHERE request_id = 'REQ_0016_SEED'"
+                        )
+                    )
+                ).mappings().first()
+        finally:
+            await engine.dispose()
+
+        assert source is not None and source["url"] == "https://example.org/seed"
+        assert source["deleted_at"] is None, "une ligne existante n'est pas supprimée par 0016"
+        assert request is not None and request["objective"] == "données existantes"
+        assert request["payload"] is None, "aucune payload inventée pour une ligne antérieure"
+
+    async def test_rows_survive_a_downgrade_then_upgrade_cycle(
+        self, scratch_database: str
+    ) -> None:
+        """A rollback of 0016 does not destroy the rows: only its own columns."""
+        run_alembic_upgrade(scratch_database)
+        await _seed_rows(scratch_database)
+
+        _alembic(["downgrade", "0015"], scratch_database)
+        assert await _row_count(scratch_database, "sources") >= 1
+        assert await _row_count(scratch_database, "requests") >= 1
+
+        run_alembic_upgrade(scratch_database)
+        assert await _row_count(scratch_database, "sources") >= 1
+        assert await _row_count(scratch_database, "requests") >= 1
+
+
+#: §18.2 — the content tables revision 0016 gives a soft-delete column.
+SOFT_DELETE_TABLES = (
+    "sources",
+    "documents",
+    "datasets",
+    "information_units",
+    "evidence",
+    "artifacts",
+    "conflicts",
+)
+
+#: Append-only tables: lineage (§12.1), versions (§18.1) and audit (§20).
+APPEND_ONLY_TABLES = ("transformations", "information_versions", "audit_events")
+
+
+async def _columns_of(database_url: str, table: str) -> set[str]:
+    """Return the column names of *table* (empty when the table is absent)."""
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = :name"
+                    ),
+                    {"name": table},
+                )
+            ).scalars().all()
+    finally:
+        await engine.dispose()
+    return set(rows)
+
+
+async def _index_definition(database_url: str, index: str) -> str | None:
+    """Return the ``pg_indexes`` definition of *index*, or ``None``."""
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.connect() as conn:
+            return (
+                await conn.execute(
+                    text("SELECT indexdef FROM pg_indexes WHERE indexname = :name"),
+                    {"name": index},
+                )
+            ).scalars().first()
+    finally:
+        await engine.dispose()
+
+
+async def _seed_rows(database_url: str) -> None:
+    """Insert one source and one request, before revision 0016 runs.
+
+    They are the "existing data" the migration must not touch. The request
+    carries no ``payload`` column yet: that is exactly what 0016 adds.
+    """
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO sources (id, url, source_type, data_stage, created_at, updated_at) "
+                    "VALUES ('SRC_0016_SEED', 'https://example.org/seed', 'web', 'raw', now(), now())"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO requests (request_id, request_type, objective, status) "
+                    "VALUES ('REQ_0016_SEED', 'research', 'données existantes', 'received')"
+                )
+            )
+    finally:
+        await engine.dispose()
+
+
+async def _row_count(database_url: str, table: str) -> int:
+    """Return how many rows *table* holds."""
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.connect() as conn:
+            return (
+                await conn.execute(text(f"SELECT count(*) FROM {table}"))  # noqa: S608
+            ).scalar_one()
+    finally:
+        await engine.dispose()
+

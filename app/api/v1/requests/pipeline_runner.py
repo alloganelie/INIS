@@ -40,6 +40,7 @@ from app.knowledge.ingestion.request_material import (
     RequestMaterial,
     load_request_material,
 )
+from app.knowledge.memory import HybridMemorySearch, memory_audit_payload
 from app.knowledge.provenance.stage_transformations import build_transformations
 from app.llm.tracing.llm_trace_writer import LLMTraceWriter
 from app.planning.limits import (
@@ -48,9 +49,12 @@ from app.planning.limits import (
     max_parallel_tool_calls,
     max_plan_steps,
 )
+from app.planning.memory_checker import MemoryRequirements, early_stop_decision
+from app.planning.memory_checker import memory_lookup as lookup_memory
 from app.planning.plan_builder import InvalidPlanAction, PlanBuilder, closed_actions
 from app.quality.conflict.conflict_status import conflict_payload
 from app.storage.cache.cache_store import CacheStore
+from app.storage.cache.postgres_backend import PostgresCacheBackend
 from app.storage.database.session import database_configured
 
 #: §34 ``llm_cost`` fallback pricing (USD per token) when the provider response
@@ -68,6 +72,11 @@ PIPELINE_STEPS_TOTAL = 22
 CACHE_NS_WEB_SEARCH = "web_search"
 CACHE_NS_PAGE_FETCH = "page_fetch"
 
+#: §41.8 — attempts for a **repeatable read** on an external web dependency.
+#: A search or a page fetch can be retried; a write never is (see
+#: :func:`app.connectors.resilience.circuit_breaker.guard`).
+WEB_SEARCH_ATTEMPTS = 3
+
 #: §41.13 Safeguards on execution complexity — thresholds and the
 #: ``ConcurrencyLimiter`` live in :mod:`app.planning.limits`; the names below
 #: are re-exported so existing importers keep working.
@@ -81,6 +90,30 @@ _SNIPPET_CONFIDENCE = 0.6
 #: ``data`` request is planned around its sources, and a file it sent is one of
 #: them. The web acquisition steps are the ones removed, never these.
 OWNED_SOURCE_ACTIONS = frozenset({"file_ingest", "query_database"})
+
+
+def _web_acquisition_actions() -> frozenset[str]:
+    """§17.1 — the actions the early-stop may skip: external web acquisition.
+
+    Derived from the §8.4 vocabulary rather than hard-coded: an action is *web
+    acquisition* when **every** tool it declares is a web tool (``web_search``,
+    ``open_url``, ``follow_link``). The request's **own** material
+    (``file_ingest``, ``query_database``) is deliberately not in this set: when
+    the memory already answers the question, the run still delivers the file or
+    the table the requester named — skipping those would lose delivered content,
+    which §17 forbids.
+    """
+    from app.agents.pipeline.tool_dispatch import ACTIONS, WEB_TOOLS
+
+    return frozenset(
+        name
+        for name, spec in ACTIONS.items()
+        if spec.tools and set(spec.tools) <= set(WEB_TOOLS)
+    )
+
+
+#: Actions a sufficient memory makes pointless (§17.1 early-stop).
+WEB_ACQUISITION_ACTIONS = _web_acquisition_actions()
 
 
 def _fact_confidence(fact: dict[str, Any], full_text: bool) -> float:
@@ -383,6 +416,27 @@ def _database_step_result(
     return result
 
 
+def _memory_step() -> dict[str, Any]:
+    """Return the §17.1 ``memory_lookup`` step that opens a plan (§8.4).
+
+    §17.1 is a *pre-acquisition* question — « le run sait-il déjà ? » — so the
+    step is built by the pipeline, not by the planner: the plan must carry it
+    **before** its first acquisition step, whatever the LLM proposed. Its
+    ``order`` is ``0`` so the rest of the plan keeps the numbering it was built
+    with; renumbering the planner's steps to make room would rewrite a decision
+    that was not ours to take.
+    """
+    spec = describe_action("memory_lookup")
+    return {
+        "step_id": ULID.new("STEP_"),
+        "order": 0,
+        "action": "memory_lookup",
+        "description": "Consulter la mémoire (§17.1) avant toute acquisition",
+        "tools_required": list(spec.tools),
+        "inputs": {"question": None},
+    }
+
+
 class PipelineRunner:
     """Orchestrates request processing across understanding, planning, coordinator, and confidence."""
 
@@ -400,7 +454,7 @@ class PipelineRunner:
         self._llm_traces: LLMTraceWriter = LLMTraceWriter()
         self._trace_step_ids: dict[tuple[str, str], str] = {}
         #: §41.5 — L1 cache backing web_search / fetch_page reuse.
-        self._cache: CacheStore = CacheStore()
+        self._cache: CacheStore = CacheStore(l2_async_backend=PostgresCacheBackend())
         #: §41.13 — gate bounding concurrent tool calls of the last run.
         self._last_tool_gate: ConcurrencyLimiter | None = None
 
@@ -437,17 +491,19 @@ class PipelineRunner:
         """Return the §41.13 concurrency gate of the last executed run."""
         return self._last_tool_gate
 
-    # -- §41.5 L1 cache --------------------------------------------------
+    # -- §41.5 L1 + L2 cache ---------------------------------------------
 
     async def _cache_get(self, namespace: str, *parts: Any) -> Any:
-        """Read the L1 cache without blocking the event loop.
+        """Read the §41.5 cache: L1 first, then the durable L2 level.
 
-        ``CacheStore`` is deliberately synchronous (§41.5), so every cache
-        access is off-loaded to a worker thread with :func:`asyncio.to_thread`.
-        The alternative — an async wrapper type — would force a second cache
-        API for a store that is, in the default configuration, a plain dict.
+        ``CacheStore``'s L1 API is synchronous (a plain dict in the default
+        configuration) while PostgreSQL is asynchronous: the store exposes an
+        async path (:meth:`CacheStore.aget`) that reads L1, falls back to the
+        ``cache_entries`` table when a database is configured, and promotes what
+        it finds. Without a database the read is L1-only — :meth:`get_cache_stats`
+        says so rather than implying a durability the process does not have.
         """
-        return await asyncio.to_thread(self._cache.get, namespace, *parts)
+        return await self._cache.aget(namespace, *parts)
 
     async def _cache_set(
         self,
@@ -457,9 +513,14 @@ class PipelineRunner:
         *,
         source_id: str | None = None,
     ) -> None:
-        """Write to the L1 cache, stamping the §41.5 source freshness."""
-        await asyncio.to_thread(
-            self._cache.set,
+        """Write the L1 cache **and** the §41.5 L2 level, stamping freshness.
+
+        The entry carries the instant the value was obtained: §41.5 refuses to
+        reuse it once that instant is older than the request's threshold — in
+        the same process *and* after a restart, which is what the durable level
+        is for.
+        """
+        await self._cache.aset(
             namespace,
             *parts,
             value=value,
@@ -480,23 +541,39 @@ class PipelineRunner:
     async def _search_with_cache(
         self, provider_router: Any, query: str, limit: int
     ) -> list[Any]:
-        """Run ``ProviderRouter.search`` behind the §41.5 L1 cache."""
+        """Run ``ProviderRouter.search`` behind §41.5 cache and §41.8 resilience."""
+        from app.connectors.resilience.circuit_breaker import guard
+
         provider_id = getattr(provider_router, "_default_provider_id", None) or "default"
         parts = self._cache_parts(query, provider_id, limit)
         cached = await self._cache_get(CACHE_NS_WEB_SEARCH, *parts)
         if cached is not None:
             return cached
-        results = await provider_router.search(query=query, limit=limit)
+        # §41.8 — the web provider is an external dependency: a breaker per
+        # provider, and a retry **only** because a search is repeatable (it
+        # reads, it does not write). An exhausted retry raises: no false result.
+        results = await guard(
+            f"provider:{provider_id}",
+            lambda: provider_router.search(query=query, limit=limit),
+            max_attempts=WEB_SEARCH_ATTEMPTS,
+        )
         await self._cache_set(CACHE_NS_WEB_SEARCH, parts, results)
         return results
 
     async def _extract_with_cache(self, extractor: Any, url: str) -> dict[str, Any]:
-        """Run ``WikipediaExtractor.extract`` behind the §41.5 L1 cache."""
+        """Run ``WikipediaExtractor.extract`` behind §41.5 cache and §41.8."""
+        from app.connectors.resilience.circuit_breaker import guard
+
         parts = self._cache_parts(url)
         cached = await self._cache_get(CACHE_NS_PAGE_FETCH, *parts)
         if cached is not None:
             return cached
-        page = await extractor.extract(url)
+        # §41.8 — fetching a page is also a repeatable read.
+        page = await guard(
+            "connector:web_fetch",
+            lambda: extractor.extract(url),
+            max_attempts=WEB_SEARCH_ATTEMPTS,
+        )
         await self._cache_set(
             CACHE_NS_PAGE_FETCH, parts, page, source_id=f"URL:{url}"[:64]
         )
@@ -911,8 +988,259 @@ class PipelineRunner:
                 if request_id in self._subscribers and queue in self._subscribers[request_id]:
                     self._subscribers[request_id].remove(queue)
 
-    async def run(self, request_id: str, payload: Any) -> dict[str, Any]:
-        """Run the end-to-end pipeline with graceful degradation if modules are missing."""
+    async def _memory_step_result(
+        self, step: Mapping[str, Any], *, objective: str, request_id: str
+    ) -> dict[str, Any]:
+        """Execute one §17.1 ``memory_lookup`` step and return its result (§8.4).
+
+        The step asks the memory whether the question is already answered, with
+        the §16.2 hybrid search **injected** into ``memory_checker.memory_lookup``
+        (the decision stays where it is testable, the storage stays out of it).
+
+        Returns:
+            A step result. ``status`` is ``degraded`` only when the memory could
+            not be consulted at all (no database): "consulted, nothing reusable"
+            is a **normal, successful** outcome, stated in ``output`` — a run that
+            found nothing in memory has not failed.
+
+        The units found are carried in ``information_units``: the run reuses them
+        with their **existing identifiers** (§17.1 — nothing is duplicated in the
+        database), and ``memory`` describes the mode the search really ran in.
+        """
+        spec = describe_action("memory_lookup")
+        result: dict[str, Any] = {
+            "step_id": step.get("step_id") or ULID.new("STEP_"),
+            "action": "memory_lookup",
+            "tools_required": list(spec.tools),
+        }
+        from app.storage.database.engine import get_default_engine
+
+        search = HybridMemorySearch(engine=get_default_engine())
+        try:
+            # §17.1 — `requirements` starts from the §41.5 default freshness
+            # threshold: an entry of unknown age is not reused.
+            memory = await lookup_memory(objective, MemoryRequirements(), search=search)
+        except Exception as exc:  # noqa: BLE001 - §25.2: the gap is named
+            self._record_metric("cache_hit_rate", failure=True)
+            result.update(
+                {
+                    "status": "degraded",
+                    "output": "",
+                    "error": (
+                        f"Mémoire §17.1 non consultée ({type(exc).__name__}: {exc}) : "
+                        "le run repart d'une acquisition complète."
+                    ),
+                }
+            )
+            return result
+
+        self._record_metric("cache_hit_rate", failure=not memory.sufficient)
+        note = memory.to_dict()
+        note.update({"mode": search.mode, "limitations": list(search.limitations)})
+        # §8.4/§17.1 — la suffisance ne suffit pas : la décision (et sa raison)
+        # vient de `early_stop_decision`, qui refuse d'arrêter l'acquisition sur
+        # une recherche dégradée ou limitée.
+        decision = early_stop_decision(
+            memory, mode=search.mode, limitations=search.limitations
+        )
+        note.update(decision.to_dict())
+        result["memory"] = note
+        if search.mode == "unavailable":
+            result.update(
+                {
+                    "status": "degraded",
+                    "output": "",
+                    "error": search.limitations[0]
+                    if search.limitations
+                    else "Mémoire §17.1 indisponible.",
+                }
+            )
+            return result
+        if memory.sufficient:
+            reused = [item.information_id for item in memory.items]
+            result.update(
+                {
+                    "status": "done",
+                    "output": (
+                        f"Mémoire §17.1 ({search.mode}) : {len(reused)} unité(s) "
+                        "relevée(s) d'un run précédent, réutilisée(s) telle(s) quelle(s)."
+                    ),
+                    "information_ids": reused,
+                    "information_units": [
+                        dict(search.units[identifier])
+                        for identifier in reused
+                        if identifier in search.units
+                    ],
+                }
+            )
+            return result
+        result.update(
+            {
+                "status": "done",
+                "output": (
+                    f"Mémoire §17.1 ({search.mode}) consultée : rien de réutilisable — "
+                    f"{memory.reason or 'aucun candidat'}"
+                ),
+            }
+        )
+        return result
+
+    async def _audit_memory_lookup(
+        self, request_id: str, result: dict[str, Any]
+    ) -> None:
+        """Write the §20 audit event of a memory lookup, never raising (§17.1).
+
+        A database that cannot be written to is not a reason to lose the
+        delivery: the failure is stated by the caller instead of being thrown.
+        """
+        from app.governance.audit.audit_writer import AuditWriter
+        from app.storage.database.session import ensure_session_maker, get_session
+
+        if result.get("action") != "memory_lookup" or not ensure_session_maker():
+            return
+        payload = memory_audit_payload(
+            request_id,
+            result.get("memory"),
+            mode=str((result.get("memory") or {}).get("mode") or "unknown"),
+        )
+        try:
+            async for session in get_session():
+                await AuditWriter().write(payload, session=session)
+                await session.commit()
+                break
+        except Exception as exc:  # noqa: BLE001 - §25.2: the gap is named
+            logger.warning(
+                "memory lookup audit event not written", error=str(exc)
+            )
+
+    async def _checkpoint_step(
+        self,
+        request_id: str,
+        *,
+        last_committed_step: str | None,
+        step_index: int,
+        payload: list[dict[str, Any]],
+        resumable: bool = True,
+        steps_total: int | None = None,
+    ) -> None:
+        """Write the §41.1 checkpoint of a run, never raising.
+
+        The checkpoint is a *best effort*: a database that cannot be written to
+        must not stop a delivery that is already in progress. When it cannot be
+        written, the run continues and the resume projection simply stays empty —
+        a run that cannot be resumed is not a run that fails.
+
+        La **progression** (§41.1, ``GET /v1/requests/{id}/progress``) est écrite
+        dans le même appel, à partir des mêmes nombres : ce n'est pas une seconde
+        machine à états, mais la projection du même fait. Un run terminé
+        (``resumable=False``) est donc publié comme terminé, jamais « en cours ».
+        """
+        from app.storage.database.engine import get_default_engine
+        from app.storage.repositories.checkpoint_repository import CheckpointRepository
+        from app.storage.repositories.progress_repository import ProgressRepository
+
+        engine = get_default_engine()
+        if engine is None:
+            return
+        try:
+            await CheckpointRepository.save(
+                engine,
+                request_id,
+                last_committed_step=last_committed_step,
+                step_index=step_index,
+                payload=payload,
+                resumable=resumable,
+            )
+        except Exception as exc:  # noqa: BLE001 - §25.2: never lose the colis
+            logger.warning("checkpoint not written", request_id=request_id, error=str(exc))
+        try:
+            await ProgressRepository.save(
+                engine,
+                request_id,
+                # Le total est celui que le run a réellement planifié : le déduire
+                # du préfixe committé inventerait un plan (§0.2).
+                steps_total=steps_total if steps_total is not None else len(payload) + 1,
+                steps_done=step_index,
+                # §41.1 — un run fini annonce sa dernière étape ; un run en cours
+                # annonce l'étape qu'il va exécuter.
+                current_step="DELIVERY" if not resumable else (last_committed_step or "RECEIVING"),
+                partial_findings_available=bool(payload),
+            )
+        except Exception as exc:  # noqa: BLE001 - §25.2: a progress gap is reported
+            logger.warning("progress not written", request_id=request_id, error=str(exc))
+
+    async def resume_interrupted(
+        self, request_id: str, payload: Any = None
+    ) -> dict[str, Any] | None:
+        """Continue an interrupted run from its last committed checkpoint (§41.1).
+
+        Distinct from :meth:`resume`, which continues a lifecycle from an opaque
+        **token** held by the caller. This one reads the **persisted** checkpoint:
+        it is what a supervisor calls after a crash, when nobody holds a token
+        anymore.
+
+        Args:
+            request_id: The request to resume.
+            payload: The original §7 payload. When omitted it is rebuilt from the
+                ``requests`` row (revision ``0016`` stores it whole), so a resume
+                started by another process does not need the caller to hold it.
+
+        Returns:
+            The delivery of the resumed run, or ``None`` when there is nothing to
+            resume — no checkpoint, a completed one, or no acquired prefix. The
+            caller decides what to tell the requester; this method never invents a
+            run that cannot be resumed.
+        """
+        from app.storage.database.engine import get_default_engine
+        from app.storage.repositories.checkpoint_repository import CheckpointRepository
+        from app.storage.repositories.request_repository import RequestRepository
+
+        engine = get_default_engine()
+        if engine is None:
+            return None
+        checkpoint = await CheckpointRepository.get(engine, request_id)
+        if not checkpoint or not checkpoint.get("resumable"):
+            return None
+        if not checkpoint.get("payload"):
+            # The position is known but what had been acquired is not: resuming
+            # would silently deliver a run with holes. It is refused instead.
+            return None
+        if payload is None:
+            stored = await RequestRepository.get(engine, request_id)
+            payload = (stored or {}).get("payload")
+            if not payload:
+                return None
+        return await self.run(request_id, payload, resume=checkpoint)
+
+    async def run(
+        self, request_id: str, payload: Any, *, resume: Mapping[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Run the end-to-end pipeline with graceful degradation if modules are missing.
+
+        Args:
+            request_id: The request being served.
+            payload: The §7 request payload.
+            resume: §41.1 checkpoint to continue from. When supplied, the step
+                results it carries are **replayed** (the run does not re-execute
+                the committed steps, so the information acquired before the
+                interruption is delivered without being acquired twice).
+        """
+        resumed_results: list[dict[str, Any]] = [
+            dict(item) for item in ((resume or {}).get("payload") or [])
+        ]
+        replayed_steps = int(
+            (resume or {}).get("step_index")
+            or (len(resumed_results) if resume else 0)
+        )
+        resumed_from: dict[str, Any] | None = (
+            {
+                "last_committed_step": (resume or {}).get("last_committed_step"),
+                "step_index": replayed_steps,
+                "replayed_steps": replayed_steps,
+            }
+            if resume
+            else None
+        )
         start_time = time.monotonic()
         start_iso = datetime.now(UTC).isoformat()
         self._running.add(request_id)
@@ -1246,7 +1574,7 @@ class PipelineRunner:
             "status": "in_progress",
             "request_id": request_id,
         })
-        step_results: list[dict[str, Any]] = []
+        step_results: list[dict[str, Any]] = list(resumed_results)
         # Accumulated facts with real SRC_ provenance (§0.2-compliant)
         web_facts: list[dict[str, Any]] = []
         # Accumulated source entries for the delivery sources[] field
@@ -1264,6 +1592,13 @@ class PipelineRunner:
         #: §8.4/§36.7 — ``query_database`` steps whose source could not be read
         #: (absent vault entry, unreachable host, empty table, no table named).
         unavailable_databases: list[str] = []
+        #: §17.1 — ``memory_lookup`` steps whose memory could not be consulted at
+        #: all (no database): « rien de réutilisable » n'est pas une dégradation.
+        unavailable_memory: list[str] = []
+        #: §17.1/§8.4 — ``True`` dès qu'une mémoire suffisante arrête l'acquisition,
+        #: et les actions qui, en conséquence, n'ont pas été exécutées.
+        acquisition_stopped = False
+        skipped_actions: list[str] = []
 
         # §41.13 Safeguard: max_plan_steps
         max_plan_steps_limit = max_plan_steps()
@@ -1291,6 +1626,14 @@ class PipelineRunner:
         tool_gate = ConcurrencyLimiter(max_tool_calls)
         self._last_tool_gate = tool_gate
 
+        # §17.1 — the memory step is inserted **after** the §41.13 safeguard, so
+        # the bound keeps measuring what the *planner* produced, and then at the
+        # head of the plan: before this lot, `memory_checker` was never called by
+        # any run, so every request re-acquired what it already knew (C13).
+        steps_to_run.insert(0, _memory_step())
+        if isinstance(plan, dict):
+            plan["steps"] = steps_to_run
+
 
         try:
             from app.connectors.web.extractors.wikipedia_extractor import WikipediaExtractor
@@ -1303,7 +1646,25 @@ class PipelineRunner:
             fact_extractor = FactExtractor()
             reliability_scorer = SourceReliabilityScorer()
 
-            for step in steps_to_run:
+            for index, step in enumerate(steps_to_run, start=1):
+                if index <= replayed_steps:
+                    # §41.1 — cette étape a déjà été exécutée avant
+                    # l'interruption : son résultat vient du point de reprise, et
+                    # la ré-exécuter acquerrait une seconde fois la même
+                    # information.
+                    continue
+                # §41.1 — le point de reprise est écrit **avant** que l'étape ne
+                # s'exécute : une interruption pendant l'étape N laisse donc un
+                # état qui décrit les étapes 1..N-1 et ce qu'elles ont produit.
+                await self._checkpoint_step(
+                    request_id,
+                    last_committed_step=(
+                        str(step_results[-1].get("step_id")) if step_results else None
+                    ),
+                    step_index=len(step_results),
+                    payload=step_results,
+                    steps_total=len(steps_to_run),
+                )
                 # §1.3 — a cancelled request stops at the next step boundary
                 # instead of continuing acquisition for nobody.
                 if self.is_cancelled(request_id):
@@ -1311,6 +1672,45 @@ class PipelineRunner:
                     break
                 action = step.get("action", "")
                 inputs = step.get("inputs", {})
+                if action == "memory_lookup":
+                    # §17.1 — la mémoire est consultée avant toute acquisition :
+                    # le run sait-il déjà ? La recherche §16.2 est **injectée**
+                    # dans `memory_checker.memory_lookup`, et le résultat dit ce
+                    # qui a réellement tourné (hybride, lexical seul, indisponible).
+                    memory_result = await self._memory_step_result(
+                        step, objective=objective, request_id=request_id
+                    )
+                    step_results.append(memory_result)
+                    if memory_result.get("status") != "done":
+                        unavailable_memory.append(action)
+                    await self._audit_memory_lookup(request_id, memory_result)
+                    # §17.1 — la décision d'arrêter l'acquisition est celle de
+                    # `early_stop_decision`, pas la simple suffisance : une
+                    # recherche dégradée ou limitée ne l'arrête pas.
+                    if (memory_result.get("memory") or {}).get("stopped_acquisition"):
+                        acquisition_stopped = True
+                    continue
+                if acquisition_stopped and action in WEB_ACQUISITION_ACTIONS:
+                    # §17.1/§8.4 — l'acquisition n'est pas seulement « inutile
+                    # d'après le plan » : elle n'est pas exécutée. L'étape reste
+                    # dans le colis en `skipped`, avec la raison, pour que la
+                    # relecture montre ce qui n'a pas tourné (et pourquoi) plutôt
+                    # que de laisser croire qu'un plan plus court était prévu.
+                    skipped_actions.append(str(action))
+                    step_results.append(
+                        {
+                            "step_id": step.get("step_id") or ULID.new("STEP_"),
+                            "action": str(action),
+                            "status": "skipped",
+                            "output": (
+                                "Acquisition non exécutée (§17.1) : la mémoire consultée "
+                                "répond déjà à la question."
+                            ),
+                            "error": "",
+                            "memory_sufficient": True,
+                        }
+                    )
+                    continue
                 if action == "file_ingest":
                     # §9.1 — the step reads back the material the request already
                     # ingested. It is `done` only when there is material to read;
@@ -1631,6 +2031,39 @@ class PipelineRunner:
                 }
             )
 
+        # §17.1 — les unités relevées en mémoire entrent dans le colis **avec leur
+        # identifiant d'origine** : le run les réutilise, il ne les recrée pas
+        # (l'écriture est ``ON CONFLICT (id) DO NOTHING``, donc rien n'est
+        # dupliqué en base, §5.3), et leur contexte dit d'où elles viennent.
+        memory_unit_ids: list[str] = []
+        memory_note: dict[str, Any] = {}
+        memory_limits: list[str] = []
+        for step_result in step_results:
+            if step_result.get("action") != "memory_lookup":
+                continue
+            note = dict(step_result.get("memory") or {})
+            memory_limits.extend(str(line) for line in (note.get("limitations") or []))
+            if note:
+                memory_note = note
+            for unit in step_result.get("information_units") or []:
+                unit_id = str(unit.get("information_id") or "")
+                if not unit_id or any(
+                    str(existing.get("information_id")) == unit_id
+                    for existing in information_units
+                ):
+                    continue
+                reused = dict(unit)
+                context = dict(reused.get("context") or {})
+                context["memory"] = {
+                    "reused": True,
+                    "mode": note.get("mode"),
+                    "question": objective,
+                    "step_id": step_result.get("step_id"),
+                }
+                reused["context"] = context
+                information_units.append(reused)
+                memory_unit_ids.append(unit_id)
+
         if not evidence:
             # Nothing traceable was acquired: the delivery still states that it
             # rests on the plan execution and nothing else, with the neutral
@@ -1742,6 +2175,58 @@ class PipelineRunner:
         # each dataset: the delivery says how far the material of a table went,
         # instead of leaving the reader to infer it from the units alone.
         datasets = resolved_dataset_stages(information_units, datasets)
+
+        # -------------------------------------------------------------
+        # Stage 3.8: §13.2/§13.3 — the datasets of the colis are checked
+        # -------------------------------------------------------------
+        # A delivery that lists a dataset without saying whether it is complete,
+        # unique and consistent leaves the reader to assume it is clean. The
+        # checks run on the rows already delivered (the §11 units of that
+        # dataset), and their issues join the delivery's limitations: §37
+        # « signaler > inventer » applies to quality as it does to the rest.
+        dataset_quality = None
+        dataset_quality_limits: list[str] = []
+        dataset_quality_missing: list[str] = []
+        try:
+            from app.quality.dataset_quality import assess_datasets
+
+            dataset_quality = await assess_datasets(datasets, information_units)
+            dataset_quality_limits = list(dataset_quality.limitations)
+            dataset_quality_missing = list(dataset_quality.missing_information)
+            for dataset in datasets:
+                block = dataset_quality.datasets.get(str(dataset.get("dataset_id") or ""))
+                if block is not None:
+                    # ``None`` when the rows were not in the colis: not measured
+                    # is not the same as measured and good (§13.3).
+                    dataset["quality_score"] = block.get("quality_score")
+        except Exception as quality_error:  # noqa: BLE001 - §25.2: never lose the colis
+            dataset_quality_limits.append(
+                "Qualité §13.2 non mesurée : les contrôles ont échoué "
+                f"({type(quality_error).__name__}: {quality_error})."
+            )
+
+        # -------------------------------------------------------------
+        # Stage 3.9: §13.2/§41.5 freshness + §14.4 source contradictions
+        # -------------------------------------------------------------
+        # ``check_freshness`` was never called: ``sources[].freshness`` stayed
+        # empty and the column was persisted as NULL. ``compare_sources`` was
+        # never called either: a file and a web page disagreeing produced a
+        # delivery that looked unanimous. Both now run on the material the run
+        # holds, and what cannot be compared is stated instead of arbitrated.
+        source_quality = None
+        source_quality_limits: list[str] = []
+        try:
+            from app.quality.source_quality import assess_sources
+
+            source_quality = await assess_sources(
+                [*web_sources, *ingested_sources], information_units
+            )
+            source_quality_limits = list(source_quality.limitations)
+        except Exception as source_error:  # noqa: BLE001 - §25.2: the colis outlives it
+            source_quality_limits.append(
+                "Fraîcheur §13.2 / comparaison §14.4 non exécutées : "
+                f"({type(source_error).__name__}: {source_error})."
+            )
 
         # -------------------------------------------------------------
         # Stage 4: Confidence Evaluation (with graceful degradation)
@@ -1993,6 +2478,12 @@ class PipelineRunner:
         # subject/predicate triple, so nothing is flagged; the slot exists so
         # ``assess_conflicts`` output drops straight into the delivery.
         conflicts: list[Any] = []
+        if source_quality is not None:
+            # §14.4 — les contradictions détectées entre les sources livrées
+            # (fichier↔web comprises) entrent dans le colis au lieu de laisser
+            # un emplacement vide qui se lisait comme « tout le monde est
+            # d'accord ».
+            conflicts = list(source_quality.conflicts)
 
         # §1.3 — the status is decided by app.core.statuses, never inline.
         delivery_status = resolve_delivery_status(
@@ -2033,10 +2524,54 @@ class PipelineRunner:
         if database_refusal:
             base_limitations.append(database_refusal)
         base_limitations.extend(database_persistence_limits)
+        # §13.2 — ce que les contrôles qualité des datasets ont trouvé (doublons,
+        # valeurs manquantes, colonnes incohérentes) et, le cas échéant, la raison
+        # pour laquelle ils n'ont pas pu tourner.
+        base_limitations.extend(dataset_quality_limits)
+        # §13.2/§14.4 — fraîcheur évaluée de chaque source livrée et résultat de
+        # la comparaison entre sources (y compris ce qui n'a pas pu être croisé).
+        base_limitations.extend(source_quality_limits)
+        # §17.1 — l'arrêt de l'acquisition, ou son refus malgré une mémoire
+        # suffisante, est dit dans le colis : une décision invisible serait une
+        # décision qu'on ne peut pas contester.
+        if isinstance(memory_note, dict) and memory_note.get("stopped_acquisition"):
+            stopped_detail = (
+                " étape(s) non exécutée(s) : " + ", ".join(sorted(set(skipped_actions))) + "."
+                if skipped_actions
+                else ""
+            )
+            base_limitations.append(
+                "Acquisition arrêtée (§17.1) : la mémoire consultée répond déjà à la "
+                "question (critères : "
+                + ", ".join(str(item) for item in (memory_note.get("criteria") or []))
+                + ")."
+                + stopped_detail
+            )
+        elif isinstance(memory_note, dict) and memory_note.get("sufficient"):
+            base_limitations.append(
+                "Mémoire suffisante mais acquisition maintenue (§17.1) : "
+                + str(memory_note.get("withheld_reason") or "suffisance non conclue")
+            )
         # §12/§25.2 — what the enrichment of Stage 3.7 could not read: a date
         # whose convention is unknown, an amount behind an ambiguous ``$``, a
         # duplicate that was kept and named. Stating it is the point.
         base_limitations.extend(enrichment_limits)
+        # §17.1 — ce que la mémoire a pu (ou n'a pas pu) donner : mode réel de la
+        # recherche (§16.2) et, à défaut de réutilisation, la raison. Le cas
+        # « base absente » est déjà dit par la phrase ci-dessous, plus précise.
+        if not unavailable_memory:
+            base_limitations.extend(memory_limits)
+        if unavailable_memory:
+            base_limitations.append(
+                "Mémoire §17.1 non consultable (aucune base PostgreSQL configurée) : "
+                "le run a acquis ses informations sans vérifier ce qu'il savait déjà."
+            )
+        elif memory_note and not memory_note.get("sufficient"):
+            base_limitations.append(
+                "Mémoire §17.1 consultée sans réutilisation : "
+                f"{memory_note.get('reason') or 'aucun candidat réutilisable'} — "
+                "les informations livrées viennent de cette acquisition."
+            )
         if database_material is not None and database_material.limitations and (
             database_material.has_material
             or request_type in ("data", "source")
@@ -2045,6 +2580,9 @@ class PipelineRunner:
             base_limitations.extend(database_material.limitations)
         # §33.3 « demande ambiguë » — the ambiguity is stated, never hidden.
         missing_information: list[str] = list(clarifications)
+        # §13.3 — une qualité non mesurée est une information manquante, au même
+        # titre qu'une clarification non obtenue (le colis dit ce qu'il ne sait pas).
+        missing_information.extend(dataset_quality_missing)
         if missing_information:
             base_limitations.append(
                 "Demande ambiguë (§33.3) — informations manquantes : "
@@ -2121,6 +2659,25 @@ class PipelineRunner:
             step_results=step_results,
         )
         base_limitations.extend(persistence_limits)
+        # §41.1 — le run est allé au bout : le point de reprise ne sert plus, et
+        # le laisser « resumable » ferait croire qu'il reste quelque chose à faire.
+        await self._checkpoint_step(
+            request_id,
+            last_committed_step=(
+                str(step_results[-1].get("step_id")) if step_results else None
+            ),
+            step_index=len(step_results),
+            payload=step_results,
+            resumable=False,
+            steps_total=len(steps_to_run),
+        )
+        if resumed_from is not None:
+            base_limitations.append(
+                "Reprise §41.1 : ce run a continué une exécution interrompue à "
+                f"l'étape « {resumed_from.get('last_committed_step') or 'inconnue'} » ; "
+                f"{resumed_from.get('replayed_steps', 0)} résultat(s) d'étape ont été "
+                "rejoués depuis le point de reprise (aucune ré-acquisition)."
+            )
 
         delivery_response: dict[str, Any] = {
             "response_id": resp_id,
@@ -2139,6 +2696,21 @@ class PipelineRunner:
             "transformations": [],
             "conflicts": conflict_payload(conflicts),
             "confidence": confidence_details,
+            # §13.2/§13.3 — les contrôles des datasets livrés et leur score : un
+            # colis qui porte un dataset dit ce qu'il vaut, ou pourquoi il ne l'a
+            # pas mesuré (``quality_score: null``).
+            "quality": (
+                dataset_quality.to_dict()
+                if dataset_quality is not None
+                else {"datasets": {}, "checks": [], "not_a_probability": True}
+            ),
+            # §13.2/§14.4 — fraîcheur évaluée par source et compte des conflits
+            # détectés entre elles (le détail des conflits est dans `conflicts`).
+            "source_quality": (
+                source_quality.to_dict()
+                if source_quality is not None
+                else {"freshness": {}, "conflicts": 0, "not_a_probability": True}
+            ),
             "limitations": base_limitations,
             "assumptions": assumptions_from_llm,
             "missing_information": missing_information,
@@ -2155,6 +2727,30 @@ class PipelineRunner:
                 "request_type": request_type,
                 "plan_id": plan.get("plan_id") if isinstance(plan, dict) else None,
                 "steps_executed": len(step_results),
+                # §17.1 — « mémoire utilisée » se lit ici : le mode de recherche
+                # réellement exécuté (§16.2) et les unités réutilisées.
+                # §41.1 — la reprise d'un run interrompu se lit ici : d'où l'on
+                # vient et combien de résultats ont été rejoués.
+                "resumed_from": resumed_from,
+                "memory": {
+                    **{
+                        key: memory_note.get(key)
+                        for key in (
+                            "sufficient",
+                            "reason",
+                            "information_ids",
+                            "mode",
+                            # §17.1/§8.4 — la décision d'arrêt et sa raison voyagent
+                            # avec la provenance : le colis dit *pourquoi* il s'est
+                            # arrêté (ou pourquoi il ne s'est pas arrêté).
+                            "stopped_acquisition",
+                            "criteria",
+                            "withheld_reason",
+                        )
+                        if memory_note
+                    },
+                    "reused_units": len(memory_unit_ids),
+                },
             },
             "audit": {
                 "audit_id": audit_record.get("audit_event_id") or ULID.new("AUD_"),
@@ -2265,6 +2861,9 @@ class PipelineRunner:
             information_units=information_units,
             evidence=evidence,
             sources=final_sources,
+            # §12.1 — les transformations réellement exécutées par ce run : le
+            # fichier livré nomme celles qui ont produit ses unités.
+            transformations=transformations,
         )
         if artifact_outcome.artifacts:
             delivery_response["artifacts"] = artifact_outcome.artifacts
@@ -2284,9 +2883,21 @@ class PipelineRunner:
             enrichment=enrichment_lineage,
             delivered_units=information_units,
         )
-        if derived:
-            delivery_response["transformations"] = derived
-        persisted_lineage = await persist_transformations(derived, request_id=request_id)
+        # §12.1 — le second appel **régénère** les étapes ``raw``/``normalized``/
+        # ``enriched`` avec de nouveaux identifiants. Ne persister que ce second
+        # jeu laissait donc l'artefact citant des ``TRF_`` qui n'existaient nulle
+        # part : une provenance pendante, découverte par le parcours E2E. On garde
+        # le jeu **déjà cité** et on n'ajoute du second appel que l'étape
+        # ``derived``, la seule qui dépende des artefacts livrés.
+        derived_only = [
+            item
+            for item in derived
+            if str((item.get("parameters") or {}).get("stage")) == "derived"
+        ]
+        transformations = [*transformations, *derived_only]
+        if transformations:
+            delivery_response["transformations"] = transformations
+        persisted_lineage = await persist_transformations(transformations, request_id=request_id)
         if not persisted_lineage and database_configured():
             base_limitations.append(
                 "Transformations §12.1 non persistées (écriture en échec) : elles restent "

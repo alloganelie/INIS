@@ -164,8 +164,16 @@ class ArtifactPackager:
 
         key = self._object_key(artifact.artifact_id, artifact.file_name)
         try:
-            storage_ref = self._storage.upload(
-                key, generated.content, content_type=generated.mime_type
+            # §41.8 — l'objet store est une dépendance externe : le disjoncteur
+            # évite de marteler un S3 mort. L'upload est une écriture : pas de
+            # retry (une seconde tentative n'est justifiée que sur une lecture).
+            from app.connectors.resilience.circuit_breaker import guard_sync
+
+            storage_ref = guard_sync(
+                "connector:s3",
+                lambda: self._storage.upload(
+                    key, generated.content, content_type=generated.mime_type
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - §25.2: report, never hide
             return PackageResult(

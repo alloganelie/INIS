@@ -53,6 +53,9 @@ documents_table = Table(
     Column("size_bytes", BigInteger, nullable=True),
     Column("request_id", String(64), nullable=True),
     Column("pii_classification", JSON_TYPE, nullable=True),
+    # Revision 0016 — §18.2: set when the record is soft-deleted; a read
+    # filters on ``deleted_at IS NULL`` (partial index of the same name).
+    Column("deleted_at", DateTime(timezone=True), nullable=True),
 )
 
 

@@ -30,6 +30,10 @@ repartir d'un arbre propre, sinon tous les diffs de ce plan sont illisibles.
 **Protocole de coché (règle héritée de `docs/SPEC_COVERAGE.md`)**
 
 > Aucune case `[x]` sans **nom de test réel** qui la prouve et **hash de commit**.
+> Cette règle n'est plus une promesse : `tests/unit/docs/test_plan_proofs_exist.py` échoue si une
+> case cochée ne cite aucun fichier de test, si un fichier cité n'existe pas, ou si un nœud
+> (`fichier::Classe::test`) n'y est pas déclaré. Un fichier mentionné **sans** le préfixe `tests/`
+> est une note de correction (« le plan citait `test_x.py`, qui n'existe pas »), pas une citation.
 
 Chaque tâche porte donc : `Tâche — preuve (fichier de test)`.
 
@@ -225,40 +229,95 @@ puis `L6` (unification `SourceRepository` requise dès que L2 écrit des sources
 >
 > **Reste ouvert dans L1**
 >
-> - [ ] `ETag` / `X-Checksum-Sha256` sur le download (headers non posés aujourd'hui).
-> - [ ] Refus de téléchargement d'un artefact `status="deleted"` (§18.2).
-> - [ ] Autorisation §19.3 (`check_permission`) sur le download.
-> - [ ] `artifact_versions` (v1), `artifact_lineage`, `artifact_delivery_events` : tables existantes
->   (0005/0007) mais **toujours vides** — seul `artifacts` est écrit.
+> - [x] `ETag` / `X-Checksum-Sha256` sur le download.
+>   ✅ Les deux en-têtes portent la **même** empreinte, recalculée sur les octets **réellement
+>   servis** (jamais sur ceux du record) ; un objet dont l'empreinte diffère de celle publiée est
+>   refusé en `502` au lieu d'être servi sous un faux checksum, et `If-None-Match` est évalué sur
+>   les octets lus — un contenu changé ne peut donc pas répondre `304`. Un refus d'autorisation
+>   n'annonce aucune empreinte.
+>   *preuve : `tests/api/test_artifact_download_integrity.py` (14 cas)*
+> - [x] Refus de téléchargement d'un artefact `status="deleted"` (§18.2).
+>   ✅ `410 Gone` — décision `0016` incluse — prononcé **avant toute lecture du stockage**, sur le
+>   téléchargement, le détail, l'historique et le lignage, et disparition des listes : connaître
+>   l'identifiant ne suffit jamais. La raison exacte est auditée (`result=denied`), le corps ne
+>   dit rien de l'artefact ; la projection expose `deleted_at` pour distinguer « supprimé » de
+>   « jamais livré ».
+>   *preuve : `tests/api/test_artifact_download_integrity.py` (14 cas)*
+
+> - [x] Autorisation §19.3 (`check_permission`) sur le download.
+>   ✅ `app/security/authz/artifact_access.py` réutilise les primitives existantes (identité du
+>   middleware `auth_middleware`, `PermissionChecker`+`PolicyEvaluator` du §19.3) et n'ajoute que
+>   la table de rôles du domaine artefact. Deux contrôles : **avant** toute lecture quand
+>   l'authentification est configurée (le refus ne révèle donc même pas l'existence), puis sur la
+>   ressource (classement `restricted` refusé même en dev). Appliqué aux **trois** routes — liste,
+>   détail, téléchargement — et le corps d'un refus est une constante : ni identifiant, ni nom, ni
+>   empreinte, ni `storage_ref`. Accord et refus sont audités (§20).
+>   *preuve : `tests/security/test_artifact_download_authz.py`* (22 cas : décision, refus explicite,
+>   absence de fuite, non-contournement par l'ID, filtrage de la liste, 401/403/404, audit sur
+>   PostgreSQL réel)
+
+> - [x] `artifact_versions` (v1), `artifact_lineage`, `artifact_delivery_events` : les trois tables
+>   sont désormais écrites sur le **chemin réel** (une livraison enregistre sa version et son
+>   lignage juste après la ligne `artifacts`), via
+>   `app/storage/repositories/artifact_version_repository.py` — append-only, ids déterministes
+>   `AV_<artifact>_<version>` / `AL_<artifact>_<version>`, **aucune** de ces tables ne reçoit de
+>   `deleted_at` (décision `0016` : elles sont l'historique). `publish_new_version` ajoute une
+>   version (bump semver, `supersedes`, lignage propre) et avance `artifacts.version`, donc
+>   « quelle version est livrée » se lit sur l'artefact et reste cohérent avec l'historique.
+>   Deux routes : `GET /v1/artifacts/{id}/versions` et `GET /v1/artifacts/{id}/lineage` (§19.3).
+>   *preuve : `tests/integration/test_artifact_versions_lineage.py`* (14 cas sur PostgreSQL réel :
+>   v1 + lignage depuis la provenance réelle, chaîne source → information → artefact, nouvelle
+>   version, immuabilité, suppression logique qui préserve l'historique, routes et événement de
+>   téléchargement)
+
 > - [ ] `_ToolAdapter` (C6/P1) fabrique encore du texte : à neutraliser.
-> - [ ] Page/section « Artefacts » dans l'UI (`pages/RequestStatus.tsx`).
+> - [x] Page/section « Artefacts » dans l'UI (`pages/RequestStatus.tsx`).
+>   ✅ `components/ArtifactsPanel.tsx` : liste (fichier, type, statut, taille), **version**
+>   courante lue depuis `/v1/artifacts/{id}/versions`, téléchargement par
+>   `/v1/artifacts/{id}/download` quand l'autorisation est accordée, et **refus explicites**
+>   (`api/artifactErrors.ts` distingue 401 / 403 / 404 / 503 / 5xx / réseau). Aucun `catch`
+>   silencieux : chaque échec devient une alerte visible, et une livraison vide est dite
+>   différemment d'une erreur. La UI consomme les contrats existants (aucun axios direct,
+>   aucune règle métier reconstruite) ; styles dans `styles/App.css`.
+>   *preuve : `frontend/src/components/ArtifactsPanel.test.tsx` (8 cas) +
+>   `frontend/src/api/artifactErrors.test.ts` (7 cas) + garde-fou source
+>   `tests/unit/frontend/test_artifacts_client_contract.py` (14 cas) ; `npx tsc --noEmit` OK,
+>   `npx vitest run` → 4 fichiers verts*
+
 
 #### L1.1 — Générateurs (Devin · `app/artifacts/generators/`)
 
-- [x] Créer `app/artifacts/generators/__init__.py` (API publique : `generate_artifact(...)`) — *preuve : `tests/unit/artifacts/test_generators_init.py`*
-- [x] `csv_generator.py` : export du colis/`Dataset` en CSV (stdlib `csv`, UTF‑8 BOM, séparateur `;` configurable via `configs/*.toml`) — *preuve : `tests/unit/artifacts/test_csv_generator.py`*
-- [x] `json_generator.py` : export JSON strict = **le colis §24.1 tel quel** (`ensure_ascii=False`, clés triées, `canonical_json` de `app/core/hashing.py`) — *preuve : `tests/unit/artifacts/test_json_generator.py`*
-- [x] `xml_generator.py` : export XML des unités/preuves (`lxml`, déjà dépendance) — *preuve : `tests/unit/artifacts/test_xml_generator.py`*
-- [x] `xlsx_generator.py` (§24.3) : `openpyxl` (déjà dépendance) — onglets `données`, `métadonnées`, `dictionnaire`, `sources`, `provenance`, `qualité`, `version` ; **aucune valeur inventée** : une cellule sans donnée reste vide + `limitations` — *preuve : `tests/unit/artifacts/test_xlsx_generator.py`*
+- [x] Créer `app/artifacts/generators/__init__.py` (API publique : `generate_artifact(...)`) — *preuve : `tests/unit/artifacts/test_generators.py::TestDispatch` (l'API publique importée et dispatchée)*
+- [x] `csv_generator.py` : export du colis/`Dataset` en CSV (stdlib `csv`, UTF‑8 BOM, séparateur `;` configurable via `configs/*.toml`) — *preuve : `tests/unit/artifacts/test_generators.py::TestCsvExport` (7 cas)*
+- [x] `json_generator.py` : export JSON strict = **le colis §24.1 tel quel** (`ensure_ascii=False`, clés triées, `canonical_json` de `app/core/hashing.py`) — *preuve : `tests/unit/artifacts/test_generators.py::TestJsonExport` (les octets sont exactement ce que couvre le `sha256`)*
+- [x] `xml_generator.py` : export XML des unités/preuves (`lxml`, déjà dépendance) — *preuve : `tests/unit/artifacts/test_generators.py::TestXmlExport` (4 cas)*
+- [x] `xlsx_generator.py` (§24.3) : `openpyxl` (déjà dépendance) — onglets `données`, `métadonnées`, `dictionnaire`, `sources`, `provenance`, `qualité`, `version` ; **aucune valeur inventée** : une cellule sans donnée reste vide + `limitations` — *preuve : `tests/unit/artifacts/test_generators.py::TestXlsxExport` (4 cas, dont la feuille vide non inventée)*
 - [x] `pdf_generator.py` : ⚠️ **aucun moteur PDF en écriture n'est installé** (C22). Décision requise en début de lot :
   - option A (recommandée, 0 dépendance) : documenter `.pdf` comme `[-]` hors périmètre, renvoyer le format supporté le plus proche ;
   - option B : ajouter une dépendance **documentée dans un ADR** (`docs/adr/009_*`), puis l'implémenter ;
   - dans les deux cas : le générateur refuse honnêtement (`limitations`/§25.2) au lieu de produire un fichier vide.
-  - *preuve : `tests/unit/artifacts/test_pdf_generator_absent.py` (refus explicite) ou tests de l'option B*
-- [x] Aucun générateur ne doit écrire sur disque hors répertoire temporaire (`tempfile`) : le contenu part ensuite dans S3 — *preuve : `tests/unit/artifacts/test_generators_no_leak.py`*
+  - *preuve : `tests/unit/artifacts/test_generators.py::TestDispatch::test_pdf_is_not_available_in_the_v1_stack`
+    (option A : `pdf_supported()` est `False`, `pdf` est absent de `AVAILABLE_FORMATS`, et
+    `generate_artifact("pdf", …)` lève une `ValidationError` nommée « PDF »)*
+- [x] Aucun générateur ne doit écrire sur disque hors répertoire temporaire (`tempfile`) : le contenu part ensuite dans S3 — *preuve : `tests/unit/artifacts/test_generators.py::TestNothingIsWrittenToDisk` (les 4 formats disponibles générés avec le répertoire courant pointé sur un dossier vide, qui reste vide ; `GeneratedFile.content` est bien des octets et non un chemin)*
 
 #### L1.2 — Fabrique d'artefacts (Devin · `app/artifacts/packager/`)
 
 - [x] `artifact_sequence.py` : allocateur `ART_{YYYY}_{SEQ6}` (**pas un ULID**).
   Choix à implémenter : compteur atomique en base (table dédiée ou `SELECT max(...)` sous
   `SELECT ... FOR UPDATE`) → **nécessite la migration `0013`** (voir L1.3).
-  *preuve : `tests/unit/artifacts/test_artifact_sequence.py` (unicité sous concurrence, passage d'année)*
+  *preuve : `tests/unit/artifacts/test_artifact_packager.py::TestArtifactSequence` (aller-retour
+  `format/parse`, passage d'année, identifiants distincts) **et**
+  `tests/integration/storage/test_artifact_repository.py::TestIdentifierAllocation` (l'allocation
+  vient de la base : elle continue après redémarrage et ne rend jamais deux fois le même id)*
 - [x] `artifact_factory.py` : construit `app.domain.entities.artifact.Artifact` (existant, C15)
   avec `size_bytes`, `sha256 = sha256_hex(data)`, `storage_ref = S3Client.upload(key, data, content_type)`,
   `source_ids`/`dataset_ids`/`transformation_ids` issus du colis, `purpose`, `version="1.0.0"`.
   ⚠️ `Artifact.validate()` **exige** au moins un id de traçabilité si `provenance_complete=True` :
   poser `provenance_complete=False` plutôt que mentir (§0.2).
-  *preuve : `tests/unit/artifacts/test_artifact_factory.py`*
+  *preuve : `tests/unit/artifacts/test_artifact_packager.py::TestArtifactPackager`
+  (l'enregistrement décrit les octets stockés, la provenance n'est revendiquée que si elle existe,
+  le stockage non configuré est dit, l'échec d'upload se dégrade, `pdf` est refusé)*
 - [x] `artifact_packager.py` : orchestration `format demandé → générateur → S3 → Artifact validé`.
   Réutiliser le `S3Client` de `app/storage/object_storage/s3_client.py` (`upload` renvoie `s3://bucket/key`)
   et les helpers `object_uploader/object_downloader` (import paresseux, §4).
@@ -274,13 +333,25 @@ puis `L6` (unification `SourceRepository` requise dès que L2 écrit des sources
   ⚠️ §41.14 / gate **BC005** : index sur table **préexistante** ⇒ `CREATE INDEX CONCURRENTLY` est
   **interdit en transaction** ; documenter le choix dans le commentaire de migration
   (voir la note BC005 déjà présente dans `AGENT_STATUS.md`).
-  *preuve : `tests/unit/migrations/test_0013_artifacts_request_link.py` + `python scripts\check_backward_compat.py`*
+  *preuve : `tests/integration/storage/test_artifact_repository.py::TestPersistence` (colonnes
+  `request_id`/`created_at` **utilisables sur une base migrée**) et `::TestIdentifierAllocation`
+  (la table `artifact_sequences` alloue réellement) ; `tests/integration/test_migrations.py::TestUpgrade`
+  + `::TestDowngrade::test_rollback_then_upgrade_round_trips` (aller-retour complet, `0013` comprise) ;
+  `python scripts\check_backward_compat.py` (gate BC005)
+  ⚠️ Fichier dédié `test_0013_artifacts_request_link.py` **jamais créé** : la preuve réelle est la
+  base migrée elle-même (les colonnes ne peuvent pas être écrites si `0013` n'est pas appliquée).
 - [x] `app/storage/repositories/artifact_repository.py` : `save(artifact)`, `get(artifact_id)`,
   `list_by_request(request_id)`, `list_by_type(...)`, en suivant le style des repositories
   existants (`evidence_repository.py`, `information_unit_repository.py`) et **sans créer sa
   propre table** (piège C16 du `SourceRepository`).
-  *preuve : `tests/unit/storage/test_artifact_repository.py` (SQLite) + `tests/integration/test_postgres_real.py::test_artifact_repository_postgres`*
-- [x] Exporter le repository dans `app/storage/repositories/__init__.py` — *preuve : test d'import*
+  *preuve : `tests/integration/storage/test_artifact_repository.py::TestPersistence` (idempotence :
+  réécrire le même enregistrement §24.2 n'est pas une violation de clé) et
+  `::TestIdentifierAllocation` (identifiants alloués par la base)
+  ⚠️ La preuve est **sur PostgreSQL migré**, pas sur un double SQLite : c'est la même table Core
+  qu'`alembic` crée (`tests/integration/test_postgres_real.py::test_every_repository_table_is_keyed_as_declared`).
+- [x] Exporter le repository dans `app/storage/repositories/__init__.py` — *preuve :
+  `tests/unit/storage/test_repositories_exports.py` (les 15 repositories attendus sont exportés, listés
+  dans `__all__`, et chaque nom est bien une classe du paquet avec au moins une opération)*
 
 #### L1.4 — Endpoints artefacts (Antigravity · `app/api/v1/artifacts/`)
 
@@ -295,25 +366,48 @@ Le frontend **appelle déjà** (C14) : `GET /artifacts?request_id=` et `GET /art
   *preuve : `tests/api/test_artifacts.py` (liste, 404, download + hash, refus si `deleted`)*
 - [x] Enregistrer le routeur **aux deux endroits** : `app/api/v1/router.py:32-46` **et**
   `app/main.py:91-105` (les deux listes existent et doivent rester synchrones).
-  *preuve : `tests/api/test_openapi_schema_changelog.py` (existant, §41.15) + `tests/api/test_artifacts_routes_registered.py` (à créer)*
-- [ ] Autorisation : appliquer les politiques §19.3 (`check_permission`) sur le téléchargement.
+  *preuve : `tests/api/test_openapi_schema_changelog.py` (§41.15 : le schéma publié est stable)
+  **et** `tests/api/test_artifacts.py::TestArtifactEndpoints` (les routes sont appelées sur
+  `app.main`, donc montées ; un identifiant inconnu répond 404 et non une liste vide)
+  ⚠️ Fichier dédié `test_artifacts_routes_registered.py` **jamais créé** : appeler réellement les
+  routes via `app.main` prouve plus fort que vérifier une liste d'imports.
+- [x] Autorisation : appliquer les politiques §19.3 (`check_permission`) sur le téléchargement.
+  ✅ Fait avec les primitives existantes ; détail dans l'état d'avancement ci-dessus.
+
   *preuve : `tests/security/test_artifact_download_authz.py`*
 
 #### L1.5 — Pipeline : produire et exposer les artefacts (Devin + Antigravity)
 
 - [x] Dans `pipeline_runner.py`, remplacer les `[]` de la ligne **1531-1533** par les valeurs réelles :
   `datasets` (L3), `artifacts` (L1.2), `transformations` (L3.2).
-  *preuve : `tests/api/test_requests.py::test_delivery_exposes_artifacts_when_requested`*
+  *preuve : `tests/api/test_artifacts.py::TestDeliveredArtifacts::test_a_csv_request_announces_a_traceable_file`
+  (le colis expose le fichier, ses octets, son `sha256` et sa provenance)
 - [x] Générer les artefacts **uniquement si demandé** : `required_output.format`
   (`schemas.py:62`, valeurs possibles `request_constraints.py:26` :
   `evidence_package | json | csv | xlsx | pdf | xml`) :
   `json`/`csv`/`xlsx`/`xml` ⇒ fichier ; `evidence_package` (défaut) ⇒ pas de fichier, mais le
   colis reste exposé en JSON par l'API ; `pdf` ⇒ décision de L1.1 (`limitations` +
   `recommended_next_actions` si option A) — §37 « signaler > inventer ».
-  *preuve : `tests/api/test_artifacts_requested_formats.py` (paramétré sur les 6 valeurs)*
-- [~] Persister chaque artefact (`artifact_repository`) + `artifact_versions` (v1) +
+  *preuve : `tests/api/test_artifacts.py::TestDeliveredArtifacts`
+  (`test_a_csv_request_announces_a_traceable_file`, `test_the_default_request_attaches_no_file`,
+  `test_a_pdf_request_stays_delivered_and_says_why`, `test_a_stored_artifact_announces_its_storage_reference`)
+  **et** `tests/unit/artifacts/test_delivery_service.py::TestOutputFormat` (le format par défaut est
+  `evidence_package`, l'inconnu est normalisé sans être deviné)
+- [x] Persister chaque artefact (`artifact_repository`) + `artifact_versions` (v1) +
   `artifact_lineage` (source/dataset/transformation ids réels) + `artifact_delivery_events`.
-  *preuve : `tests/integration/test_artifact_delivery_e2e.py` (requête complète → lignes en base → S3 → download)*
+  ✅ **Fait et prouvé de bout en bout** : l'artefact, sa version v1, son lignage et ses
+  événements de livraison sont écrits par le chemin réel, et les trois familles d'identifiants
+  viennent de **relations réelles** : les sources et datasets des unités livrées
+  (`information_units.dataset_id`, puis `datasets.request_id` dont la `source_id` fait partie des
+  sources livrées), et les transformations dont les `output_ids` contiennent une unité livrée.
+  ⚠️ **Anomalie trouvée par le parcours E2E et corrigée** : `build_transformations` était appelé
+  **deux fois**, donc les `TRF_` cités par l'artefact étaient régénérés et seuls ceux du second
+  appel étaient persistés — l'artefact citait des transformations **inexistantes** en base. Le
+  runner persiste désormais le jeu déjà cité et n'ajoute du second appel que l'étape `derived`.
+  *preuves : `tests/integration/test_full_journey_e2e.py` (10 cas, PostgreSQL + MinIO réels),
+  `tests/integration/test_artifact_versions_lineage.py` (18 cas),
+  `tests/integration/test_adversarial_journey.py` (5 cas)*
+
 - [x] Corriger le chemin stub `_ToolAdapter` (`pipeline_runner.py:1031-1040`, C6) :
   il ne doit plus produire de contenu textuel fabriqué ; s'il est conservé comme
   secours, il doit renvoyer `status="degraded"` **sans** texte prétendant être un résultat.
@@ -322,9 +416,13 @@ Le frontend **appelle déjà** (C14) : `GET /artifacts?request_id=` et `GET /art
 #### L1.6 — UI (Antigravity · `frontend/`)
 
 - [x] Ajouter le type `Artifact` dans `frontend/src/types/` (le module `api/artifacts.ts`
-  l'importe déjà depuis `'../types'` : aujourd'hui non défini) — *preuve : `frontend/src/types/__tests__` ou build `npm run build`*
+  l'importe déjà depuis `'../types'` : aujourd'hui non défini) — *preuve :
+  `tests/unit/frontend/test_artifacts_client_contract.py::TestArtifactType` (le type est exporté par
+  `frontend/src/types/api.ts` et bien ré-exporté par le barrel `types/index.ts`) + build `npx tsc --noEmit`*
 - [x] Supprimer le `catch { return [] }` **silencieux** de `frontend/src/api/artifacts.ts`
   (une erreur réseau ne doit pas se présenter comme « aucun artefact »).
+  *preuve : `tests/unit/frontend/test_artifacts_client_contract.py::TestErrorsAreNotSwallowed`
+  (seul un `404` rend un résultat vide, tout le reste est relancé : `catch` comptés = `throw error;` comptés)*
 - [ ] Page/section « Artefacts » dans `pages/RequestStatus.tsx` : liste, `sha256` tronqué,
   taille, type, bouton **Télécharger** (`GET /v1/artifacts/{id}/download`).
   *preuve : `frontend/src/pages/RequestStatus.test.tsx`*
@@ -486,7 +584,7 @@ est identique, et dont le `storage_ref` existe dans S3.
   `file_ingest` **quand la requête a ingéré un document** (sinon le plan reste inchangé, ce qui
   préserve `tests/api/test_pipeline_e2e.py` : une requête `data` sans fichier cherche toujours sur le
   web) ; les autres types gardent leur plan et gagnent l'ingestion du fichier.
-  ⚠️ Correction de preuve (le plan citait `tests/api/test_request_type_routing.py`, **ce fichier
+  ⚠️ Correction de preuve (le plan citait un fichier `test_request_type_routing.py`, **qui
   n'existe pas**) : la preuve réelle est
   `tests/agentic/test_file_ingest_delivery.py::TestTheOtherRequestTypesKeepTheirPlan` (unitaire, sans
   Docker) et `tests/integration/test_request_file_ingestion_e2e.py::test_a_data_request_does_not_search_the_web_for_its_own_file`
@@ -555,7 +653,13 @@ est identique, et dont le `storage_ref` existe dans S3.
 - [x] À partir d'un document ingéré, produire un `Dataset`
   (`app/domain/entities/dataset.py` : `dataset_id` `DATA_`, `source_id`, `dataset_schema`,
   `row_count`, `storage_ref`) et le persister dans la table `datasets` (migration `0007`).
-  *preuve : `tests/unit/knowledge/test_dataset_from_csv.py` + `tests/integration/test_dataset_persistence.py`*
+  *preuve : `tests/integration/test_chunked_ingestion.py::test_a_payload_beyond_the_threshold_is_ingested_by_chunks`
+  (l'ingestion écrit la ligne `datasets` avec son `row_count`) ; `tests/unit/knowledge/test_request_material.py`
+  (relue par `DatasetRepository.list_for_request`) ; `tests/unit/storage/test_dataset_repository.py`
+  (création/lecture/idempotence/refus sans identifiant) ; `tests/agentic/test_file_ingest_delivery.py`
+  (une requête `data` est planifiée autour de son fichier)
+  ⚠️ Les deux fichiers cités par le plan (`test_dataset_from_csv.py`, `test_dataset_persistence.py`)
+  **n'ont jamais été créés** : la preuve réelle est celle ci-dessus.
 - [x] Réutiliser `app/knowledge/normalization/chunked_dataset.py` (déjà écrit, C18) au-delà
   du seuil documenté par l'ADR `007_chunked_processing_threshold.md`.
   ✅ **clos en L2.6** : seuil lu (`app/knowledge/normalization/limits.py`), appliqué dans
@@ -565,7 +669,12 @@ est identique, et dont le `storage_ref` existe dans S3.
 - [x] Unités d'information issues du fichier : **une unité par enregistrement/fragment utile**,
   `type` ∈ {`text`,`table_row`,`document_section`…} selon §11, avec `raw_reference` pointant
   sur `document_id` + `location` (page/feuille/ligne/colonne) — jamais de contenu sans localisation.
-  *preuve : `tests/agentic/test_file_unit_traceability.py` (chaque unité est localisable dans le fichier source)*
+  *preuve : `tests/agentic/test_file_ingest_delivery.py::TestADataRequestIsPlannedAroundItsFile`
+  (chaque unité lue porte `source_id`, `document_id`, `dataset_id` et son `location`) ;
+  `tests/unit/tools/test_document_blocks.py` (la position dans le fichier est réelle : page,
+  paragraphe, feuille/ligne) ; `tests/unit/knowledge/test_document_ingestor.py`
+  ⚠️ Fichier `test_file_unit_traceability.py` **jamais créé** : la traçabilité est prouvée par les
+  deux fichiers ci-dessus, qui assertent les identifiants et la localisation dans le colis livré.
 - [x] Création d'une `Transformation` **par étape réelle** (§12.1) :
   `RAW → NORMALIZED → ENRICHED → DERIVED`, avec `operator`, `tool`, `tool_version`,
   `parameters`, `result` (remplacer/compléter la `TRF_` unique de `pipeline_persistence.py:223-262`, C11).
@@ -744,9 +853,8 @@ lecture seule ; les tests d'erreur (type refusé, quota, SQL d'écriture) passen
 >    pour la notation, `ModelRouter` pour la synthèse — créditer l'un du travail de l'autre était
 >    précisément le défaut C11.
 >
-> **Reste ouvert dans L3** : L3.2 (projection §12.1 par étape : la `TRF_` unique de
-> `pipeline_persistence.py` n'est pas encore remplacée *en base*, même si `transformations[]` porte
-> déjà les étapes) et L3.3 (embeddings §16) — non commencés.
+> **Suite du lot** : L3.2 (projection §12.1 par étape et dans le colis) et L3.3 (embeddings §16)
+> sont livrés dans la foulée — voir leurs encadrés ci-dessous (§4 de ce plan).
 
 - [x] `enricher.py` : normalisation d'unités (dates, unités de mesure, devise), détection de
   langue (`language_policy` existe), déduplication par empreinte (`record_hash` / `sha256_hex`).
@@ -759,28 +867,88 @@ lecture seule ; les tests d'erreur (type refusé, quota, SQL d'écriture) passen
 
 #### L3.2 — Projection des transformations dans le colis
 
-- [ ] Remplacer la `TRF_` unique de `pipeline_persistence.py:223-262` par des enregistrements
+> ### ⚙️ État d'avancement L3.2 au 2026-09-30 — **clos** (C10/C11 fermés)
+>
+> **Fait et prouvé** (commit `536cc9d`)
+>
+> | Sous-lot | Preuve |
+> |---|---|
+> | Une ligne §12.1 par étape **réellement exécutée** (plus de `TRF_` unique, plus de `PipelineRunner` fourre-tout) | `tests/agentic/test_transformations_are_real.py::TestNothingIsInvented::test_no_generic_operator_is_left` |
+> | Aucun `output_id` qui n'existe pas dans le colis | `tests/agentic/test_transformations_are_real.py::TestNothingIsInvented::test_every_output_id_exists_in_the_colis` |
+> | Un producteur = une ligne par étape (pas de doublon d'écriture) | `tests/agentic/test_transformations_are_real.py::TestNothingIsInvented::test_one_row_per_producer_and_per_stage` |
+> | `transformations[]` = projection **exacte** de §12.1 (les dix clés de `Transformation.to_dict()`) | `tests/api/test_delivery_transformations_shape.py::TestEveryTransformationIsARealSpec121Row::test_every_entry_has_exactly_the_ten_keys_of_the_spec` |
+> | `TRF_{ULID}`, horodatage ISO 8601 UTC, `result` du contrat, `parameters.stage` connu | mêmes fichiers, `test_every_identifier_is_a_trf_ulid`, `test_every_timestamp_is_iso_8601_utc` |
+> | Le colis HTTP (`GET /v1/requests/{id}`) expose la même structure | `tests/api/test_delivery_transformations_shape.py::TestTheHttpColisCarriesTheSameShape` |
+>
+> **Décisions prises en L3.2**
+>
+> 1. La **structure** §12.1 est celle de l'entité `Transformation.to_dict()` : le colis et la
+>    table `transformations` ne peuvent pas diverger, l'un est la sérialisation de l'autre.
+> 2. Le champ `transformations` n'est **jamais** une liste vide déguisée : quand aucune étape
+>    n'a produit d'output, il reste `[]` et c'est la vérité du run (l'unité de synthèse du run
+>    n'est pas attribuée aux extracteurs).
+> 3. Deux lignes pour un même stade sont **légitimes** (§12.1) : `Enricher.enrich` (notation) et
+>    `ModelRouter` (synthèse) atteignent tous deux `enriched` par des opérations différentes ;
+>    la borne testée est « un producteur, une ligne par étape », pas « un stade, une ligne ».
+
+- [x] Remplacer la `TRF_` unique de `pipeline_persistence.py:223-262` par des enregistrements
   par étape, et projeter `transformations[]` dans le colis §24.1 (structure §12.1 exacte).
   *preuve : `tests/api/test_delivery_transformations_shape.py`*
-- [ ] Vérifier la borne : `transformations[]` ne contient **que** des transformations réelles
+- [x] Vérifier la borne : `transformations[]` ne contient **que** des transformations réelles
   (aucune liste vide déguisée, aucun `operator` générique inventé).
   *preuve : `tests/agentic/test_transformations_are_real.py`*
 
+
 #### L3.3 — Génération d'embeddings (§16)
 
-- [ ] `app/knowledge/embedding/embeddings_generator.py` : produit les vecteurs `vector(1536)`
+> ### ⚙️ État d'avancement L3.3 au 2026-09-30 — **clos** (C13 fermé pour l'écriture)
+>
+> **Fait et prouvé** (commit `02583ea`)
+>
+> | Sous-lot | Preuve |
+> |---|---|
+> | Vecteurs produits par le Model Router (§22), modèle tracé et largeur vérifiée contre la colonne | `tests/unit/knowledge/test_embeddings_generator.py::TestGeneration`, `tests/unit/knowledge/test_embeddings_no_provider_degrades.py::TestAProviderThatAnswersBadlyIsRefused` |
+> | Une trace §41.12 par étape (`task_type=embedding`), l'entrée **hachée**, jamais stockée | `tests/unit/knowledge/test_embeddings_generator.py::TestTheCallIsTraced` |
+> | Écriture réelle dans `embeddings` (`owner_type`/`owner_id`, `vector_dims = 1536`, HNSW) | `tests/integration/test_embeddings_persistence.py::TestTheVectorIsStoredAsTheColumnExpects` |
+> | L'unité vectorisée est **retrouvée par `vector_search`** (§16.2) | `tests/integration/test_embeddings_persistence.py::TestTheIndexIsReallyUsable::test_the_semantic_search_finds_the_indexed_unit` |
+> | `owner_type` aligné sur `vector_searcher.OWNER_TYPE` | `tests/unit/knowledge/test_embeddings_generator.py::TestRecordShape::test_the_owner_type_is_the_one_the_searcher_reads` |
+> | Rattrapage idempotent (`ON CONFLICT DO NOTHING`), `--dry-run`, rapport JSON de métriques | `tests/integration/test_backfill_embeddings.py` (7 cas : dry-run, deux passes, compteurs) |
+> | Sans provider : **aucun vecteur** (jamais de vecteur nul) et la variable manquante est nommée | `tests/unit/knowledge/test_embeddings_no_provider_degrades.py::TestNoProviderMeansNoVector`, `tests/integration/test_backfill_embeddings.py::TestTheScriptSaysWhatItCouldNotDo` |
+>
+> **Décisions prises en L3.3**
+>
+> 1. `ModelRouter.embed` **n'a pas de stub**, contrairement à `complete` : un vecteur inventé est
+>    indiscernable d'un vrai une fois stocké, et §16.2 renverrait alors du bruit comme s'il
+>    s'agissait de similarités mesurées. Sans clé, l'appel **lève**.
+> 2. La largeur est celle de la colonne (`EMBEDDING_DIMENSION` = 1536, migration `0003`) : une
+>    réponse d'une autre largeur est **refusée**, jamais tronquée ni complétée. Le littéral
+>    `vector(...)` n'est jamais écrit en dur dans `app/` (règle vérifiée par `check_architecture`).
+> 3. Le texte vectorisé est celui du colis : `unit_text` de L3.1 est réutilisé, et les
+>    métadonnées portent l'**empreinte** du texte, pas le texte.
+> 4. `embedding_id` est un **UUID** (type de la colonne `0003`), pas un `ULID`.
+> 5. Le rattrapage est un **outil**, pas un chemin de requête : il trace ses appels dans le
+>    writer §41.12 en mémoire et le dit dans son rapport (`traces.persisted = false`) ; la
+>    persistance des traces reste le fait du chemin applicatif.
+> 6. Aucune métrique §34 n'a été inventée : l'appel d'embeddings alimente `llm_latency`, et le
+>    script publie ses propres compteurs dans son rapport JSON.
+>
+> **Reste ouvert dans §16** (hors L3.3) : le branchement de `HybridSearch`/`memory_lookup` dans
+> le pipeline est le lot **L4** (critère `tests/unit/planning/test_memory_checker_wired_in_pipeline.py`).
+
+- [x] `app/knowledge/embedding/embeddings_generator.py` : produit les vecteurs `vector(1536)`
   (dimension figée par la migration `0003`), modèle tracé, passage par le Model Router (§22)
   et les traces LLM (§41.12).
   *preuve : `tests/unit/knowledge/test_embeddings_generator.py`*
-- [ ] Persistance dans `embeddings` (`owner_type`/`owner_id`, index HNSW existant) :
+- [x] Persistance dans `embeddings` (`owner_type`/`owner_id`, index HNSW existant) :
   `owner_type="information_unit"` par défaut, `owner_type` aligné sur `app/tools/knowledge/vector_searcher.py::OWNER_TYPE`.
   *preuve : `tests/integration/test_embeddings_persistence.py`*
-- [ ] `scripts/backfill_embeddings.py` : rattrapage des unités existantes, idempotent
+- [x] `scripts/backfill_embeddings.py` : rattrapage des unités existantes, idempotent
   (`ON CONFLICT DO NOTHING`), avec `--dry-run` et métriques.
   *preuve : `tests/integration/test_backfill_embeddings.py`*
-- [ ] Si aucun provider d'embeddings n'est configuré : **dégradation explicite** (pas de vecteur
+- [x] Si aucun provider d'embeddings n'est configuré : **dégradation explicite** (pas de vecteur
   nul silencieux) + `limitations` — sinon le volet sémantique de §16.2 devient mensonger.
   *preuve : `tests/unit/knowledge/test_embeddings_no_provider_degrades.py`*
+
 
 ---
 
@@ -789,22 +957,79 @@ lecture seule ; les tests d'erreur (type refusé, quota, SQL d'écriture) passen
 **Objectif** : une requête réutilise réellement la mémoire. Aujourd'hui `memory_checker` et
 `HybridSearch` existent et sont testés en unitaire mais **aucun pipeline ne les appelle** (C13).
 
-- [ ] Insérer l'étape `memory_lookup` (§8.4, §17.1) en tête de plan, avant acquisition :
+> ### ⚙️ État d'avancement L4 au 2026-09-30 — **clos** (C13 fermé pour la mémoire)
+>
+> **Fait et prouvé** (commit `038b9aa`)
+>
+> | Sous-lot | Preuve |
+> |---|---|
+> | ``memory_lookup`` ouvre le plan, **avant** toute acquisition, et c'est `memory_checker.memory_lookup` qui décide avec la recherche §16.2 **injectée** | `tests/unit/planning/test_memory_checker_wired_in_pipeline.py::TestTheStepOpensThePlan` (8 cas) |
+> | Une unité retrouvée entre dans le colis **avec son identifiant d'origine** (aucune recréation), son `context.memory` et sa provenance de run | `tests/unit/planning/test_memory_checker_wired_in_pipeline.py::TestAReusedUnitJoinsTheColis` |
+> | Poids ADR 004 **0.6 / 0.4 au chiffre près** sur données pgvector réelles (1.0 / 0.6 / 0.4 attendus) | `tests/integration/test_hybrid_search_weights_real.py` (6 cas) |
+> | Sous-scores normalisés dans ``[0, 1]`` et exposés : la formule est recalculable sur la ligne | `tests/integration/test_hybrid_search.py::TestFusion::test_final_score_is_the_adr_004_weighted_sum` |
+> | Table ``embeddings`` vide ou vecteur absent ⇒ **lexical seul**, dit dans `limitations` | `tests/unit/planning/test_memory_lookup_lexical_only_degrade.py` (8 cas), `tests/integration/test_hybrid_search.py::TestDegradedMode` |
+> | Déduplication §17.1 : réutiliser une unité **n'en crée pas une seconde** en base | `tests/integration/test_idempotency_integration.py::TestMemoryReuseIsIdempotent` |
+> | Audit §20 : événement ``memory_lookup`` (`success`/`degraded`) + mode réel, accepté tel quel par l'`AuditWriter` | `tests/unit/governance/test_audit_memory_lookup.py` (10 cas) |
+> | Contexte reconstruit par ``retrieve_context(ids)`` : ids de la recherche, contenu/provenance relus, échec **nommé** | `tests/unit/knowledge/test_retrieve_context_wired.py` (4 cas) |
+> | **Critère de sortie L4** : deux requêtes successives sur le même sujet ⇒ la seconde porte une unité de mémoire, tracée, sans doublon | `test_memory_checker_wired_in_pipeline.py` (colis + provenance) + `TestMemoryReuseIsIdempotent` (base) |
+>
+> **Décisions prises en L4**
+>
+> 1. L'étape est construite par le **pipeline**, pas par le planificateur : `order: 0`, insérée
+>    *après* le garde-fou §41.13 (qui continue de mesurer ce que le LLM a produit) et **avant** le
+>    premier pas d'acquisition. Aucun plan ne peut donc « oublier » de consulter la mémoire.
+> 2. « Rien de réutilisable » n'est **pas** une dégradation : le pas est `done`, la raison est dans
+>    `output` et dans `limitations`. Seule une mémoire *inconsultable* (pas de base) dégrade le pas.
+> 3. Les poids viennent de l'ADR 004 (0.6/0.4) et chaque moitié est **normalisée par le maximum de
+>    son propre jeu de candidats** : sans cela, un `ts_rank` non borné écrasait la similarité cosinus.
+> 4. Le mode réel de la recherche (`hybrid` / `lexical_only` / `unavailable`) est exposé et audité :
+>    une réponse lexicale ne doit jamais ressembler à une réponse hybride (§16.2).
+> 5. `source_freshness` = `sources.freshness` si la source en déclare une, sinon `created_at` de
+>    l'unité — l'instant où INIS a appris l'information. Une fraîcheur inconnue **n'est pas** supposée
+>    récente : le seuil §17.1 refuse alors le candidat.
+> 6. `HybridSearch` accepte désormais un **engine déjà construit** et rend un outcome
+>    (mode + limitations + sous-scores) ; `search()` garde son ancien contrat pour les appelants
+>    qui n'ont besoin que des lignes.
+>
+> ⚠️ **Fichiers touchés hors zone Codex** (nécessaires au lot) :
+> `app/storage/search/hybrid_search.py` (§16.2, zone Devin) — normalisation + exposition des
+> sous-scores + dégradation dite ; `app/agents/pipeline/tool_dispatch.py` (vocabulaire §8.4 :
+> `memory_lookup` et `retrieve_context` deviennent exécutables) ;
+> `app/api/v1/requests/pipeline_runner.py` (câblage de l'étape).
+>
+> **Reste ouvert dans §16/§17 (hors périmètre L4)**
+>
+> - Embeddings du *titre* de la question (aujourd'hui la moitié sémantique n'est utilisée que si
+>   un vecteur est fourni au constructeur : le pipeline n'en produit pas encore, faute de provider
+>   d'embeddings configuré — cf. la liste des variables d'environnement).
+> - Réutilisation « **suffisante** » telle que §17.1 la décrit : ✅ **fait** (lot §17). `MemoryResult.sufficient`
+>   ne suffit plus à elle seule : `early_stop_decision` (`app/planning/memory_checker.py`) sépare la
+>   réutilisation de l'arrêt, et seules une recherche **hybride sans limitation** concluent. Quand la
+>   décision est prise, les étapes d'acquisition **web** ne sont pas exécutées et figurent dans le colis
+>   en `skipped` ; les sources propres à la requête (fichier, base) ne sont jamais sautées.
+>   *preuves : `tests/unit/planning/test_memory_early_stop_decision.py` (13 cas),
+>   `tests/agentic/test_memory_early_stop_skips_acquisition.py` (9 cas, dont le fournisseur web
+>   **non appelé** et les trois cas négatifs), `tests/unit/governance/test_audit_memory_lookup.py`
+>   (dont 4 cas d'arrêt), `tests/integration/test_memory_early_stop_audit.py` (ligne `audit_events`
+>   relue sur PostgreSQL réel).*
+
+- [x] Insérer l'étape `memory_lookup` (§8.4, §17.1) en tête de plan, avant acquisition :
   appel de `app/planning/memory_checker.py` avec `hybrid_search` **injecté** (l'interface
   d'injection existe déjà : `memory_checker.py:67`).
   *preuve : `tests/unit/planning/test_memory_checker_wired_in_pipeline.py`*
-- [ ] Poids §16.2 **0.6 sémantique / 0.4 lexical** appliqués par `HybridSearch` (ADR
+- [x] Poids §16.2 **0.6 sémantique / 0.4 lexical** appliqués par `HybridSearch` (ADR
   `004_hybrid_search_weights.md`) et vérifiés sur données réelles pgvector.
   *preuve : `tests/integration/test_hybrid_search_weights_real.py`*
-- [ ] Si la table `embeddings` est vide (L3.3 non livré) : **dégrader en lexical seul** et le
+- [x] Si la table `embeddings` est vide (L3.3 non livré) : **dégrader en lexical seul** et le
   dire dans le colis (`limitations`) plutôt que de prétendre à une recherche hybride.
   *preuve : `tests/unit/planning/test_memory_lookup_lexical_only_degrade.py`*
-- [ ] Déduplication (§17.1) : une unité déjà en mémoire **n'est pas dupliquée** ; le run
-  référence l'unité existante. *preuve : `tests/integration/test_idempotency_integration.py::TestReplayIdempotence` (cas mémoire)*
-- [ ] Tracer le hit : `audit_event` + métrique (§20, §34) — « mémoire utilisée » doit être
+- [x] Déduplication (§17.1) : une unité déjà en mémoire **n'est pas dupliquée** ; le run
+  référence l'unité existante. *preuve : `tests/integration/test_idempotency_integration.py::TestMemoryReuseIsIdempotent` (cas mémoire)*
+- [x] Tracer le hit : `audit_event` + métrique (§20, §34) — « mémoire utilisée » doit être
   auditable. *preuve : `tests/unit/governance/test_audit_memory_lookup.py`*
-- [ ] `retrieve_context(ids)` branché pour reconstruire le contexte des unités retrouvées.
+- [x] `retrieve_context(ids)` branché pour reconstruire le contexte des unités retrouvées.
   *preuve : `tests/unit/knowledge/test_retrieve_context_wired.py`*
+
 
 **Critère de sortie L4 (N2)** : deux requêtes successives sur le même sujet ⇒ la seconde
 contient une unité issue de la mémoire, tracée en audit, sans doublon en base.
@@ -813,20 +1038,52 @@ contient une unité issue de la mémoire, tracée en audit, sans doublon en base
 
 ### L5 — Qualité et confiance sur données structurées (§13) (2 j) · Codex
 
-- [ ] Brancher les contrôles §13.2 déjà écrits sur les datasets ingérés :
+- [~] Brancher les contrôles §13.2 déjà écrits sur les datasets ingérés :
   `inspect_schema`, `profile_dataset`, `detect_duplicates`, `validate_schema`,
   `check_missing_values`, `check_consistency` (tous importables depuis `app.tools`, C5).
-  *preuve : `tests/integration/test_dataset_quality_controls_e2e.py`*
-- [ ] `check_freshness` (§13.2, §41.5) appliqué aux sources fichier/DB : `freshness` persisté
+  ✅ **Branché** : `app/quality/dataset_quality.py` exécute `check_missing_values`, `detect_duplicates`,
+  `check_consistency`, **`inspect_schema` + `validate_schema`** et `profile_dataset` sur les **lignes
+  du dataset déjà livrées** (unités §11, contenu d'enregistrement déplié de `content["values"]`), et
+  le pipeline appelle ce module en **Stage 3.8**.
+  *preuve : `tests/unit/quality/test_quality_score_from_controls.py` (10 cas), `tests/api/test_delivery_quality_limitations.py`
+  (4 cas sur le colis), `tests/integration/test_dataset_quality_controls_e2e.py` (**chaîne réelle** :
+  téléversement multipart → MinIO → PostgreSQL → `PipelineRunner` → colis)*
+  ⚠️ **Reste dû (constat reproductible, pas une hypothèse)** : sur cette chaîne, une **cellule** de CSV
+  qui ne tient pas dans sa colonne (`beaucoup` dans une colonne numérique) n'est **pas isolée** : le
+  lecteur stocke les cellules en texte, la colonne reste homogène (cohérence 1.0, schéma inféré
+  `string`). Le colis le **dit** (il signale qu'aucune mesure n'était détectable) au lieu de laisser
+  croire à une donnée propre, mais pour que §13.2 nomme la cellule elle-même, **l'ingestion devrait
+  typer la colonne** (changement de l'ingestion, hors périmètre de ce lot).
+- [x] `check_freshness` (§13.2, §41.5) appliqué aux sources fichier/DB : `freshness` persisté
   (colonne de la migration `0002`) et exposé. *preuve : `tests/unit/quality/test_freshness_file_source.py`*
-- [ ] `compare_sources` (§14.4) entre source fichier et source web : un conflit fichier↔web
+  ✅ **Branché en Stage 3.9** (`app/quality/source_quality.py`) : la fraîcheur de **chaque source livrée**
+  (fichier et base) est évaluée, écrite sur l'entrée `sources[]` — donc **persistée** par
+  `pipeline_persistence` (la colonne était écrite à `NULL`) — et une fraîcheur inconnue est **dite**
+  plutôt que supposée récente.
+  ⚠️ **Défaut réel trouvé et corrigé** : `check_freshness` trouvait un `retrieved_at` (ce que l'ingestion
+  de fichier écrit) puis le passait à `FreshnessCheck`, qui ne lit que `updated_at` — une source fraîche
+  était donc notée **0.0 comme inconnue**. *preuve du correctif : les 7 cas de `test_freshness_file_source.py`
+  (frais / périmé / sans métadonnée / `age_days`) + `::TestTheColisCarriesTheResult`.*
+- [x] `compare_sources` (§14.4) entre source fichier et source web : un conflit fichier↔web
   doit produire un `Conflict` (§14.3), pas un arbitrage silencieux.
   *preuve : `tests/agentic/test_conflict_file_vs_web.py`*
-- [ ] Score qualité §13.3 recalculé sur dataset : `quality_score` de `Dataset`/artefact
+  ✅ **Branché en Stage 3.9** : les `conflicts` du colis (emplacement toujours vide) reçoivent le résultat
+  de `compare_sources`, et la détection §14.4 est enfin atteignable — **rien ne produisait le triplet
+  `(subject, predicate, value)`** qu'elle lit, donc elle ne pouvait jamais se déclencher sur du matériel
+  réel. Les enregistrements sont projetés mécaniquement (les valeurs descriptives nomment le sujet,
+  chaque colonne numérique un prédicat et sa cellule la valeur) ; ce qui reste **non comparable** est
+  déclaré dans `limitations` au lieu d'être arbitré (5 cas, dont « une phrase ne contredit pas une
+  colonne »).
+- [x] Score qualité §13.3 recalculé sur dataset : `quality_score` de `Dataset`/artefact
   **non `None`** quand les contrôles ont tourné ; `None` assumé sinon.
-  *preuve : `tests/unit/quality/test_quality_score_from_controls.py`*
-- [ ] Les `QualityResult` alimentent `limitations`/`missing_information` du colis (§24.1).
-  *preuve : `tests/api/test_delivery_quality_limitations.py`*
+  *preuve : `tests/unit/quality/test_quality_score_from_controls.py::TestTheThreeDefects` (score
+  calculé, borné, sous-scores par contrôle) et `::TestHonesty` (sans lignes ⇒ `None` + raison) ;
+  côté colis : `tests/api/test_delivery_quality_limitations.py::TestHonestyOfTheScore`*
+- [x] Les `QualityResult` alimentent `limitations`/`missing_information` du colis (§24.1).
+  *preuve : `tests/api/test_delivery_quality_limitations.py::TestTheThreeDefectsAreListed`
+  (les trois défauts sont nommés dans `limitations`, la qualité non mesurée va dans
+  `missing_information`) + `tests/unit/quality/test_quality_score_from_controls.py`
+  (`test_every_issue_becomes_a_limitation_of_the_colis`)*
 
 **Critère de sortie L5 (N2)** : un CSV contenant des doublons, des valeurs manquantes et une
 incohérence produit un colis où ces trois défauts sont **explicitement listés** (§37
@@ -834,46 +1091,191 @@ incohérence produit un colis où ces trois défauts sont **explicitement listé
 
 ---
 
+### §17 — Arrêt de l'acquisition quand la mémoire suffit (§17.1, §8.4) · **fait et prouvé**
+
+> ### ⚙️ État d'avancement §17 au 2026-09-30 — **clos**, commit `e986222`
+>
+> | Ce qui est fait | Preuve |
+> |---|---|
+> | La décision sépare **suffisance** et **arrêt**, avec ses critères (`provenance_complete`, `freshness_acceptable`, `policy_allows_reuse`) et sa raison | `tests/unit/planning/test_memory_early_stop_decision.py` (13 cas) |
+> | Une mémoire suffisante (hybride, sans limitation) ⇒ les étapes d'acquisition **web** ne sont **pas exécutées** et le fournisseur **n'est pas appelé** | `tests/agentic/test_memory_early_stop_skips_acquisition.py::TestASufficientMemoryStopsTheAcquisition::test_the_web_acquisition_is_not_executed` (`assert_not_awaited`) |
+> | Les étapes non exécutées restent dans le colis en `skipped`, avec la raison (§8.4) | `::test_the_skipped_steps_are_the_web_ones_and_say_why` |
+> | **Aucun contenu perdu** : l'unité réutilisée est livrée avec son identifiant d'origine | `::test_the_reused_unit_is_still_delivered` |
+> | La décision voyage dans `provenance.memory` (`stopped_acquisition`, `criteria`, `withheld_reason`) et dans une `limitations` explicite | `::test_the_delivery_carries_the_decision`, `::test_the_delivery_limitations_name_the_stop` |
+> | Elle est **auditable** : événement §20 dont la raison dit l'arrêt et ses critères, relu **en base** | `tests/integration/test_memory_early_stop_audit.py` (2 cas sur PostgreSQL réel), `tests/unit/governance/test_audit_memory_lookup.py` (4 cas) |
+> | **Garde-fou exigé** : mémoire suffisante mais **lexicale seule** ou **limitée** ⇒ réutilisation **sans** arrêt ; mémoire insuffisante ⇒ acquisition **inchangée** | `tests/agentic/test_memory_early_stop_skips_acquisition.py::TestWhatNeverStopsTheAcquisition` (3 cas) |
+>
+> **Décision d'implémentation (documentée)** : seules les actions dont **tous** les outils sont des
+> outils web (`collect_information`, `fetch_page`) sont sautées, et cet ensemble est **dérivé du
+> vocabulaire §8.4** plutôt que codé en dur. Les sources **propres à la requête** (`file_ingest`,
+> `query_database`) ne sont jamais sautées : un arrêt qui les retirerait perdrait du contenu fourni
+> par le demandeur, ce que §17 interdit.
+>
+> **Ce que la preuve ne couvre pas** : le gain en coût/tokens n'est pas mesuré (le fournisseur web
+> n'est plus appelé, mais aucun benchmark de bout en bout n'a été exécuté) — la mesure de charge
+> relève du lot L8/§41.13.
+>
+> ✅ **Complété en L7.5** : le gain est désormais mesuré — **structurellement**, sans fabriquer de
+> coût. Deux exécutions réelles du même chemin, mêmes doubles, sont comparées : avec mémoire
+> suffisante, `web_requests == 0` et le fournisseur web n'est **jamais** appelé, alors que sans
+> mémoire il l'est au moins une fois ; les compteurs sont ceux du `usage_report` §41.2 (contrat de
+> facturation d'INIS) et non des estimations (`tests/performance/test_early_stop_savings.py`, 3 cas).
+> ⚠️ Ce qui reste **non** attaché à ce lot : une mesure de **charge** (débit, latence sous
+> concurrence), qui relève bien de L8/§41.13 — et aucun montant en euros n'est calculé, le prix réel
+> du fournisseur n'étant pas observable dans le système.
+
+
 ### L6 — Persistance, repositories et cohérence de schéma (§27, §18) (3–4 j) · Devin
 
-- [ ] **Dette n°3 — unifier `SourceRepository`** avec la migration `0002`
-  (choix à trancher : aligner le repository sur `id`/`url`/`reliability_score`/`data_stage`, ou
-  migrer la table). Cible : plus aucun `INSERT ... source_id` qui échoue sur PostgreSQL, et
-  `pipeline_persistence.py` cesse d'écrire en SQL direct (`:102`, `:130`).
-  *preuve : `tests/integration/test_postgres_real.py::test_source_repository_matches_migration` + `tests/unit/storage/test_source_repository.py`*
-- [ ] Repositories manquants pour ce que le pipeline écrit désormais :
-  `dataset_repository`, `transformation_repository`, `plan_repository` (tables `0007`/`0004`).
-  *preuve : `tests/unit/storage/test_dataset_repository.py`, `test_transformation_repository.py`, `test_plan_repository.py`*
-- [ ] **Dette n°5 — `VersionStore` persistant** (§18.1) : le store en mémoire ne survit pas à un
-  redémarrage ; le persister (table dédiée ⇒ migration `0014` si nécessaire).
-  *preuve : `tests/integration/test_version_store_persistence.py`*
-- [ ] **`_REQUESTS_STORE` en mémoire** (`app/api/v1/requests/router.py:23`) : le remplacer par une
-  lecture de la table `requests` (`0007`) ou assumer explicitement le caractère volatil
-  (⚠️ tout redémarrage/rebuild d'image efface l'historique — c'est le cas aujourd'hui).
-  *preuve : `tests/api/test_requests_survive_restart.py`*
-- [ ] Vérifier que §18.2 (suppression logique) et §18.3 (champs de temporalité) sont respectés
-  par les nouvelles tables/colonnes de L1.3. *preuve : `tests/unit/migrations/test_soft_delete_columns.py`*
+> ### ⚙️ État d'avancement L6 au 2026-09-30 — **clos au niveau N2 (chemin nominal)**, sur
+> `docker compose up -d` + `alembic upgrade head` réels (`0015`, 38 tables, 289 colonnes)
+>
+> **Réalisé et prouvé**
+>
+> | Ce qui est fait | Preuve |
+> |---|---|
+> | `pipeline_persistence` n'écrit **plus une seule ligne de SQL** : lignes construites puis confiées aux tables Core (`sources`, `information_units`, `evidence`, `transformations`) | `tests/integration/test_b4bis_persistence.py`, `tests/integration/test_idempotency_integration.py` |
+> | `SourceRepository` == migration (`0002` + §9 de `0011`) : colonnes **et** clé primaire comparées au schéma **migré** | `tests/integration/test_postgres_real.py::test_source_repository_matches_migration` |
+> | Les 8 tables Core des repositories existent dans le schéma migré et sont clefées comme déclaré | `tests/integration/test_postgres_real.py::test_every_repository_table_is_keyed_as_declared` |
+> | Repositories ajoutés : `transformation`, `plan`/`plan_steps`, `request`, `information_versions` ; `dataset` prouvé aussi | `tests/unit/storage/test_*_repository.py` (38 cas) |
+> | **Critère utilisateur** : *write → restart → read* — le colis est écrit par ce process puis relu par un **autre interpréteur** (`subprocess`) ; ids, provenance, contexte, demande et lignée comparés | `tests/integration/test_restart_durability.py` |
+> | `DurableVersionStore` : la chaîne §18.1 survit à un nouveau store/engine ; outils §21 compatibles avec les deux stores | `tests/integration/test_version_store_persistence.py` |
+> | `requests` : écriture au POST, relecture depuis la table après redémarrage, `404` conservé, volatilité assumée sans base | `tests/api/test_requests_survive_restart.py` |
+> | Chargement `.env` en dev/test (jamais en production, l'environnement du process gagne) + suite **hermétique** : la politique retire par défaut services/sécurité/live/configuration, `INIS_LIVE_LLM=1` et `INIS_TEST_USE_ENV=1` étant les deux seuls opt-in | `tests/unit/core/test_env_loader.py`, `test_env_policy.py`, `test_env_example_matches_code.py` |
+>
+> **Décisions prises en L6**
+>
+> 1. **Le schéma de référence est la migration**, et le repository s'y aligne (jamais l'inverse, sinon
+>    il faudrait migrer une table pour rattraper un nom inventé côté code).
+> 2. Une seule **définition** de table par table : `app/storage/repositories/*.py` (Core). Les lots
+>    suivants n'ajoutent pas de `text("INSERT ...")` dans `app/`.
+> 3. **Atomicité conservée** : le pipeline garde **une** transaction (`get_session`) ; les
+>    repositories exposent pour cela `insert_many_in(session, ...)` à côté de `create_many(engine, ...)`.
+> 4. `INIS_DATABASE_URL` est la variable canonique : `migrations/env.py` la lit **avant**
+>    `DATABASE_URL` et charge `.env`, pour que `docker compose up -d` + `make migrate` fonctionne
+>    sans rien exporter.
+>
+> **Deux points signalés par L6, tranchés et implémentés en `0016`**
+>
+> 1. **§18.2 — suppression logique** : `deleted_at` + index partiel (`WHERE deleted_at IS NULL`)
+>    sur les **7 tables de contenu** (`sources`, `documents`, `datasets`, `information_units`,
+>    `evidence`, `artifacts`, `conflicts`). **Décision de périmètre** : les tables append-only
+>    (`transformations` §12.1, `information_versions` §18.1, `audit_events` §20) n'en reçoivent
+>    **pas** — une suppression y contredirait la lignée et la piste d'audit ; c'est une décision
+>    testée, pas un oubli.
+> 2. **§7 — demande complète** : `requests.payload` (JSONB) conserve le corps complet
+>    (`question`, `context`, `required_information`, `required_output`, `permissions`, `budget`) ;
+>    une demande relue après redémarrage est **celle qui a été posée**, et une ligne antérieure à
+>    `0016` retombe sur ses colonnes (jamais inventées).
+>
+> *preuves : `tests/integration/test_migrations.py::TestRevision0016` (upgrade, index partiels,
+> downgrade symétrique, lignes existantes intactes, cycle down/up) ;
+> `tests/unit/migrations/test_soft_delete_columns.py` (inventaire §18.2/§18.3) ;
+> `tests/api/test_requests_survive_restart.py` (§7 complet + repli sur les colonnes) ;
+> `check_backward_compat` → **0 breaking change**.*
+>
+> **Non couvert par ce lot (assumé)** : `INIS_NULL_POOL`/pool de connexions par worker, cache
+> PostgreSQL `cache_entries` (§41.5, lot L7), reprise d'un run interrompu (§41.1, lot L7).
+
+- [x] **Dette n°3 — unifier `SourceRepository`** avec la migration `0002`
+  (choix tranché : **aligner le repository sur la migration**, pas l'inverse — `id`/`url`/
+  `reliability_score`/`data_stage` + les 5 colonnes §9 de `0011`). Cible atteinte : plus aucun
+  `INSERT ... source_id`, et `pipeline_persistence.py` n'écrit plus une ligne de SQL (les lignes
+  sont construites puis confiées aux tables Core des repositories).
+  *preuve : `tests/integration/test_postgres_real.py::test_source_repository_matches_migration`
+  (colonnes + clé primaire comparées au schéma migré) et `::test_every_repository_table_is_keyed_as_declared` ;
+  `tests/unit/storage/test_source_repository.py` (6 cas hors base)*
+- [x] Repositories manquants pour ce que le pipeline écrit désormais :
+  `transformation_repository` (table `0004`), `plan_repository` (`plans`/`plan_steps`, `0007`),
+  `request_repository` et `information_version_repository` (`0007`) — `dataset_repository`
+  existait déjà (L1.3), sa preuve est ajoutée ici.
+  *preuve : `tests/unit/storage/test_transformation_repository.py`, `test_plan_repository.py`,
+  `test_request_repository.py`, `test_dataset_repository.py` (38 cas)*
+- [x] **Dette n°5 — `VersionStore` persistant** (§18.1) : `DurableVersionStore` (mêmes noms de
+  méthodes, `async`) écrit la chaîne dans `information_versions` (`0007`, **aucune migration
+  supplémentaire**) ; les outils §21 acceptent les deux stores. La marque d'archive est un
+  version du document qui le dit (`action = "archive"`) : une seule table, un seul chemin de
+  lecture. *preuve : `tests/integration/test_version_store_persistence.py` (3 cas, dont « un
+  nouveau store relit la chaîne »)*
+- [x] **`_REQUESTS_STORE` en mémoire** : la demande est **écrite** dans `requests` (`0007`) au POST
+  et **relue** depuis la table quand la mémoire du process ne la connaît plus ; les champs que la
+  table ne porte pas restent vides (jamais inventés) et `pipeline_state` vaut `None` après
+  redémarrage. Le mode « pas de base ⇒ historique volatil » reste assumé et testé.
+  *preuve : `tests/api/test_requests_survive_restart.py` (3 cas)*
+- [x] §18.2/§18.3 vérifiés sur les tables de L1.3+ : §18.3 **oui** (les tables créées après `0007`
+  portent `created_at`, les colonnes temporelles sont horodatées) ; §18.2 **partiellement** :
+  `accounts` est la seule table à `deleted_at`, les tables de contenu n'en ont pas — écart
+  **épinglé** par le test (il échouera le jour où une migration ajoutera les colonnes sans mettre
+  l'inventaire à jour). Fermer l'écart = **changement de schéma** (migration `0016`), décision
+  explicite à prendre, cf. encadré L6.
+  *preuve : `tests/unit/migrations/test_soft_delete_columns.py` (15 cas)*
 
 ---
 
 ### L7 — Résilience, cache et reprise (§41.5, §41.6, §41.8, §41.1) (3 j) · Devin + OpenCode
 
-- [ ] **Dette n°6 — cache L2 PostgreSQL** : brancher `cache_entries` (`0008`) derrière
-  `app/storage/cache/cache_store.py` (L1 conservé comme premier niveau), TTL par entrée,
-  invalidation par `request_id`/`source_id`. *preuve : `tests/integration/test_cache_l2_postgres.py`*
-- [ ] **Cache L3 pgvector** : réutilisation d'embeddings déjà calculés (clé = `sha256` du texte
-  normalisé) — évite de recalculer un vecteur identique. *preuve : `tests/integration/test_cache_l3_embeddings.py`*
+- [x] **Dette n°6 — cache L2 PostgreSQL** : `cache_entries` (`0008`) est branché derrière
+  `app/storage/cache/cache_store.py` (L1 conservé comme premier niveau), via
+  `CacheEntryRepository` + `PostgresCacheBackend` (voie asynchrone `aget`/`aset`),
+  TTL par entrée, invalidation par `source_id`/namespace, purge des périmés.
+  ✅ **Une entrée survit au redémarrage du processus** (relue par un autre interpréteur) et
+  une valeur servie depuis L2 est promue en L1 ; l'étape web du pipeline utilise ce chemin
+  (le fournisseur n'est pas rappelé après vidage de L1).
+  *preuve : `tests/integration/test_cache_l2_postgres.py`*
+- [x] **Cache L3 pgvector** : réutilisation d'embeddings déjà calculés.
+  ✅ Le contrat §41.5 (« L3 — pgvector : embeddings persistants, invalidés par nouvelle version ») est
+  lu littéralement : ce **n'est pas** une troisième paire clé/valeur à TTL, mais la table `embeddings`
+  (§16.1) — déjà écrite par le générateur, déjà lue par la recherche §16.2 — que le `CacheStore` lit
+  pour éviter un appel au fournisseur (`aget_l3`/`aset_l3`, compteurs `l3_hits`/`l3_writes` distincts
+  de L1/L2). `PgVectorCacheBackend` **ne crée aucune table** et n'écrit rien : `persist_embeddings`
+  reste le seul écrivain, donc aucun second chemin d'écriture.
+  L'identité d'un vecteur est `(propriétaire, empreinte du texte, modèle, largeur)` et **chaque
+  critère est revérifié sur la ligne relue** : propriétaire, modèle ou largeur différents ⇒ pas de
+  hit. ⚠️ Décision documentée : un embedding est une fonction du **texte** et du modèle, pas de la
+  version de l'unité — une nouvelle version au texte identique réutilise légitimement le vecteur, une
+  version au texte révisé recalcule. ⚠️ Un test existant a montré qu'un dédoublonnage par texte seul
+  ferait partager une ligne à deux unités distinctes (la recherche joint sur `owner_id`).
+  *preuve : `tests/integration/test_cache_l3_embeddings.py`* (10 cas, PostgreSQL/pgvector réels)
+- [x] §41.6 : `ChunkedDatasetProcessor` branché au seuil de l'ADR 007 **dans le chemin réel** —
+  ✅ **branché en L2.6** (`document_ingestor._chunked_units` + `app/knowledge/normalization/limits.py`),
+  et le **reste dû de L7 est fait** : la borne de travail sous charge est mesurée et le contrat exact du
+  seuil est verrouillé (unité = la ligne, défaut ADR 50, `should_stream` **strictement** au-dessus du
+  seuil, au seuil/juste en dessous ⇒ aucun processeur, vide ⇒ aucun tronçon, seuil ≤ 0 ⇒ refusé, valeur
+  d'environnement illisible ⇒ retour au défaut). ⚠️ Mesure mémoire **honnête** : le pic tracé du chemin
+  découpé (389 792 octets) est légèrement **supérieur** à celui du chemin direct (359 716) — le résultat
+  fusionné contient toujours toutes les unités. C'est donc la **borne structurelle** (aucun tronçon
+  au-delà du seuil) qui est prouvée, et le test dit lui-même ce qu'il ne mesure pas.
+  *preuves : `tests/performance/test_chunked_threshold.py` (22 cas) ; `tests/integration/test_chunked_ingestion.py`*
+
+
 - [x] §41.6 : `ChunkedDatasetProcessor` branché au seuil de l'ADR 007 **dans le chemin réel** —
   ✅ **branché en L2.6** (`document_ingestor._chunked_units` + `app/knowledge/normalization/limits.py`).
   ⚠️ Ce qui reste de ce lot : valider la **borne mémoire** sous charge et la reprise (§41.1), pas le
   branchement lui-même.
-  *preuve du branchement : `tests/integration/test_chunked_ingestion.py` ; reste dû ici :
-  `tests/performance/test_chunked_threshold.py`*
-- [ ] §41.1 : reprise après redémarrage pour une requête longue (checkpoints `0005`
-  `execution_checkpoints` + `progress`), testée avec un kill de processus.
-  *preuve : `tests/integration/test_resume_after_restart.py`*
-- [ ] §41.8 : vérifier que la politique retry/circuit breaker (ADR `006`) couvre **les nouveaux
-  chemins** (S3, PostgreSQL, fichiers), et pas seulement le web.
+  *preuve du branchement : `tests/integration/test_chunked_ingestion.py` ; reste dû ici : le test de
+  borne mémoire sous charge (`performance/test_chunked_threshold.py`, **non créé à ce jour**)*
+- [x] §41.1 : reprise après redémarrage pour une requête longue (checkpoints `0005`)
+  ✅ **Révision `0017`** (additive) : `execution_checkpoints` porte `step_index` et le
+  `payload` des étapes validées — sans quoi une reprise ne pouvait que tout refaire et
+  perdre ce qui avait été acquis. Le pipeline écrit le point de reprise **avant** chaque
+  étape, le marque `resumable=false` quand le run aboutit, et expose
+  `resume_interrupted(request_id)` (distinct de la reprise par jeton) qui **rejoue** le
+  préfixe validé au lieu de le ré-exécuter.
+  ⚠️ Découvert par la preuve : les résultats d'étape contiennent des `datetime`, donc
+  l'écriture du point de reprise échouait silencieusement (`to_json_safe` corrige).
+  *preuve : `tests/integration/test_resume_after_restart.py`* (processus enfant tué net
+  `os._exit(137)` en pleine exécution, puis reprise : préfixe non ré-exécuté, colis complet
+  sans doublon, point de reprise clos après reprise)
+- [x] §41.8 : la politique retry/disjoncteur (ADR `006`) couvre **les nouveaux chemins**.
+  ✅ Constat de départ : le disjoncteur existait mais **aucun chemin de `app/` ne l'appelait**
+  — le brancher était le vrai travail, pas l'étendre. `guard`/`guard_sync` composent retry
+  et disjoncteur en documentant la règle : le disjoncteur compte les **appels logiques**
+  (un retry qui réussit est une dépendance saine ; compter chaque tentative ouvrait le
+  circuit sur le retry censé l'éviter — défaut trouvé par les tests). Retry réservé aux
+  **lectures rejouables** (recherche web `provider:*`, fetch `connector:web_fetch`, 3
+  tentatives) ; le disjoncteur seul sur l'**écriture** d'artefact (`connector:s3`, §24.2) ;
+  PostgreSQL/fichiers **volontairement** hors disjoncteur (écriture non rejouable, risque de
+  doublon) — décision écrite dans le test.
   *preuve : `tests/unit/connectors/test_circuit_breaker_new_paths.py`*
 
 ---
@@ -972,7 +1374,23 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 2026-09-30 | Cline (act) | **L2.5b** | La source PostgreSQL **nommée par la requête** entre dans le pipeline : `constraints.source_preferences=["postgres:<ref>[#table]"]` (nouveau `app/connectors/database/source_target.py`, une entrée malformée **lève** au lieu de disparaître), lecture → `Dataset` + une unité §11 par ligne localisée en `row` (`app/knowledge/ingestion/database_material.py`), étape `query_database` **exécutable** et conditionnelle (`tool_dispatch.py`), orientation du plan `data`/`source` (aucune recherche web), sources `database`, étages §12.1 `PostgresConnector`/`DatabaseMaterial`, `Dataset` persisté (`DatasetRepository`) pour que le `DATA_` livré soit consultable | `4f2a0eb` | `pytest -q` → **2067 passed / 4 skipped** (148,75 s) ; `check_architecture` + `check_contracts` + `check_invariants` OK ; BC **0 breaking** (31 warnings BC005) ; `ruff` : **0 nouvelle erreur** (`pipeline_runner.py` reste à 22 erreurs préexistantes, dont 14 E501 — comptes identiques avant/après vérifiés par `git stash`) | ✅ **critère §36/7 fermé** — 92 nouveaux tests : 8 d'intégration sur PostgreSQL réel (`test_request_database_read_e2e.py`), 24 agentiques (`test_database_read_delivery.py`), 32 unitaires matériau, 28 sur la cible. ⚠️ Trois pièges : lire la base du client **avec l'engine d'INIS** (P19), publier un `DATA_` absent de la table `datasets` (P20), et **jeter le `file_ingest`** d'une requête `data` qui nomme *aussi* une base (P21) — les trois sont écartés et verrouillés par un test |
 | 2026-09-30 | Cline (act) | **L2.6** | **L2 clos** : PDF/DOCX rendus **localisables** (`extract_document_blocks` : une page, un paragraphe ou un tableau par bloc, `char_offset` vérifiable dans le texte extrait), `FactExtractor` branché sur le texte extrait (`content["sentences"]`, texte intégral conservé), images **PNG/JPEG** acceptées et ingérées via `extract_image_content` (Pillow optionnel D6, `pillow_available=False` nommé, aucun OCR §9.2), seuil de l'ADR 007 **réellement appliqué** (`app/knowledge/normalization/limits.py`, `_chunked_units`, miroir `configs/*.toml`), feuille de classeur nommée dans le locator (les autres feuilles listées en `limitations`). `ingest_document` devient `async` (P25) | `93e4722` | `pytest -q` → **2120 passed / 4 skipped** (184,19 s) ; `check_architecture` + `check_contracts` OK ; ruff : **0 erreur nouvelle** sur les fichiers du lot | ADR 007 porte désormais sa section « Mise en œuvre » et ses limites assumées ; 53 tests neufs (dont 9 sur les blocs de document, 11 sur l'image/OCR, 13 sur le chunking, 3 d'intégration PDF/tronçons) |
 | 2026-09-30 | Cline (act) | **L2.1 (fin)** | Variante protocole §5.2 : `InformationRequestCreate.source_ref` n'accepte que `s3://bucket/cle` (chemin local / URL HTTP refusés, §19) et `app/knowledge/ingestion/object_intake.py` ingère l'objet nommé **avant** la planification du run — lecture en flux (plafond §41.2), type par le contenu, `sources`/`documents`/`Dataset`/unités §11, la référence du client restant le `storage_ref`. Une source illisible **refuse la création** (422 nommant la cause). `create_request` devient `async` | `9677305` | `pytest -q` → **2144 passed / 4 skipped** (229,30 s) ; checkers OK ; ruff : 0 nouvelle erreur sur les fichiers du lot (2 préexistantes dans `router.py`) | ⚠️ Le run est planifié **après** l'ingestion : sans cela le plan ignorerait la source que la requête vient de nommer (P27) |
-| 2026-09-30 | Cline (act) | **L3.1** | Étape ENRICHED : `app/knowledge/enrichment/enricher.py` (chaîne §12 `advance_stage`/`can_transition` — saut refusé ; dates ISO + `offset` du texte d'origine ; unités de mesure ; devises ; langue par mots-outils ; empreinte §17.1 ; doublons **nommés** ; `resolved_dataset_stages`), producteurs estampillés `normalized` (`FactExtractor`, `DocumentIngestor`), étape 3.7 du pipeline (`enrich_units` pur, locale par unité, limitations remontées au colis) et lignage §12.1 `Enricher.enrich` **distinct** de la synthèse | (à ancrer) | `pytest -q` → **2253 passed / 4 skipped** (201,17 s) ; `check_architecture` + `check_contracts` OK ; `ruff` clean sur les fichiers du lot | ✅ LOT L3.1 — 109 nouveaux tests (79 `test_enricher.py`, 14 `test_data_stage_transitions.py`, 10 `test_delivery_exposes_stages.py`, 6 `TestEnrichmentIsItsOwnStage`) ; 3 tests existants mis à jour (`data_stage` du fact extractor/ingestor : `raw` → `normalized`). ⚠️ Deux pièges corrigés pendant le lot : un nombre illisible dans la locale déclarée (`3.5` en `fr-FR`) était **reconverti** en 35 → désormais refusé et listé (`_valid_grouping`) ; `$500` (symbole **avant** le montant) n'était pas signalé comme ambigu → détecté dans les deux notations |
+| 2026-09-30 | Cline (act) | **L3.1** | Étape ENRICHED : `app/knowledge/enrichment/enricher.py` (chaîne §12 `advance_stage`/`can_transition` — saut refusé ; dates ISO + `offset` du texte d'origine ; unités de mesure ; devises ; langue par mots-outils ; empreinte §17.1 ; doublons **nommés** ; `resolved_dataset_stages`), producteurs estampillés `normalized` (`FactExtractor`, `DocumentIngestor`), étape 3.7 du pipeline (`enrich_units` pur, locale par unité, limitations remontées au colis) et lignage §12.1 `Enricher.enrich` **distinct** de la synthèse | `51ca9a1` | `pytest -q` → **2253 passed / 4 skipped** (201,17 s) ; `check_architecture` + `check_contracts` OK ; `ruff` clean sur les fichiers du lot | ✅ LOT L3.1 — 109 nouveaux tests (79 `test_enricher.py`, 14 `test_data_stage_transitions.py`, 10 `test_delivery_exposes_stages.py`, 6 `TestEnrichmentIsItsOwnStage`) ; 3 tests existants mis à jour (`data_stage` du fact extractor/ingestor : `raw` → `normalized`). ⚠️ Deux pièges corrigés pendant le lot : un nombre illisible dans la locale déclarée (`3.5` en `fr-FR`) était **reconverti** en 35 → désormais refusé et listé (`_valid_grouping`) ; `$500` (symbole **avant** le montant) n'était pas signalé comme ambigu → détecté dans les deux notations |
+| 2026-09-30 | Cline (act) | **L3.2 + L3.3** | Fin du lot L3 : §12.1 projeté dans le colis (structure exacte de `Transformation.to_dict()`, une ligne par producteur et par étape, aucun `operator` fourre-tout) et embeddings §16 réellement écrits — `ModelRouter.embed` (sans stub : sans `LLM_API_KEY` l'appel **lève**), `app/knowledge/embedding/embeddings_generator.py` (texte = `unit_text` de L3.1, métadonnée = empreinte, `embedding_id` UUID, largeur vérifiée contre la colonne), `app/storage/repositories/embedding_repository.py` (littéral pgvector + `CAST`, `ON CONFLICT DO NOTHING`, `vector_dims`), `scripts/backfill_embeddings.py` (`--dry-run`, `--request-id`, `--report`, codes de sortie 0/1/2), `llm_decision_trace.task_type = "embedding"` | `536cc9d` + `02583ea` | `pytest -q` → **2313 passed / 4 skipped** (196,32 s) ; `check_architecture` + `check_contracts` + `check_invariants` OK ; `ruff` clean sur les fichiers du lot | ✅ **L3 clos** (C10, C11, C13-écriture). 60 nouveaux tests : 9 `test_delivery_transformations_shape.py`, 8 `test_transformations_are_real.py`, 16 `test_embeddings_generator.py`, 12 `test_embeddings_no_provider_degrades.py`, 8+7 d'intégration **sur PostgreSQL/pgvector réel** (dont `vector_search` qui retrouve l'unité vectorisée et un rattrapage relancé deux fois). ⚠️ Trois pièges : `check_architecture` refuse le littéral `vector(1536)` dans `app/` (la largeur vient d'une constante) ; la base testcontainers est **partagée par la session**, donc le rattrapage est testé `--request-id` scopé (sinon les unités des autres tests rendent le résultat dépendant de l'ordre) ; `asyncio.run` du script impose des tests **synchrones**. Reste pour L4 : brancher `HybridSearch`/`memory_lookup` dans le pipeline |
+| 2026-09-30 | Cline (act) | **L4** | Recherche hybride et mémoire : `app/knowledge/memory/hybrid_memory.py` (recherche §17.1 injectable, mode réel + limitations, candidates depuis `retrieve_context`), `HybridSearch` réécrit (§16.2 : sous-scores **normalisés** dans [0,1] par le maximum de chaque moitié, poids ADR 004 exposés, `search_outcome` qui dit `hybrid`/`lexical_only`/`unavailable`, engine partagé), vocabulaire §8.4 (`memory_lookup` et `retrieve_context` **exécutables**), étape `memory_lookup` en **tête de plan** (`order: 0`, après le garde-fou §41.13), unités réutilisées livrées avec leur identifiant d'origine + `context.memory`, audit §20 (`memory_lookup` success/degraded) et métrique `cache_hit_rate`, `limitations` explicites | `038b9aa` | `pytest -q` → **2354 passed / 4 skipped** (206,15 s) ; `check_architecture` + `check_contracts` + `check_invariants` OK ; `ruff` clean sur les fichiers du lot | ✅ **L4 clos** (C13 fermé pour la mémoire). 41 nouveaux tests + 4 tests existants ajustés (l'étape de mémoire précède désormais les pas d'acquisition). ⚠️ Trois pièges : `:source_id IS NULL` en paramètre asyncpg ⇒ « could not determine data type » (`HybridSearch` rendait [] en silence) → `CAST(:source_id AS text)` ; `pgvector` stocke des `float4`, donc comparaison au chiffre près à `1e-6` (et clamp `LEAST(1.0, …)`) ; la base testcontainers est partagée, donc le corpus de poids sème des **mots rares** et se nettoie pour rester déterministe |
+| 2026-09-30 | Cline (act) | **ENV (pré-requis L6)** | Chargement du `.env` en dev/test : `app/core/env.py` (seul lecteur du fichier ; **jamais en production**, l'environnement du process gagne toujours, aucune valeur journalisée), appelé depuis `app/__init__.py` et `migrations/env.py` (qui lit désormais `INIS_DATABASE_URL` avant `DATABASE_URL`) ; `.env.example` complété (toutes les variables lues par `app/` y sont, test de contrat à l'appui) ; `INIS_AUTH_ENABLED=true` par défaut en dev (`.env.example` + `docker compose`) ; `tests/env_policy.py` rend la suite **hermétique** (retrait par défaut des variables services/sécurité/live/configuration, opt-in `INIS_LIVE_LLM=1` et `INIS_TEST_USE_ENV=1`) | `09e7233` | `pytest -q` → **2381 passed / 4 skipped** (208,94 s) ; 3 checkers OK ; `ruff` clean sur les 8 fichiers | ✅ 27 nouveaux tests. ⚠️ **Preuve que la fuite était réelle** : le premier chargement a cassé **7 tests de routage LLM** (`LLM_MODEL_DEFAULT`/`LLM_MODEL_FALLBACKS` du `.env` remplaçaient le défaut attendu) → groupe `configuration` ajouté à la politique, et un test échoue si `.env.example` documente une variable non classée |
+| 2026-09-30 | Cline (act) | **L5 (début)** | Qualité §13 sur les datasets livrés : `app/quality/dataset_quality.py` exécute `check_missing_values`, `detect_duplicates`, `check_consistency` et `profile_dataset` sur **les lignes du dataset déjà livrées** (unités §11, contenu d'enregistrement **déplié** de `content["values"]` — sinon les contrôles porteraient sur une colonne « values » et rendraient un score confiant sur la mauvaise forme) ; score §13.3 par `quality_reporter.report` ; pipeline **Stage 3.8** : `datasets[].quality_score` renseigné, bloc `quality` dans le colis, issues recopiées dans `limitations`, qualité non mesurée dans `missing_information` | `(ce commit)` | `pytest -q` → **2474 passed / 4 skipped** ; `ruff` clean sur les 3 fichiers ajoutés ; 3 checkers OK | ✅ Critère de sortie L5 **prouvé au niveau du colis** : un CSV avec doublon + valeur manquante + colonne incohérente produit un colis qui **nomme les trois défauts** (`tests/api/test_delivery_quality_limitations.py`, 4 cas) et un `quality_score` non `None` ; sans les lignes, `quality_score: None` + raison. ⚠️ Reste dû en L5 : `check_freshness` appliqué aux sources fichier/DB, `compare_sources` **fichier↔web** → `Conflict`, et l'e2e d'ingestion réelle (`test_dataset_quality_controls_e2e.py`) — les trois sont écrits `[ ]`/`[~]` dans le plan, pas cochés |
+| 2026-09-30 | Cline (act) | **Migration 0016** | §18.2 (suppression logique) + §7 (demande complète) : `deleted_at` + index partiel `WHERE deleted_at IS NULL` sur les 7 tables de contenu, `requests.payload` JSONB ; **périmètre décidé et testé** : les tables append-only (`transformations`, `information_versions`, `audit_events`) n'ont **pas** de `deleted_at` (une suppression y contredirait §12.1/§18.1/§20) ; les 7 tables Core des repositories déclarent la colonne, sinon le test de non-divergence (L6) le signale ; routeur : payload écrit au POST et restauré intégralement, repli documenté sur les colonnes pour une ligne antérieure | `(ce commit)` | `pytest -q` → **2484 passed / 4 skipped** ; `check_architecture` + `check_contracts` + `check_invariants` OK ; `check_backward_compat` → **0 breaking change** (32 warnings BC005 « CREATE INDEX », convention déjà en place pour 0008/0013/0014/0015) ; `alembic upgrade head` sur la base docker → **0016 (head)** | ✅ Upgrade + downgrade symétriques, lignes existantes intactes, testés **sur PostgreSQL réel** (`TestRevision0016`, 6 cas : colonnes, index partiels, tables append-only épargnées, downgrade, données conservées, cycle down/up). ⚠️ Les index partiels sont créés par `CREATE INDEX` (verrou d'écriture, BC005 connu) comme les migrations précédentes : non bloquant, mais à surveiller en production |
+| 2026-09-30 | Cline (act) | **Audit L0→L6** | Vérification mécanique des 66 cases cochées : 20 citations pointaient vers des fichiers **jamais créés** (les preuves avaient été consolidées sous d'autres noms) et 3 cases n'avaient aucune preuve citée. Citation corrigée vers le test réel pour chacune (`test_generators.py::TestCsvExport/…`, `integration/storage/test_artifact_repository.py`, `api/test_artifacts.py::TestDeliveredArtifacts`, `agentic/test_file_ingest_delivery.py`, `integration/test_chunked_ingestion.py`, …), et **4 preuves réellement manquantes écrites** : pas d'écriture disque des générateurs, contrat d'export des repositories, contrat client frontend (`Artifact` + fin du `catch` silencieux), invention de colonnes §18.2 épinglée | `(ce commit)` | `pytest -q` → **2460 passed / 4 skipped** ; `ruff` clean sur les fichiers ajoutés ; les 4 fichiers de preuve rejoués isolément (27 + 19 + 7 + 4 cas) | ✅ Audit **à 0 écart**, et il devient un **test permanent** (`tests/unit/docs/test_plan_proofs_exist.py` : 4 cas) pour que la règle « pas de `[x]` sans preuve réelle » ne redevienne pas une promesse. ⚠️ Ce que l'audit ne prouve pas : que le test cité *prouve bien* l'item (il garantit qu'il existe) — la profondeur reste vérifiée à la lecture du lot |
+| 2026-09-30 | Cline (act) | **L6** | Persistance réelle : `pipeline_persistence` **sans une ligne de SQL** (lignes confiées aux tables Core via `insert_rows`, `ON CONFLICT` dialecte-aware, `COALESCE` conservé sur `sources.reliability_score`), repositories ajoutés `transformation` (`0004`), `plan`/`plan_steps`, `request`, `information_versions` (`0007`) + preuve `dataset`, routeur `/v1/requests` **adossé à la table `requests`** (écriture au POST, relecture après redémarrage, champs absents laissés vides), `DurableVersionStore` (§18.1) et outils §21 acceptant les deux stores, `migrations/env.py` lance le `.env` | `57cc15c` | `pytest -q` → **2420 passed / 4 skipped** (209,29 s) ; `check_architecture` + `check_contracts` + `check_invariants` OK ; `ruff` clean sur les fichiers du lot ; **stack réelle** `docker compose up -d` + `alembic upgrade head` → `0015 (head)`, 38 tables, 289 colonnes | ✅ **L6 clos (N2)** — 39 nouveaux tests. Critère utilisateur prouvé : *write → restart → read* par un **autre interpréteur** (`tests/integration/test_restart_durability.py`) + non-divergence repository/migration sur 8 tables (`test_postgres_real.py`). ⚠️ Deux points **signalés et non tranchés** car ils changent le schéma (§18.2 : `deleted_at` n'existe que sur `accounts` ; §7 : `requests` ne stocke pas `question`/`context`/`budget`) ⇒ migration `0016` à valider |
+| 2026-10-03 | Cline (act) | **L7.1** | **Cache L3 pgvector** (§41.5). Le contrat est lu **littéralement** : `L3 = pgvector : embeddings persistants` n'est **pas** une troisième paire clé/valeur à TTL, c'est la table `embeddings` (§16.1) — déjà écrite par le générateur, déjà lue par la recherche §16.2 — que le `CacheStore` lit pour éviter un appel au fournisseur (`aget_l3`/`aset_l3`, compteurs `l3_hits`/`l3_writes` distincts de L1/L2) ; `PgVectorCacheBackend` **ne crée aucune table** et `persist_embeddings` reste le **seul écrivain** (aucun second chemin d'écriture). Identité d'un vecteur = `(propriétaire, empreinte du texte, modèle, largeur)`, **chaque critère revérifié sur la ligne relue** ⇒ pas de faux hit | `755da14` | `tests/integration/test_cache_l3_embeddings.py` → **10 passed** (PostgreSQL/pgvector réels : 1er calcul → fournisseur appelé ; 2e → fournisseur **jamais** appelé et vecteur identique à la base ; persistance après « redémarrage » ; texte révisé → recalcul ; propriétaire/modèle/largeur ≠ → pas de hit ; hit tracé) | ✅ Un test existant a révélé qu'un dédoublonnage **par texte seul** ferait partager une ligne à deux unités distinctes (la recherche §16.2 joint sur `owner_id`) ⇒ le **propriétaire entre dans l'identifiant**. ⚠️ Décision documentée : un embedding est une fonction du **texte et du modèle**, pas de la version de l'unité. ⚠️ Limite dite : cache **partiel** (certains textes déjà vus, d'autres non) traité explicitement |
+| 2026-10-03 | Cline (act) | **L7.2** | **Persistance de la progression** (§41.1). `ProgressRepository` sur la table `progress` (`0005`, 5 colonnes) ; l'écriture se fait **dans le même appel** que `_checkpoint_step` (aucune seconde machine à états à tenir en parallèle) ; la route `/progress` devient asynchrone et **retombe sur PostgreSQL** ; run terminé ⇒ `current_step=DELIVERY`, `steps_done=steps_total` | `ad4abb7` | `tests/integration/test_progress_persistence.py` → **5 passed** (PostgreSQL réel + **vrai** `os._exit(137)` : la progression est relue par un autre interpréteur après mort nette du processus) | ✅ La progression survit au redémarrage **parce qu'elle est le point de reprise lui-même**, pas une copie. ⚠️ Id inconnu ⇒ toujours **404** (le repli n'invente pas de progression) |
+| 2026-10-03 | Cline (act) | **L7.3** | **Seuil du découpage** (§41.6 / ADR 007). Unité = la **ligne**, défaut ADR = 50, `should_stream` **strictement** au-dessus du seuil, au seuil ou juste en dessous ⇒ **aucun processeur instancié**, vide ⇒ aucun tronçon, seuil ≤ 0 ⇒ `ValueError`, valeur d'environnement illisible ⇒ retour au **défaut** | `97c68e7` | `tests/performance/test_chunked_threshold.py` → **22 passed**, dont la mesure `tracemalloc` | ✅ **Borne structurelle** prouvée (aucun tronçon au-delà du seuil). ⚠️ Mesure mémoire **honnête** : le pic du chemin découpé (389 792 o) est légèrement **supérieur** au direct (359 716 o) — le résultat fusionné contient toujours toutes les unités ; **aucun chiffre de coût n'est inventé** et le test dit ce qu'il ne mesure pas |
+| 2026-10-03 | Cline (act) | **L7.4** | **Cellule hors-type** (§13.2). Cause racine trouvée : les cellules CSV arrivant en **texte**, `infer_schema` voyait une colonne `string` homogène et `validate_schema` n'avait **aucun prédicat** pour une union `a|b` ⇒ contrôle **sauté**. Correctif : les raisons portent sur la **nature observée** de chaque cellule (`_value_kind` : texte à valeur numérique ⇒ `number`/`integer`), la **majorité stricte** décide du type attendu, la cellule fautive est **nommée** (`row_index`, `field`, `expected`, `observed`) | `9bcaaca` | `tests/unit/tools/test_dataset_inspector_typed_cells.py` → **8 passed** ; contre-épreuve devenue preuve dans `tests/integration/test_dataset_quality_controls_e2e.py` | ✅ **Aucune valeur n'est modifiée** (signaler n'est pas corriger). ⚠️ Sans majorité stricte ⇒ **aucune violation arbitraire** : un lot ambigu n'est pas transformé en fausse alerte |
+| 2026-10-03 | Cline (act) | **L7.5** | **Gain de l'arrêt anticipé** (§17/§41.2). Le plan le réclamait explicitement (« gain **non mesuré** — reporté à L7/§41.13 »). Deux exécutions **réelles** du même chemin sont comparées avec les **mêmes doubles** : sans mémoire (acquisition complète) vs avec arrêt anticipé (étapes web non exécutées). Chaque nombre vient du **`usage_report` §41.2** (contrat de facturation : `tokens_llm_input`, `tokens_llm_output`, `web_requests`, `api_calls`, `compute_seconds`) + du **compteur d'appels des doubles** | `7454244` | `tests/performance/test_early_stop_savings.py` → **3 passed** | ✅ Mesure **structurelle**, pas une facture : avec mémoire suffisante `web_requests == 0` et le fournisseur web n'est **jamais** appelé, alors que sans mémoire il l'est au moins une fois ; l'unité mémorisée reste livrée avec son identifiant d'origine et l'absence d'acquisition est **dite** dans le colis. ⚠️ **Aucun euro, aucun prix, aucun chiffre de coût n'est fabriqué** ; la différence entre les deux colis est documentée au lieu d'être présentée comme un résultat identique |
+| 2026-10-03 | Cline (act) | **L7 (clôture)** | Vérification de bout en bout du lot, et **défaut réel trouvé par la suite complète** : `test_pgvector.py::test_orthogonal_vector_scores_lower` échouait (`KeyError` sur l'unité lexicale attendue) alors qu'il passait **seul** — le test L3 écrivait des vecteurs dans la table `embeddings` **partagée**, et ces vecteurs, plus proches du vecteur de requête, faisaient sortir l'unité lexicale du `limit=10` de la recherche §16.1. Correctif : le module enregistre les propriétaires qu'il a écrits et les **supprime après chaque test** (fixture autouse) | `c2057ea`, `a8608aa` | Suite complète `pytest -q` → **2672 passed / 4 skipped** (501,01 s), soit **+48** vs 2 624 ; les deux fichiers réunis **dans l'ordre qui échouait** → 16 passed ; `check_architecture` / `check_contracts` / `check_invariants` → **OK** ; `check_backward_compat` → **0 breaking change** (32 warnings BC005 préexistants) ; frontend `npx tsc --noEmit` **propre** + `npx vitest run` → **20 passed** (4 fichiers) | ✅ **L7 clos.** ⚠️ Les 3 findings `ruff` restants sur les fichiers du lot (`S110` ×2 dans `cache_store.py`, `UP040` sur `DatasetLike`) sont **préexistants** (vérifiés par `git show 755da14~1`) et `ruff` est **non bloquant par configuration** dans ce dépôt ; `type X = …` (UP040) exigerait Python 3.12 alors que le runtime est **3.11.9**. ⚠️ Leçon durable : **un test qui écrit dans une table partagée doit rendre la table telle qu'il l'a trouvée** — sinon il fait échouer ses voisins, et l'échec n'apparaît qu'à la suite **complète**, jamais en isolé |
+
+
+
 
 
 ---
@@ -1067,5 +1485,12 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 
 
 
+
+| 2026-09-30 | Cline (act) | **L5 (suite et fin)** | `check_freshness` et `compare_sources` branchés (Stage 3.9, `app/quality/source_quality.py`) : fraîcheur évaluée par source **et persistée** (colonne `sources.freshness` écrite à `NULL` jusqu'ici), comparaison §14.4 des sources désormais **atteignable** — rien ne produisait le triplet `(subject, predicate, value)` qu'elle lit — avec projection mécanique des enregistrements et déclaration de ce qui reste non comparable ; E2E **réel** fichier → MinIO → PostgreSQL → contrôles → colis (téléversement multipart, vrai `load_request_material`) | `424450f` | `pytest -q` → **2498 passed / 4 skipped** ; 3 checkers OK ; `ruff` clean sur les fichiers du lot ; e2e rejoué seul (2 cas) | ✅ Items L5 2/3/4/5 **prouvés** ; ⚠️ **défaut réel corrigé** : `check_freshness` notait 0.0 (« inconnue ») une source fraîche qui déclarait `retrieved_at`, parce qu'il passait le dict brut à `FreshnessCheck` qui ne lit que `updated_at` ; ⚠️ **constat reproductible** : une cellule CSV qui ne tient pas dans sa colonne n'est pas isolée (les cellules sont stockées en texte, colonne homogène) — le colis le dit mais ne nomme pas la cellule, ce qui exigerait une ingestion typée (item 1 reste `[~]`) |
+
+
+| 2026-09-30 | Cline (act) | **§17 (arrêt anticipé)** | `early_stop_decision` (`app/planning/memory_checker.py`) sépare **suffisance** et **arrêt** : seule une recherche **hybride sans limitation** conclut, avec ses critères ; quand elle conclut, les étapes d'acquisition **web** ne sont pas exécutées (fournisseur non appelé) et restent dans le colis en `skipped` avec la raison ; les sources propres à la requête (fichier, base) ne sont jamais sautées ; la décision voyage dans `provenance.memory`, dans une `limitations` explicite et dans l'événement §20 | `e986222` | `pytest -q` → **2526 passed / 4 skipped** (241,60 s) ; 3 checkers OK ; `ruff` clean sur les fichiers du lot ; cas d'intégration rejoués seuls (2 cas sur PostgreSQL réel) | ✅ **§17 clos** — 28 nouveaux tests (13 décision, 9 pipeline, 4 audit, 2 intégration). ⚠️ Garde-fou vérifié : une mémoire suffisante mais **lexicale seule** ou **limitée** réutilise **sans arrêter** le run, et une mémoire insuffisante laisse l'acquisition inchangée. ⚠️ Non mesuré : le gain de coût/tokens (relève de L7/§41.13) |
+
+| 2026-10-01 | Cline (act) | **Validation globale E2E** | Parcours complet sur la pile réelle : POST `/v1/requests` (agent → InformationRequest) → ingestion d'un vrai CSV (`ingest_document`, lecteur CSV réel) → `PipelineRunner` → Acquisition/Extraction/Qualité/Confiance/Provenance/§12.1 → artifact → version + lignage → PostgreSQL → MinIO → téléchargement HTTP avec `ETag`/`X-Checksum-Sha256`, AuthZ §19.3, refus des supprimés, événement §24.3 ; plus 5 contre-preuves adversariales | (voir commits poussés) | `pytest -q` → **passe** (2624 tests) ; frontend `vitest` 20 verts ; `tsc` clean ; 3 checkers OK ; BC 0 breaking ; `ruff` clean sur les fichiers du lot | ✅ **Parcours démontré de bout en bout** (10 cas) + 5 contre-preuves. ⚠️ **Anomalie réelle trouvée et corrigée** : `build_transformations` appelé deux fois → l'artefact citait des `TRF_` **inexistants** en base ; le runner persiste désormais le jeu déjà cité et n'ajoute que l'étape `derived` du second appel. ⚠️ Restent ouverts : cache L3, `progress`, §41.6, CSV `[~]`, mesure §17 → **tous traités en L7** (voir lignes L7.1→L7.5 ci-dessous) |
 
 

@@ -20,6 +20,7 @@ import hashlib
 from contextlib import suppress
 
 import pytest
+from fastapi import Request
 
 from app.api.v1.artifacts.router import download_artifact
 from app.api.v1.requests.pipeline_runner import PipelineRunner
@@ -29,6 +30,17 @@ from app.storage.database.session import reset_session_maker
 from app.storage.object_storage.s3_client import S3Client
 from app.storage.repositories.artifact_repository import ArtifactRepository
 from tests.containers import MINIO_BUCKET, MINIO_ROOT_PASSWORD, MINIO_ROOT_USER
+
+
+def _anonymous_request() -> Request:
+    """Return the request a caller without credentials produces (§19.3).
+
+    The route is called directly here (the live object storage is the subject of
+    the test), so the §19.3 guard needs the identity carrier the middleware fills
+    over HTTP: an empty ``state`` is exactly an anonymous caller, which the policy
+    allows on a public artifact and refuses on a `restricted` one.
+    """
+    return Request(scope={"type": "http", "headers": [], "method": "GET", "path": "/"})
 
 #: §24.2 ``mime_type`` of an ``.xlsx`` delivery.
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -96,7 +108,7 @@ async def test_xlsx_artifact_is_stored_listed_and_downloadable(
     assert len(stored) == record["size_bytes"]
 
     # And the API serves exactly those bytes back.
-    response = await download_artifact(record["artifact_id"])
+    response = await download_artifact(record["artifact_id"], _anonymous_request())
     assert hashlib.sha256(response.body).hexdigest() == record["sha256"]
     assert response.headers["content-type"].startswith(XLSX_MIME)
     assert record["file_name"] in response.headers["content-disposition"]

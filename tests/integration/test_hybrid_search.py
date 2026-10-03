@@ -62,10 +62,17 @@ class TestFusion:
         scores = {row["owner_id"]: row["final_score"] for row in results}
         assert scores[corpus["semantic_unit"]] > scores[corpus["lexical_unit"]]
 
-    async def test_final_score_is_a_non_negative_float(
+    async def test_final_score_is_the_adr_004_weighted_sum(
         self, db_url: str, corpus: dict[str, str]
     ) -> None:
-        """The weighted sum is exposed as ``final_score``."""
+        """§16.2/ADR 004 — ``final = 0.6 × sémantique + 0.4 × lexical``, au chiffre près.
+
+        Les deux sous-scores sont exposés (L4) : le poids appliqué est donc
+        vérifiable au lieu d'être cru sur parole, et chaque sous-score est bien
+        ramené dans ``[0, 1]`` avant pondération. La tolérance est ``1e-6`` :
+        ``pgvector`` stocke des ``float4``, une égalité exacte serait un test
+        qui échoue pour une raison qui n'appartient pas au contrat.
+        """
         results = await HybridSearch(db_url).search(
             query=LEXICAL_QUERY,
             query_vector=as_float_list(corpus["semantic_vector"]),
@@ -73,8 +80,17 @@ class TestFusion:
         )
         assert results
         for row in results:
-            assert set(row) == {"owner_id", "final_score"}
-            assert isinstance(row["final_score"], float)
+            assert set(row) == {
+                "owner_id",
+                "semantic_score",
+                "lexical_score",
+                "final_score",
+            }
+            assert 0.0 <= row["semantic_score"] <= 1.0
+            assert 0.0 <= row["lexical_score"] <= 1.0
+            assert row["final_score"] == pytest.approx(
+                0.6 * row["semantic_score"] + 0.4 * row["lexical_score"], abs=1e-6
+            )
             assert row["final_score"] >= 0.0
 
     async def test_results_are_ordered_by_final_score(
@@ -122,4 +138,36 @@ class TestDegradedMode:
             query="anything", query_vector=[0.0] * 4
         )
         assert results == []
+
+    async def test_an_unusable_driver_is_stated_not_hidden(self) -> None:
+        """§16.2/§0.2 — le mode réel est exposé, jamais présenté comme hybride."""
+        outcome = await HybridSearch("nosuchdriver://localhost/db").search_outcome(
+            query="anything", query_vector=[0.0] * 4
+        )
+
+        assert outcome.mode == "unavailable"
+        assert outcome.rows == ()
+        assert any("indisponible" in line for line in outcome.limitations)
+
+    async def test_without_a_query_vector_the_mode_is_lexical_only(
+        self, db_url: str, corpus: dict[str, str]
+    ) -> None:
+        """§17.1 — sans vecteur de requête, la recherche le dit au lieu de le taire."""
+        outcome = await HybridSearch(db_url).search_outcome(query=LEXICAL_QUERY, limit=10)
+
+        assert outcome.mode == "lexical_only"
+        assert any("lexicale seule" in line for line in outcome.limitations)
+        assert corpus["lexical_unit"] in outcome.ids()
+        assert all(row["semantic_score"] == 0.0 for row in outcome.rows)
+
+    @pytest.mark.parametrize(
+        ("semantic", "lexical"),
+        [(-0.1, 0.4), (0.6, -0.1), (0.0, 0.0)],
+    )
+    async def test_impossible_weights_are_refused(
+        self, semantic: float, lexical: float
+    ) -> None:
+        """Un poids négatif ou deux poids nuls ne peuvent rien classer : refus."""
+        with pytest.raises(ValueError):
+            HybridSearch("postgresql://test", semantic_weight=semantic, lexical_weight=lexical)
 

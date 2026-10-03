@@ -135,6 +135,63 @@ async def _counts(db_url: str, ids: dict[str, str]) -> dict[str, int]:
     }
 
 
+class TestMemoryReuseIsIdempotent:
+    """§17.1/§5.3 — une unité réutilisée depuis la mémoire n'est pas dupliquée.
+
+    Le run réutilise l'unité **avec son identifiant d'origine** : l'écriture
+    retombe donc sur ``ON CONFLICT (id) DO NOTHING``. C'est ce que ce test
+    vérifie, et il vérifie aussi que le contexte stocké dit que l'unité vient de
+    la mémoire — un enregistrement muet sur son origine ne serait pas exploitable
+    (§11, §20).
+    """
+
+    async def test_reusing_a_known_unit_keeps_a_single_row(self, db_url: str) -> None:
+        first = _payload(ULID.new("REQ_"))
+        await _persist(first)
+        unit_id = first["_ids"]["unit"]
+        source_id = first["_ids"]["source"]
+
+        # Second run : l'unité vient de la mémoire, avec son contexte de réusage.
+        second = _payload(ULID.new("REQ_"))
+        second["information_units"] = [
+            {
+                "information_id": unit_id,
+                "type": "text",
+                "content": {"text": "Paris is the capital of France."},
+                "source_id": source_id,
+                "data_stage": "derived",
+                "context": {"memory": {"reused": True, "mode": "hybrid"}},
+            }
+        ]
+        await _persist(second)
+
+        engine = create_engine(db_url)
+        try:
+            async with engine.connect() as connection:
+                rows = (
+                    (
+                        await connection.execute(
+                            text(
+                                "SELECT count(*) AS total, min(source_id) AS source_id, "
+                                "min(data_stage) AS data_stage "
+                                "FROM information_units WHERE id = :id"
+                            ),
+                            {"id": unit_id},
+                        )
+                    )
+                    .mappings()
+                    .all()
+                )
+        finally:
+            await engine.dispose()
+
+        assert rows[0]["total"] == 1, "la mémoire n'a pas créé un second enregistrement"
+        # C'est la première écriture qui fait foi : réutiliser une unité la
+        # référence, elle ne la réécrit pas sous un autre contexte (§5.3).
+        assert rows[0]["source_id"] == source_id
+        assert rows[0]["data_stage"] == "derived"
+
+
 class TestReplayIdempotence:
     """§5.3 — replaying a message converges to the same state."""
 

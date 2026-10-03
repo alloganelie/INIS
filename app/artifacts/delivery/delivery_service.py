@@ -37,6 +37,7 @@ from app.core.version import API_VERSION
 from app.domain.value_objects.request_constraints import DEFAULT_REQUIRED_OUTPUT
 from app.storage.object_storage.object_storage_factory import build_object_storage
 from app.storage.repositories.artifact_repository import ArtifactRepository
+from app.storage.repositories.artifact_version_repository import record_delivered_version
 from app.storage.repositories.information_unit_repository import get_database_engine
 
 __all__ = [
@@ -186,6 +187,112 @@ def _source_ids(information_units: Sequence[Mapping[str, Any]]) -> list[str]:
     )
 
 
+def _information_ids(information_units: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Return the ``INF_`` identifiers of the units the file was built from.
+
+    C'est le maillon « information » de la chaîne
+    ``source → transformation → information → artefact`` : les unités livrées
+    sont ce qui relie les sources aux octets.
+    """
+    return list(
+        dict.fromkeys(
+            str(unit.get("information_id"))
+            for unit in information_units
+            if str(unit.get("information_id") or "").startswith("INF_")
+        )
+    )
+
+
+def _direct_dataset_ids(information_units: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Return the ``DATA_`` identifiers the delivered units already name.
+
+    C'est la relation la plus directe : une unité qui dit de quel dataset elle
+    vient. Rien n'est fabriqué — une unité sans dataset n'en produit pas.
+    """
+    return list(
+        dict.fromkeys(
+            str(unit.get("dataset_id"))
+            for unit in information_units
+            if str(unit.get("dataset_id") or "").startswith("DATA_")
+        )
+    )
+
+
+async def _dataset_ids(
+    engine: Any,
+    request_id: str,
+    information_units: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    """Return the datasets **really** associated with the delivered units (§24.2).
+
+    Deux relations existantes, et seulement elles :
+
+    * ``information_units.dataset_id`` — l'unité nomme son dataset ;
+    * ``datasets.request_id`` **et** ``datasets.source_id ∈ sources des unités
+      livrées`` — un dataset créé pour cette requête, dont la source fait partie
+      de celles qui ont fourni les unités livrées, a contribué au fichier.
+
+    Aucun identifiant n'est inventé : une requête sans dataset, ou dont les
+    datasets ne partagent aucune source avec les unités livrées, obtient une
+    liste vide — et le comportement d'avant ce câblage est donc conservé.
+
+    Returns:
+        Les identifiants triés et dédoublonnés : un dataset cité par dix unités
+        n'apparaît qu'une fois.
+    """
+    direct = _direct_dataset_ids(information_units)
+    if engine is None:
+        return sorted(direct)
+
+    from app.storage.repositories.dataset_repository import DatasetRepository
+
+    sources = {
+        str(unit.get("source_id"))
+        for unit in information_units
+        if str(unit.get("source_id") or "").startswith("SRC_")
+    }
+    related = [
+        str(row["dataset_id"])
+        for row in await DatasetRepository.list_for_request(engine, request_id)
+        if row.get("dataset_id") and str(row.get("source_id")) in sources
+    ]
+    return sorted({*direct, *related})
+
+
+def _transformation_ids(
+    transformations: Sequence[Mapping[str, Any]],
+    information_units: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    """Return the ``TRF_`` ids of the transformations that produced the file.
+
+    La relation est réelle et vérifiable : une transformation n'est retenue que
+    si ses ``output_ids`` contiennent au moins une unité **livrée**. Le fichier est
+    construit à partir de ces unités ; nommer une transformation qui ne les a pas
+    produites serait une fiction (§0.2, §12.1), et l'absence de transformation
+    correspondante laisse la liste vide plutôt que de l'inventer.
+    """
+    delivered = {
+        str(unit.get("information_id"))
+        for unit in information_units
+        if str(unit.get("information_id") or "").startswith("INF_")
+    }
+    if not delivered:
+        return []
+    produced: list[str] = []
+    for transformation in transformations:
+        identifier = str(transformation.get("transformation_id") or "")
+        if not identifier.startswith("TRF_"):
+            continue
+        outputs = {
+            str(item)
+            for item in (transformation.get("output_ids") or [])
+            if str(item)
+        }
+        if outputs & delivered:
+            produced.append(identifier)
+    return list(dict.fromkeys(produced))
+
+
 def _confidence_score(delivery: Mapping[str, Any]) -> float | None:
     """Return the §15 overall confidence score of *delivery*, when it exists."""
     confidence = delivery.get("confidence")
@@ -305,6 +412,7 @@ async def deliver_artifacts(
     information_units: Sequence[Mapping[str, Any]] = (),
     evidence: Sequence[Mapping[str, Any]] = (),
     sources: Sequence[Mapping[str, Any]] = (),
+    transformations: Sequence[Mapping[str, Any]] = (),
     storage: Any | None = None,
     file_stem: str | None = None,
 ) -> DeliveryOutcome:
@@ -360,6 +468,19 @@ async def deliver_artifacts(
     units_rows = tabular_projection(information_units)
     packager = ArtifactPackager(storage if storage is not None else build_object_storage())
 
+    # §24.2 — les datasets qui ont réellement contribué au fichier, lus depuis les
+    # relations existantes (unité → dataset, dataset → source/requête). Une lecture
+    # impossible est signalée comme une limite, jamais remplacée par une invention.
+    try:
+        dataset_ids = await _dataset_ids(engine, request_id, information_units)
+    except Exception as exc:  # noqa: BLE001 - §25.2: the gap is reported
+        dataset_ids = _direct_dataset_ids(information_units)
+        outcome.add_limitation(
+            "Datasets du lignage non récupérés depuis la base "
+            f"({type(exc).__name__}: {exc}) : seuls ceux que les unités nomment "
+            "sont enregistrés."
+        )
+
     try:
         result = packager.package(
             artifact_id=artifact_id,
@@ -384,8 +505,8 @@ async def deliver_artifacts(
             if output_format in SPREADSHEET_FORMATS
             else None,
             source_ids=_source_ids(information_units),
-            dataset_ids=(),
-            transformation_ids=(),
+            dataset_ids=dataset_ids,
+            transformation_ids=_transformation_ids(transformations, information_units),
             quality_score=None,
             confidence_score=_confidence_score(delivery or {}),
         )
@@ -411,4 +532,19 @@ async def deliver_artifacts(
                 f"Artefact {artifact_id} non persisté ({type(exc).__name__}: {exc}) — il "
                 "reste publié dans la livraison mais n'est pas listable via /v1/artifacts."
             )
+        else:
+            # §18.1/§24.2 — la version livrée et son lignage sont écrits juste après
+            # l'artefact, depuis les mêmes entrées : les informations livrées
+            # complètent les sources et transformations que le §24.2 porte déjà.
+            try:
+                await record_delivered_version(
+                    engine,
+                    record,
+                    information_ids=_information_ids(information_units),
+                )
+            except Exception as exc:  # noqa: BLE001 - §25.2: report, never hide
+                outcome.add_limitation(
+                    f"Version/lignage de l'artefact {artifact_id} non enregistrés "
+                    f"({type(exc).__name__}: {exc}) — l'historique des versions est incomplet."
+                )
     return outcome

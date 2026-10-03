@@ -43,6 +43,9 @@ evidence_table = Table(
     Column("epistemic_status", String(32), nullable=True),
     Column("provenance", JSON_TYPE, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=True),
+    # Revision 0016 — §18.2: set when the record is soft-deleted; a read
+    # filters on ``deleted_at IS NULL`` (partial index of the same name).
+    Column("deleted_at", DateTime(timezone=True), nullable=True),
 )
 
 

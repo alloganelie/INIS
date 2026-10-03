@@ -217,3 +217,64 @@ export interface Artifact {
   url?: string;
   created_at?: string | null;
 }
+
+/**
+ * The lineage recorded for one artifact version (§24.2).
+ *
+ * The names are the canonical backend ones (`source_ids`, `dataset_ids`,
+ * `transformation_ids`) — the same convention as the rest of this barrel.
+ */
+export interface ArtifactLineage {
+  artifact_lineage_id: string;
+  artifact_id: string;
+  source_ids: string[];
+  dataset_ids: string[];
+  transformation_ids: string[];
+}
+
+/**
+ * One version of an artifact, plus the lineage of that version (§18.1).
+ *
+ * `metadata` is the per-version record the backend keeps: it carries the
+ * information units the file was built from and, for a version that replaced
+ * another one, the identifier of its predecessor (`supersedes`).
+ */
+export interface ArtifactVersion {
+  artifact_version_id: string;
+  artifact_id: string;
+  version: string;
+  metadata: {
+    information_ids?: string[];
+    transformation_ids?: string[];
+    sha256?: string;
+    storage_ref?: string;
+    supersedes?: string | null;
+    [key: string]: unknown;
+  };
+  created_at?: string | null;
+  lineage?: ArtifactLineage | null;
+}
+
+/** The version history of one artifact, with the version currently delivered. */
+export interface ArtifactVersionList {
+  artifact_id: string;
+  current_version?: string | null;
+  versions: ArtifactVersion[];
+}
+
+/** One delivery of an artifact's bytes (§24.3). */
+export interface ArtifactDeliveryEvent {
+  delivery_event_id: string;
+  artifact_id: string;
+  target: string;
+  status: string;
+  delivered_at?: string | null;
+  created_at?: string | null;
+}
+
+/** The whole chain of one artifact: per-version lineage and deliveries. */
+export interface ArtifactLineageView {
+  artifact_id: string;
+  versions: ArtifactVersion[];
+  delivery_events: ArtifactDeliveryEvent[];
+}

@@ -9,6 +9,7 @@ the V1 stack cannot produce is *refused* rather than faked (§4.1).
 from __future__ import annotations
 
 import io
+from pathlib import Path
 
 import pytest
 from lxml import etree
@@ -199,3 +200,34 @@ class TestDispatch:
 
         assert "/" not in generated.file_name
         assert generated.file_name.endswith(".csv")
+
+
+class TestNothingIsWrittenToDisk:
+    """§4 — the generators are pure: bytes in memory, nothing else.
+
+    The delivery path stores the bytes in S3 (§4.3); a generator that wrote a
+    temporary file would leave a copy of delivered content on the container's
+    filesystem, outside any retention rule. This is what the plan calls the
+    "no leak" property — proven here rather than assumed, by generating every
+    available format with the working directory pointed at an empty temporary
+    folder and checking that it is still empty afterwards.
+    """
+
+    @pytest.mark.parametrize("fmt", sorted(AVAILABLE_FORMATS))
+    def test_no_file_appears_in_the_working_directory(
+        self, fmt: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Generating every available format leaves the directory untouched."""
+        monkeypatch.chdir(tmp_path)
+
+        generated = generate_artifact(fmt, file_stem="REQ_LEAK", rows=ROWS)
+
+        assert generated.content, "un générateur rend des octets, jamais un chemin"
+        assert list(tmp_path.iterdir()) == []
+
+    def test_content_is_bytes_and_not_a_path(self) -> None:
+        """The public API returns the payload itself, not where it was written."""
+        generated = generate_artifact("json", file_stem="REQ_LEAK", payload={"a": 1})
+
+        assert isinstance(generated.content, bytes)
+        assert generated.file_name == "REQ_LEAK.json"

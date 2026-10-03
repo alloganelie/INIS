@@ -157,9 +157,29 @@ ACTIONS: dict[str, ActionSpec] = {
     "retrieve_context": ActionSpec(
         action="retrieve_context",
         tools=("retrieve_context", "hybrid_search", "vector_search", "locate_fragment"),
-        executable=False,
+        executable=True,
+        requires=(
+            "des unités §11 déjà stockées (la mémoire §17.1) et une base PostgreSQL "
+            "configurée : la recherche §16.2 lit ``information_units``"
+        ),
         reason=(
-            "aucun embedding n'est alimenté : la table embeddings est vide (§16, C12) — lot L4"
+            "aucune unité §11 n'est consultable : la mémoire §17.1 est vide ou sa base "
+            "n'est pas configurée, la reconstruction de contexte n'a donc rien à relire"
+        ),
+    ),
+    "memory_lookup": ActionSpec(
+        action="memory_lookup",
+        tools=("hybrid_search", "vector_search", "retrieve_context"),
+        executable=True,
+        requires=(
+            "une mémoire §17.1 alimentée : des unités §11 déjà stockées (elles viennent "
+            "des runs précédents) et, pour la moitié sémantique de §16.2, des embeddings "
+            "§16.1 — sinon la recherche est lexicale seule et le dit"
+        ),
+        reason=(
+            "la mémoire §17.1 n'est pas consultable : aucune base PostgreSQL n'est "
+            "configurée, la requête repart donc d'une acquisition complète plutôt que "
+            "de réutiliser des unités dont l'existence n'est pas prouvée"
         ),
     ),
     "persist_results": ActionSpec(

@@ -726,3 +726,45 @@
   color: #a5b4fc;
   overflow-x: auto;
 }
+
+/* §24.2 — section « Artefacts » : les fichiers livrés, leur version et les
+   refus explicites (§19.3). Rien n'y est caché : un échec s'affiche. */
+.artifacts-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.artifacts-panel h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.artifacts-panel .artifact-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.artifacts-panel .artifact-table th,
+.artifacts-panel .artifact-table td {
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border-color, #2a2f45);
+  text-align: left;
+}
+
+.artifacts-panel .artifact-error {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--radius-md);
+  border: 1px solid #b91c1c;
+  background-color: rgba(185, 28, 28, 0.12);
+  color: #fca5a5;
+}
+
+.artifacts-panel .artifact-notices {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: #fbbf24;
+  font-size: 0.82rem;
+}

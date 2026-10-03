@@ -15,12 +15,11 @@ required by §41.8.
 
 from __future__ import annotations
 
+import asyncio
 import time
-from collections.abc import Awaitable
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from app.domain.enums.circuit_breaker_state import CircuitBreakerState
 
@@ -187,6 +186,97 @@ class CircuitBreaker:
         }
 
 
+async def guard(
+    scope: str,
+    call: Callable[[], Awaitable[T]],
+    *,
+    breaker_registry: CircuitBreakerRegistry | None = None,
+    max_attempts: int = 1,
+    base_delay_seconds: float = 0.0,
+    sleep: Callable[[float], Awaitable[None]] | None = None,
+) -> T:
+    """Run *call* behind the §41.8 breaker of *scope*, retrying transient failures.
+
+    The two mechanisms answer two different questions and are therefore composed
+    here, in this order:
+
+    * **retry** — "this call failed, is another attempt likely to work?" Only a
+      call that can be repeated safely may be retried, which is why
+      ``max_attempts`` defaults to **1**: a caller that does not know its call is
+      repeatable gets one attempt, never a silent duplicate write.
+    * **circuit breaker** — "should this call be attempted at all?" When the
+      breaker is open the call is **refused without being made**
+      (:class:`CircuitOpenError`), so a dead dependency is not hammered.
+
+    Every failure that survives the retries reaches the breaker: an error is
+    therefore never turned into a false success, and when the retries are
+    exhausted the last error is raised as-is — the caller sees what really
+    happened, not a generic wrapper.
+
+    The breaker counts **logically failed calls**, not attempts. A retry that
+    succeeds is a healthy dependency; letting every attempt increment the
+    counter would open the circuit *on the very retry it was meant to survive*,
+    and a single flake would look like an outage. Only a call that failed every
+    attempt counts once as a failure, and a call that succeeded records one
+    success (which resets the consecutive counter).
+    """
+    breaker = (breaker_registry or registry).get(scope)
+    wait = sleep or asyncio.sleep
+    last_error: BaseException | None = None
+    for attempt in range(1, max(1, int(max_attempts)) + 1):
+        if not breaker.allow():
+            raise CircuitOpenError(scope)
+        try:
+            result = await call()
+        except Exception as error:  # noqa: BLE001 - the breaker must see every failure
+            last_error = error
+            if attempt >= max_attempts:
+                break
+            if base_delay_seconds:
+                await wait(base_delay_seconds * (2 ** (attempt - 1)))
+            continue
+        breaker.record_success()
+        return result
+    if last_error is not None:
+        breaker.record_failure()
+        raise last_error
+    raise CircuitOpenError(scope)
+
+
+def guard_sync(
+    scope: str,
+    call: Callable[[], T],
+    *,
+    breaker_registry: CircuitBreakerRegistry | None = None,
+    max_attempts: int = 1,
+) -> T:
+    """Synchronous twin of :func:`guard` for the blocking object-store client.
+
+    Same contract as :func:`guard`, including the counting rule: the breaker sees
+    one failure per **call** that failed every attempt, and one success per call
+    that succeeded. ``max_attempts`` defaults to 1 because an upload is a write:
+    the breaker protects it, the retry stays for the repeatable reads.
+    """
+    breaker = (breaker_registry or registry).get(scope)
+    last_error: BaseException | None = None
+    for attempt in range(1, max(1, int(max_attempts)) + 1):
+        if not breaker.allow():
+            raise CircuitOpenError(scope)
+        try:
+            result = call()
+        except Exception as error:  # noqa: BLE001 - the breaker must see every failure
+            last_error = error
+            if attempt >= max_attempts:
+                break
+            continue
+        breaker.record_success()
+        return result
+    if last_error is not None:
+        breaker.record_failure()
+        raise last_error
+    raise CircuitOpenError(scope)
+
+
 class CircuitBreakerRegistry:
     """Scope-keyed collection of breakers (§41.8: per connector, provider, agent).
 
@@ -254,11 +344,11 @@ class CircuitBreakerRegistry:
 registry = CircuitBreakerRegistry()
 
 __all__ = [
+    "DEFAULT_CIRCUIT_BREAKER_CONFIG",
     "CircuitBreaker",
     "CircuitBreakerConfig",
     "CircuitBreakerRegistry",
     "CircuitOpenError",
-    "DEFAULT_CIRCUIT_BREAKER_CONFIG",
     "registry",
 ]
 

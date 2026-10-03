@@ -192,3 +192,143 @@ async def test_hybrid_search_real(db_url, alembic_upgrade):
     )
     # Should return empty list if no data, or results if data exists
     assert isinstance(results, list)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# L6.1 — the repository must declare the migrated schema, not its own.
+#
+# ``sources`` drifted once: the persistence module typed its own
+# ``INSERT ... source_id`` while the table (revision 0002) is keyed on ``id``,
+# so every read raised ``UndefinedColumn`` on a migrated database while the
+# unit-level tests stayed green. These tests compare what the repositories
+# declare with what the migration actually created.
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Primary key each repository assumes, per migrated table.
+_PRIMARY_KEYS = {
+    "sources": "id",
+    "information_units": "id",
+    "evidence": "evidence_id",
+    "transformations": "transformation_id",
+    "requests": "request_id",
+    "plans": "plan_id",
+    "plan_steps": "step_id",
+    "information_versions": "information_version_id",
+    "documents": "id",
+    "datasets": "dataset_id",
+    "artifacts": "artifact_id",
+    "conflicts": "conflict_id",
+}
+
+
+async def _live_columns(conn, table_name: str) -> set[str]:
+    """Return the columns a migrated table really has."""
+    from sqlalchemy import text
+
+    rows = (
+        await conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = :name"
+            ),
+            {"name": table_name},
+        )
+    ).scalars().all()
+    return set(rows)
+
+
+async def _live_primary_key(conn, table_name: str) -> list[str]:
+    """Return the primary key columns a migrated table really has."""
+    from sqlalchemy import text
+
+    return list(
+        (
+            await conn.execute(
+                text(
+                    "SELECT kcu.column_name FROM information_schema.table_constraints tc "
+                    "JOIN information_schema.key_column_usage kcu "
+                    "  ON kcu.constraint_name = tc.constraint_name "
+                    "WHERE tc.table_schema = 'public' AND tc.table_name = :name "
+                    "  AND tc.constraint_type = 'PRIMARY KEY'"
+                ),
+                {"name": table_name},
+            )
+        ).scalars().all()
+    )
+
+
+@pytest.mark.asyncio
+async def test_source_repository_matches_migration(db_url, alembic_upgrade):
+    """``SourceRepository`` declares exactly the migrated ``sources`` columns.
+
+    The plan's proof for dette n°3: no column is invented, none is missing, and
+    the primary key is the one the migration created.
+    """
+    from app.storage.database.engine import create_engine
+    from app.storage.repositories.source_repository import sources_table
+
+    engine = create_engine(db_url)
+    try:
+        async with engine.connect() as conn:
+            live = await _live_columns(conn, "sources")
+            key = await _live_primary_key(conn, "sources")
+    finally:
+        await engine.dispose()
+
+    declared = set(sources_table.columns.keys())
+    assert live - declared == set(), f"colonnes migrées sans repository : {sorted(live - declared)}"
+    assert declared - live == set(), f"colonnes déclarées sans migration : {sorted(declared - live)}"
+    assert key == ["id"]
+
+
+@pytest.mark.asyncio
+async def test_every_repository_table_is_keyed_as_declared(db_url, alembic_upgrade):
+    """Every repository table exists and its primary key is the declared one."""
+    from app.storage.database.engine import create_engine
+    from app.storage.repositories.artifact_repository import artifacts_table
+    from app.storage.repositories.conflict_repository import conflicts_table
+    from app.storage.repositories.dataset_repository import datasets_table
+    from app.storage.repositories.document_repository import documents_table
+    from app.storage.repositories.evidence_repository import evidence_table
+    from app.storage.repositories.information_unit_repository import (
+        information_units_table,
+    )
+    from app.storage.repositories.plan_repository import plan_steps_table, plans_table
+    from app.storage.repositories.request_repository import requests_table
+    from app.storage.repositories.source_repository import sources_table
+    from app.storage.repositories.transformation_repository import transformations_table
+    from app.storage.repositories.version_repository import information_versions_table
+
+    tables = (
+        sources_table,
+        information_units_table,
+        evidence_table,
+        transformations_table,
+        requests_table,
+        plans_table,
+        plan_steps_table,
+        information_versions_table,
+        documents_table,
+        datasets_table,
+        artifacts_table,
+        conflicts_table,
+    )
+    engine = create_engine(db_url)
+    problems: dict[str, dict[str, list[str]]] = {}
+    try:
+        async with engine.connect() as conn:
+            for table in tables:
+                live = await _live_columns(conn, table.name)
+                if not live:
+                    problems[table.name] = {"table": ["absente du schéma migré"]}
+                    continue
+                absent = sorted(set(table.columns.keys()) - live)
+                if absent:
+                    problems[table.name] = {"colonnes absentes": absent}
+                key = await _live_primary_key(conn, table.name)
+                if key != [_PRIMARY_KEYS[table.name]]:
+                    problems.setdefault(table.name, {})["clé"] = key
+    finally:
+        await engine.dispose()
+
+    assert problems == {}, f"divergence repository/migration : {problems}"

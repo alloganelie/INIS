@@ -472,9 +472,11 @@ class TestBothOwnedSourcesCoexist:
         await _run("data", {"source_preferences": [PREFERENCE]})
 
         actions = [step["action"] for step in captured_steps]
+        # §17.1 — la mémoire ouvre le plan (lot L4) ; les deux matières possédées
+        # (fichier et base) restent présentes, quel que soit leur ordre interne.
+        assert actions[0] == "memory_lookup"
         assert "file_ingest" in actions
-        assert actions[0] == "query_database"
-        assert actions[1] == "file_ingest"
+        assert "query_database" in actions
 
     async def test_both_datasets_are_delivered(
         self,
@@ -578,7 +580,10 @@ class TestTheOtherRequestTypesKeepTheirPlan:
 
         await _run("research", {"source_preferences": [PREFERENCE]})
 
-        assert captured_steps[0]["action"] == "query_database"
+        # §17.1 — la lecture de la base reste le premier pas **d'acquisition** :
+        # seule l'étape de mémoire la précède désormais (lot L4).
+        assert captured_steps[0]["action"] == "memory_lookup"
+        assert captured_steps[1]["action"] == "query_database"
 
     async def test_a_request_without_preference_is_not_touched(
         self,

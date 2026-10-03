@@ -204,6 +204,18 @@ async def validate_schema(dataset: DatasetLike, schema: Schema) -> ValidationRes
     Returns:
         The validation result. A missing column and a wrong type are both
         reported; nothing is coerced to make the dataset pass.
+
+    §13.2 — une colonne **mixte** est le cas qui manquait. L'inférence écrit
+    ``"integer|string"`` quand une cellule ne tient pas dans le type des autres ;
+    faute de prédicat pour une union, le contrôle était alors **sauté** et la
+    cellule aberrante n'était jamais nommée (le colis disait « mixte » sans dire
+    où). Pour une union, la **majorité** des valeurs non nulles fait donc office
+    de type attendu, et chaque valeur qui n'y appartient pas est une violation
+    nommée (``row_index``, ``field``, ``expected``, ``observed``) — ce qui permet
+    de retrouver la cellule source sans jamais la modifier ni la supprimer.
+    Une colonne sans majorité stricte (autant d'un type que de l'autre) n'est pas
+    arbitrée : elle ne produit aucune violation, et c'est dit ici plutôt
+    qu'inventé.
     """
     if isinstance(dataset, Dataset):
         observed = {str(name): str(kind) for name, kind in dataset.dataset_schema.items()}
@@ -225,6 +237,7 @@ async def validate_schema(dataset: DatasetLike, schema: Schema) -> ValidationRes
         )
 
     rows = dataset_rows(dataset)
+    majorities = _column_majorities(rows, schema.fields)
     violations: list[SchemaViolation] = []
     for index, row in enumerate(rows):
         for field, expected in schema.fields.items():
@@ -250,6 +263,23 @@ async def validate_schema(dataset: DatasetLike, schema: Schema) -> ValidationRes
                         )
                     )
                 continue
+            effective = majorities.get(field)
+            if effective is not None:
+                # La colonne a une nature majoritaire : la cellule qui n'en fait
+                # pas partie est l'anomalie, et elle est nommée (ligne, colonne,
+                # attendu, observé) sans que sa valeur soit touchée.
+                accepted = _KIND_PREDICATES.get(effective, frozenset({effective}))
+                kind = _value_kind(value)
+                if kind not in accepted:
+                    violations.append(
+                        SchemaViolation(
+                            row_index=index,
+                            field=field,
+                            expected=effective,
+                            observed=kind,
+                        )
+                    )
+                continue
             predicates = _TYPE_PREDICATES.get(expected)
             if predicates is not None and not isinstance(value, predicates):
                 violations.append(
@@ -267,6 +297,78 @@ async def validate_schema(dataset: DatasetLike, schema: Schema) -> ValidationRes
         checked_rows=len(rows),
         violations=violations,
     )
+
+
+def _column_majorities(
+    rows: Sequence[Mapping[str, Any]], fields: Mapping[str, str]
+) -> dict[str, str]:
+    """Return the majority **kind** of each column that has a strict one.
+
+    Pourquoi une « nature » et pas seulement un type Python : un lecteur de CSV
+    stocke ses cellules en **texte** (c'est ce que le fichier contient), donc
+    ``infer_schema`` voit une colonne homogène ``string`` même quand une valeur
+    n'est pas un nombre. Pour que §13.2 (« conformité aux types », « anomalies »)
+    nomme la cellule, le contrôle regarde donc la nature **observée** de chaque
+    cellule : un texte qui se lit comme un nombre compte comme ``number``. Aucune
+    valeur n'est modifiée pour autant — la cellule garde son texte d'origine.
+
+    Une colonne sans majorité stricte (égalité entre deux natures, ou une seule
+    valeur) n'entre pas dans le résultat : elle ne produira aucune violation
+    arbitraire, ce qui vaut mieux qu'un arbitrage inventé.
+    """
+    majorities: dict[str, str] = {}
+    for field in fields:
+        counts: dict[str, int] = {}
+        for row in rows:
+            if field not in row:
+                continue
+            kind = _value_kind(row[field])
+            if kind == NULL_TYPE:
+                continue
+            counts[kind] = counts.get(kind, 0) + 1
+        if not counts:
+            continue
+        ranked = sorted(counts.items(), key=lambda item: item[1], reverse=True)
+        if len(ranked) == 1 or ranked[0][1] > ranked[1][1]:
+            majorities[field] = ranked[0][0]
+    return majorities
+
+
+#: §13.2 — what a cell may be when its column has the given majority nature.
+#: ``number`` accueille ``integer`` (un entier est un nombre) ; ``integer`` ne
+#: l'inverse pas, sinon ``1.5`` passerait pour un entier.
+_KIND_PREDICATES: dict[str, frozenset[str]] = {
+    "number": frozenset({"number", "integer"}),
+    "integer": frozenset({"integer"}),
+    "string": frozenset({"string"}),
+    "boolean": frozenset({"boolean"}),
+    "json": frozenset({"json"}),
+}
+
+
+def _value_kind(value: Any) -> str:
+    """Return the observed nature of *value* (§13.2), text included.
+
+    Un texte qui se lit entièrement comme un nombre a la nature ``number`` :
+    c'est ce qui rend visible une cellule qui ne tient pas dans sa colonne, sans
+    toucher à la valeur elle-même. Tout le reste garde la nature de son type.
+    """
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return NULL_TYPE
+        try:
+            int(text)
+        except ValueError:
+            try:
+                float(text)
+            except ValueError:
+                return "string"
+            return "number"
+        return "integer"
+    return value_type(value)
 
 
 async def check_missing_values(dataset: DatasetLike) -> QualityResult:

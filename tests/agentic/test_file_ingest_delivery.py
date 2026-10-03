@@ -281,7 +281,8 @@ class TestTheOtherRequestTypesKeepTheirPlan:
         await _run("research")
 
         actions = [step["action"] for step in captured_steps]
-        assert actions[0] == "file_ingest"
+        # §17.1 — la mémoire ouvre le plan (lot L4) ; le pas de fichier suit.
+        assert actions[:2] == ["memory_lookup", "file_ingest"]
         assert "collect_information" in actions
 
 

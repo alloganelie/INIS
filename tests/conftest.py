@@ -40,6 +40,15 @@ from tests.containers import (  # noqa: F401 - fixtures re-exported for the suit
 )
 from tests.containers import redis_url as _redis_url_from_container
 
+# Applied at import time: pytest imports this file before collecting any test
+# module, so a module-level ``os.environ`` read in a test can no longer see the
+# developer's ``.env`` by accident. ``.env`` itself was already loaded by
+# ``app/__init__.py``; this only enforces hermetic-by-default (§33.3).
+from tests.env_policy import load_environment
+
+load_environment()
+
+
 
 @pytest.fixture(autouse=True)
 def _reset_circuit_breakers():
