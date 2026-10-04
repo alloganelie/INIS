@@ -14,7 +14,18 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table, Text, insert, select
+from sqlalchemy import (
+    Column,
+    DateTime,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    insert,
+    select,
+    update,
+)
 
 from app.storage.repositories.table_repository import (
     JSON_TYPE,
@@ -58,6 +69,11 @@ def to_dataset_response(row: Mapping[str, Any]) -> dict[str, Any]:
         "dataset_schema": as_dict(data.get("schema")),
         "storage_ref": data.get("storage_ref"),
         "created_at": as_iso(data.get("created_at")),
+        # Décision ``0016`` (§18.2) : la date de retrait fait partie de ce qu'une
+        # lecture doit dire — sans elle, un lecteur ne peut pas distinguer
+        # « retiré » de « jamais présent », et une requête §18.2 n'a rien à
+        # filtrer. Même projection que l'artefact.
+        "deleted_at": as_iso(data.get("deleted_at")),
     }
 
 
@@ -127,3 +143,32 @@ class DatasetRepository(TableRepository):
         async with engine.begin() as conn:
             await conn.execute(insert(datasets_table).values(**row))
         return to_dataset_response(row)
+
+    @classmethod
+    async def soft_delete(cls, engine: Any, dataset_id: str) -> dict[str, Any] | None:
+        """Remove one dataset from the active set (§18.2, décision ``0016``).
+
+        Aucune suppression physique : seul ``deleted_at`` est renseigné (la table
+        n'a pas de colonne de statut), et la ligne reste lisible pour expliquer
+        ce qui a été livré et pourquoi il ne l'est plus.
+
+        Args:
+            engine: moteur de base de données.
+            dataset_id: le jeu de données à retirer de l'ensemble actif.
+
+        Returns:
+            Le dataset relu (marqué), ou ``None`` s'il n'existe pas.
+        """
+        await cls.ensure_table(engine)
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                update(datasets_table)
+                .where(
+                    datasets_table.c.dataset_id == dataset_id,
+                    datasets_table.c.deleted_at.is_(None),
+                )
+                .values(deleted_at=datetime.now(UTC))
+            )
+            if not result.rowcount:
+                return None
+        return await cls.get(engine, dataset_id)

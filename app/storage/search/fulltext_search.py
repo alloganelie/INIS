@@ -51,6 +51,7 @@ class FullTextSearch:
                 "SELECT id AS owner_id, ts_rank(search_vector, plainto_tsquery(:query)) AS score "
                 "FROM information_units "
                 "WHERE search_vector @@ plainto_tsquery(:query) "
+                "AND deleted_at IS NULL "
                 "ORDER BY score DESC "
                 "LIMIT :limit"
                 ),

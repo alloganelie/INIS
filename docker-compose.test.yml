@@ -2,7 +2,7 @@
 #
 #   docker compose -f docker-compose.test.yml up -d
 #   export INIS_DATABASE_URL=postgresql+asyncpg://inis:inis_test_password@localhost:55432/inis_test
-#   export REDIS_URL=redis://localhost:56379/0
+#   export REDIS_URL=redis://localhost:56379/0   # le serveur est Valkey (dette n°1)
 #   python -m alembic upgrade head && python -m pytest -q
 #
 # La suite privilégie `testcontainers` (tests/containers.py) : ce fichier sert
@@ -31,13 +31,13 @@ services:
       timeout: 3s
       retries: 20
 
-  redis:
-    image: redis:7-alpine
-    container_name: inis-test-redis
+  valkey:
+    image: valkey/valkey:8-alpine
+    container_name: inis-test-valkey
     ports:
       - "56379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 3s
       timeout: 3s
       retries: 20

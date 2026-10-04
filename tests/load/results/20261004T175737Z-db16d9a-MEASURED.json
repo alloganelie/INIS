@@ -1,0 +1,164 @@
+{
+  "checks": [
+    {
+      "name": "throughput_requests_per_second",
+      "observed": 0.18703605939250906,
+      "reason": "campagne locale : le seuil exposé est une cible de staging (§41.13), comparée uniquement en portée « staging »",
+      "status": "not_measured",
+      "threshold": 50.0,
+      "threshold_key": "target_requests_per_second",
+      "unit": "req/s"
+    },
+    {
+      "name": "vector_search_latency",
+      "observed": null,
+      "reason": "aucun échantillon mesuré par le système",
+      "status": "not_measured",
+      "threshold": 15.0,
+      "threshold_key": "vector_search_latency_p99_ms",
+      "unit": "ms"
+    },
+    {
+      "name": "postgres_latency",
+      "observed": 708.9870550038177,
+      "reason": "campagne locale : le seuil exposé est une cible de staging (§41.13), comparée uniquement en portée « staging »",
+      "status": "not_measured",
+      "threshold": 5.0,
+      "threshold_key": "postgres_query_latency_p99_ms",
+      "unit": "ms"
+    },
+    {
+      "name": "broker_latency",
+      "observed": null,
+      "reason": "aucun échantillon mesuré par le système",
+      "status": "not_measured",
+      "threshold": 2.0,
+      "threshold_key": "amqp_message_latency_p99_ms",
+      "unit": "ms"
+    },
+    {
+      "name": "llm_latency",
+      "observed": 0.0,
+      "reason": "campagne locale : le seuil exposé est une cible de staging (§41.13), comparée uniquement en portée « staging »",
+      "status": "not_measured",
+      "threshold": 500.0,
+      "threshold_key": "llm_call_latency_p99_ms",
+      "unit": "ms"
+    }
+  ],
+  "config": {
+    "base_url": "http://127.0.0.1:52623",
+    "concurrency": 2,
+    "dataset_name": "benchmark_dataset.csv",
+    "dataset_rows": 5,
+    "in_process": false,
+    "measurement_scope": "local",
+    "requests": 2,
+    "required_format": "csv",
+    "timeout_s": 180.0
+  },
+  "environment": {
+    "cpu_count": 8,
+    "platform": "Windows-10-10.0.26200-SP0",
+    "python": "3.11.9"
+  },
+  "generated_at": "2026-10-04T17:57:37.677774+00:00",
+  "git": {
+    "branch": "feat/conformance-v1",
+    "commit": "db16d9a",
+    "dirty": true
+  },
+  "harness": "tests/load/harness.py",
+  "harness_version": 1,
+  "limitations": [
+    "LLM simulé par la suite (`mock_llm`) : le chemin HTTP, la base et le stockage objet sont réels",
+    "portée « local » : les seuils exposés sont publiés à côté des mesures mais ne sont pas appliqués (§41.13 situe la mesure en staging) ; seul un parcours cassé fait échouer la campagne",
+    "seuils sans échantillon pendant cette charge (jamais comptés PASS) : broker_latency, llm_latency, postgres_latency, throughput_requests_per_second, vector_search_latency",
+    "mesure locale : une campagne sur ce poste ne vaut pas une mesure de staging (§41.13 exige une mesure en environnement de staging)"
+  ],
+  "metrics": {
+    "concurrency": 2,
+    "duration_s": 10.693125200006762,
+    "error_rate": 0.0,
+    "errors": 0,
+    "failures": [],
+    "ok": 2,
+    "requests": 2,
+    "steps": {
+      "await_delivery": {
+        "failed": 0,
+        "max_ms": 4111.78980000841,
+        "measured": 2,
+        "p50_ms": 3617.539899991243,
+        "p95_ms": 4111.78980000841,
+        "p99_ms": 4111.78980000841
+      },
+      "download_artifact": {
+        "failed": 0,
+        "max_ms": 266.22930000303313,
+        "measured": 2,
+        "p50_ms": 262.26269999460783,
+        "p95_ms": 266.22930000303313,
+        "p99_ms": 266.22930000303313
+      },
+      "ingest_and_run": {
+        "failed": 0,
+        "max_ms": 2847.584500006633,
+        "measured": 2,
+        "p50_ms": 2832.0601000013994,
+        "p95_ms": 2847.584500006633,
+        "p99_ms": 2847.584500006633
+      },
+      "list_artifacts": {
+        "failed": 0,
+        "max_ms": 153.05480000097305,
+        "measured": 2,
+        "p50_ms": 112.30819999764208,
+        "p95_ms": 153.05480000097305,
+        "p99_ms": 153.05480000097305
+      },
+      "submit_request": {
+        "failed": 0,
+        "max_ms": 277.8303999948548,
+        "measured": 2,
+        "p50_ms": 276.11290001368616,
+        "p95_ms": 277.8303999948548,
+        "p99_ms": 277.8303999948548
+      },
+      "upload_dataset": {
+        "failed": 0,
+        "max_ms": 3084.0651000034995,
+        "measured": 2,
+        "p50_ms": 3082.1945000061532,
+        "p95_ms": 3084.0651000034995,
+        "p99_ms": 3084.0651000034995
+      }
+    },
+    "throughput_rps": 0.18703605939250906
+  },
+  "scenario": [
+    "submit_request",
+    "upload_dataset",
+    "ingest_and_run",
+    "await_delivery",
+    "list_artifacts",
+    "download_artifact"
+  ],
+  "status": "MEASURED",
+  "thresholds": {
+    "guards": {
+      "max_parallel_tool_calls": 10,
+      "max_plan_steps": 50
+    },
+    "source": "GET /v1/metrics → benchmarks (§41.13)",
+    "values": {
+      "amqp_message_latency_p99_ms": 2.0,
+      "llm_call_latency_p99_ms": 500.0,
+      "max_parallel_tool_calls": 10,
+      "max_plan_steps": 50,
+      "postgres_query_latency_p99_ms": 5.0,
+      "target_requests_per_second": 50.0,
+      "vector_search_latency_p99_ms": 15.0
+    }
+  }
+}

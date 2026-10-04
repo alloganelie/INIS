@@ -1282,25 +1282,181 @@ incohérence produit un colis où ces trois défauts sont **explicitement listé
 
 ### L8 — Sécurité, gouvernance, i18n, charge (§19, §41.3, §41.9, §41.13) (4–5 j) · Devin + OpenCode + Cursor
 
-- [ ] **Dette n°2 — validateur mTLS** : implémenter `app/security/certificates/` (chaîne X.509,
-  expiration, révocation) et l'exposer comme dépendance d'authn service-à-service (§19.2).
-  *preuve : `tests/security/test_mtls_validator.py`* (`scripts/generate_certs.sh` fournit les matériaux)
-- [ ] Rate limiting persistant (aujourd'hui in-memory) : s'appuyer sur Redis/Valkey.
-  *preuve : `tests/security/test_rate_limit_persistent.py`*
-- [ ] §41.4 : authentification des sources (credential vault) branchée sur `RESTConnector`/
+- [x] **Dette n°2 — validateur mTLS** : `app/security/certificates/` remplace le stub qui ne
+  lisait que le `CN`. `validator.py` vérifie **réellement** un certificat X.509 : signature
+  remontée jusqu'à une ancre de confiance configurée, fenêtre de validité (feuillet **et**
+  chaîne), révocation (liste explicite ou CRL fournie — aucune distribution inventée, la spec
+  n'en définit aucune), qualité de CA de chaque émetteur, usage client si le certificat en
+  déclare un, identité `CN` unique dans l'espace `AGENT_`. `dependency.py` l'expose comme
+  dépendance d'authn service-à-service via l'extension **ASGI standard**
+  `extensions.tls.client_cert_chain` ; échec fermé (503 si non configuré, 401 si absent ou
+  refusé). `app/security/authn/mtls_validator.py` ne fait plus que ré-exporter : une seule
+  architecture d'authentification.
+  *preuves : `tests/security/test_mtls_validator.py`* (29 cas sur de **vrais** certificats
+  signés : signature forgée avec le bon nom d'émetteur, CA inconnue, émetteur `CA:false`,
+  expiré, pas encore valide, révoqué par liste **et** par CRL, malformé, `CN` hors espace,
+  deux `CN`, EKU serveur, chaîne incomplète, chaîne à deux niveaux, échec fermé, aucun
+  matériau de certificat dans le message de refus, et les matériaux produits par
+  `scripts/generate_certs.sh` acceptés) ; `tests/security/test_mtls_service_to_service.py`
+  (handshake TLS **réel** : le serveur relit le certificat présenté et n'accepte rien sans
+  certificat, puis chaîne du handshake → dépendance → 200/401/503) ;
+  `tests/security/test_auth_bypass.py::TestCertificateValidation` (un certificat auto-signé
+  portant le bon `CN` est refusé).
+  ⚠️ **Reste ouvert** : aucune route d'`app/api/` n'utilise la dépendance, parce que
+  **uvicorn 0.27.0 n'expose pas** l'extension ASGI TLS (mesuré : `client_cert` est absent de
+  tout le paquet installé). La brancher exige soit un serveur conforme ASGI, soit un en-tête
+  de proxy signé : c'est une décision de déploiement, pas une invention à faire dans ce lot.
+  ⚠️ Défaut trouvé en écrivant la preuve : `verify_directly_issued_by` vérifie la signature
+  mais **pas** la qualité de CA de l'émetteur — un certificat `CA:false` pouvait signer un
+  feuillet accepté. La contrainte est désormais imposée explicitement
+  (`certificate_issuer_not_a_ca`) et gardée par un test.
+- [x] Rate limiting persistant : le store partagé **existait déjà** (`RedisRateLimitStore`,
+  script Lua atomique — refill et dépense en une seule opération, donc la limite tient entre
+  réplicas) et le middleware est monté (`app/main.py`, ajouté **avant** l'auth pour lire
+  `request.state.actor_id`). Ce qui manquait était la **preuve**.
+  `tests/security/test_rate_limit_persistent.py` démontre, contre un **vrai Valkey** : un
+  budget dépensé par une instance est vu par une **autre** (au niveau du store **et** sur le
+  chemin HTTP réel — `429` + `Retry-After` + `X-RateLimit-*`), le backend est bien persistant
+  (clé écrite dans le serveur, avec TTL), le budget suit `RATE_LIMIT_RPM`, les scopes sont
+  isolés (un acteur épuisé ne consomme pas le budget d'un autre), les sondes restent
+  disponibles budget épuisé, et — **contre-épreuve** — avec des stores en mémoire le même
+  scénario **ne partage rien** : si ce test échouait, les preuves de partage ne
+  démontreraient rien. Backend **indisponible** : mesuré, l'erreur est **bruyante**
+  (`InfrastructureError`, aucun laisser-passer silencieux) ; configuration invalide **au
+  démarrage** : repli sur des buckets process-local, l'API reste debout **et mesurée**.
+  ⚠️ **Défaut trouvé en écrivant la preuve** : la clé de bucket du repli `X-API-Key`
+  contenait les **32 premiers caractères de la clé d'API**, écrits dans un store partagé ;
+  remplacée par un condensé SHA-256 tronqué (`apikey:<16 hex>`), gardé par un test (§14).
+  ⚠️ **Reste ouvert** : aucune limite par endpoint (le plan n'en demande pas) — la
+  configuration prouvée est `RATE_LIMIT_RPM` + `INIS_RATE_LIMIT_ENABLED`.
+- [x] §41.4 : authentification des sources (credential vault) branchée sur `RESTConnector`/
   `PostgresConnector` (le vault existe, l'usage réel est à câbler).
-  *preuve : `tests/integration/test_authenticated_source_e2e.py`*
-- [ ] §41.3 : politique de langue effective sur les sorties (`language_policy` déjà appelée par le
+  `app/connectors/api/auth/vault_auth_handler.py` est le maillon manquant : `VaultAuthHandler`
+  adapte `SourceCredential` (bloc §41.4 `[CONFIG]`) + `CredentialResolver` au protocole que
+  `RESTConnector` accepte **déjà** (`apply(headers, params)`) — ni le connecteur ni le vault ne sont
+  modifiés, aucun coffre ni format nouveau n'est introduit. Le secret est lu **au moment de
+  l'appel** (une rotation est prise en compte sans reconstruire le connecteur), jamais en
+  configuration, et `rest_connector_for_source()` refuse par son nom une `credential_ref` qui
+  porterait un DSN. PostgreSQL était **déjà** câblé (`dsn_from_vault` : la requête nomme
+  `postgres:<credential_ref>[#table]`), mais un **défaut réel** y a été trouvé en écrivant la
+  preuve : `PostgresConnector.discover()` recopiait le DSN — mot de passe compris — dans
+  `SourceCandidate.location`, qui est une *sortie* (§11 provenance → livraison). `masked_location()`
+  masque désormais le mot de passe (`hide_password=True`) ; `retrieve()` n'utilisait pas ce champ.
+  *preuves : `tests/integration/test_authenticated_source_e2e.py`* (17 cas sur un **vrai serveur
+  HTTP local qui exige le secret** et deux **vrais** backends de vault — `EnvVault` et `FileVault`
+  chiffré : en-tête construit depuis le vault, clé réellement envoyée (le serveur refuse en 401
+  sans elle), rotation prise en compte, **contre-épreuve** — sans l'en-tête du vault les 4 cas
+  « le secret vient du vault » échouent ; entrée absente (aucune requête émise) / entrée non-JSON /
+  coffre corrompu / référence portant un DSN ; secret absent des logs (`caplog` DEBUG), des erreurs
+  (401) et du `repr` ; PostgreSQL : DSN du vault → `SELECT 1`, mot de passe refusé absent de
+  l'erreur, `location` masquée) + `tests/unit/security/test_credential_vault.py` (30,
+  `CredentialResolver` réutilisé tel quel).
+  ⚠️ **Reste ouvert** : un coffre *externe* (HashiCorp Vault, AWS Secrets Manager) — le contrat
+  §41.4 exige « un vault externe » et INIS l'implémente derrière le protocole `CredentialVault` par
+  `EnvVault`/`FileVault` ; brancher un client HashiCorp réel est une décision de déploiement, pas un
+  câblage de connecteur.
+- [x] §41.3 : politique de langue effective sur les sorties (`language_policy` déjà appelée par le
   runner) : langue des unités tracée, pas de mélange silencieux.
-  *preuve : `tests/unit/knowledge/test_language_policy_applied.py`*
-- [ ] §41.9 : vérifier `right to forget`/portabilité/rectification sur les **nouvelles**
+  Le bloc §41.3 (« Chaque InformationUnit DOIT porter » `source_language`,
+  `normalized_language`, `translation_applied`, `translation_model`,
+  `translation_transformation_id`) était construit **avec deux silences** :
+  une langue **inconnue** était déclarée `en` (`str(unit.get("language") or "en")`),
+  et une politique invalide faisait disparaître le bloc sans un mot
+  (`except Exception: return block`). La langue effective est celle que le dépôt
+  **observe** — déclarée par la source ou établie par
+  `app.knowledge.enrichment.detect_language` (dont le contrat est de répondre
+  `None` plutôt que de deviner) — et `language_block()` la représente telle
+  quelle : sans langue établie, `source_language`/`normalized_language` restent
+  **`None`** (`InformationUnit` accepte `None`) au lieu d'une étiquette inventée.
+  Le bloc est attaché à l'unité **et** déposé dans son `context` : c'est ce champ
+  qui est persisté (§27), donc la langue effective survit au redémarrage et reste
+  lisible sans colonne nouvelle. Enfin, ce qui n'a pas pu être fait est **dit** :
+  `describe_observed_languages()` produit la phrase publiée dans les
+  `limitations` — langues observées quand il y en a plusieurs, unités restées
+  sans langue, langues que la politique refuse, et **traduction exigée par la
+  politique mais non appliquée** (INIS n'a pas de traducteur ; §37
+  « signaler > inventer »).
+  ⚠️ **Reste ouvert** : la spec ne définit **aucun** code « mixed » — la
+  représentation d'une langue non établie reste l'absence (`None`), et aucune
+  règle de rejet n'a été inventée ; il n'y a toujours **aucune traduction**
+  réelle (le bloc l'affirme : `translation_applied=false`) ni UI multilingue.
+  *preuves : `tests/unit/knowledge/test_language_policy_applied.py`* (13 cas : les
+  deux règles pures — bloc connu, absence, étiquette malformée, politique
+  inutilisable, phrase de mélange/refus/traduction manquante — puis
+  l'**intégration réelle** : un run alimenté par des sources `fr`, `de` et **sans
+  langue** livre des unités qui portent chacune leur bloc (`{fr, de, None}`,
+  jamais `en`), la livraison **dit** le mélange, et les lignes **persistées** en
+  PostgreSQL portent le bloc dans `context ->> 'language'` ; **contre-épreuve** :
+  bloc non attaché ⇒ les deux preuves centrales échouent).
+- [x] §41.9 : vérifier `right to forget`/portabilité/rectification sur les **nouvelles**
   données (datasets, artefacts, embeddings) — un artefact RGPD-supprimé ne doit plus être
-  téléchargeable. *preuve : `tests/security/test_gdpr_new_data_types.py`*
-- [ ] §41.13 : harnais de charge (k6 ou locust, à trancher) sur le chemin complet
-  `upload → ingestion → livraison → download`, avec seuils chiffrés dans `docs/performance_tuning.md`.
-  *preuve : `tests/load/` exécuté en CI manuelle + résultats archivés*
-- [ ] **Dettes d'exploitation** : Redis → Valkey, runtime Python 3.12, `gitleaks`
-  (`AGENT_STATUS.md` dettes n°1/7/8). *preuve : `python -m pytest -q` + CI verte*
+  téléchargeable.
+  `app/governance/retention/actor_rights.py` est le maillon manquant : `GDPRHandler`,
+  `Pseudonymizer` et `RetentionEnforcer` **n'étaient appelés nulle part** dans `app/`, et
+  aucune ligne de contenu ne recevait jamais `deleted_at` (le schéma de 0016 le prévoyait,
+  seul `AccountRepository` l'écrivait). Le service lit les lignes de l'acteur par les
+  **relations réelles du modèle** (`requests.requester.id` → `request_id` →
+  `documents`/`datasets`/`artifacts` → `information_units.document_id`/`dataset_id` →
+  `embeddings.owner_id`), confie chaque **décision** au `GDPRHandler` et écrit le résultat par
+  les repositories : pseudonymisation des `audit_events` et des métadonnées d'unité, retrait
+  logique (§18.2, **aucune suppression physique**) des documents, datasets et artefacts, et
+  propagation aux unités. Les droits rendent leur propre `audit_event` **sous le pseudonyme**
+  (§0.2 inv. 6) — l'écrire sous l'identité réintroduirait la donnée effacée.
+  Deux mécanismes existants ont été étendus plutôt que doublés : `soft_delete` (artefact,
+  dataset, document) n'agit que sur la **première** transition (UPDATE conditionnel
+  atomique, donc un effacement est idempotent), et la recherche (`hybrid_search`,
+  `vector_search`, `fulltext_search`, `hybrid_searcher`, `list_units_without_embedding`)
+  filtre désormais `deleted_at IS NULL` — le vecteur reste (invariant 5) mais n'est plus
+  proposé : c'est la seule façon qu'un embedding d'une donnée retirée ne « serve » plus en
+  silence. Les projections de lecture exposent `deleted_at` (même précédent que l'artefact).
+  *preuves : `tests/security/test_gdpr_new_data_types.py`* (16 cas sur **vraies** lignes
+  PostgreSQL : dataset/unités retirés sans perdre la lisibilité, journal pseudonymisé mais
+  **structure intacte** (ressource, demande, résultat conservés), effacement idempotent,
+  export par le **même** `export_actor_data` (identité, `provenance`, `sha256` conservés),
+  rectification en unité `derived` avec version précédente `superseded` et originale
+  récupérable, recherche hybride réelle qui ne ramène plus la donnée retirée **avant/après
+  contre-épreuve** ; **route HTTP réelle** : `GET …/download` → **410 Gone** après
+  l'effacement, et les chemins de contournement exposés (`GET` détail, `/versions`, liste)
+  refusent aussi, la raison restant dans le journal et **pas** dans le corps de la réponse).
+  ⚠️ **Interprétation documentée** : §41.9 ne définit **pas** de clé de portabilité pour
+  `datasets` — le vocabulaire est celui des `retention_policies` et
+  `tests/unit/governance/test_gdpr_handler.py::test_exportable_types_match_the_retention_keys`
+  le garde tel quel ; les données d'un dataset sortent donc par leurs `information_units` et
+  `ActorRights.export` publie l'inventaire des datasets **à part**, sans inventer de type
+  d'export. De même, `datasets` et `artifacts` n'ont **aucun droit de modification en place**
+  (§0.2 inv. 4 : une modification significative crée une nouvelle version) : la rectification
+  porte sur l'unité d'information, mécanisme que le contrat définit.
+  ⚠️ **Reste ouvert** : aucune route d'`app/api/` n'exerce ces droits (le contrat n'en définit
+  pas) — les brancher est une décision d'API, pas un câblage de service ; le branchement d'un
+  coffre externe ou d'un délai de rétention effectif reste une décision de déploiement
+  (`RetentionEnforcer` n'est qu'un sélecteur, il ne supprime rien).
+- [x] §41.13 : **harnais de charge sur le chemin réel** `upload → ingestion → livraison → download`.
+  `tests/load/harness.py` joue les **six routes réelles** (`POST /v1/requests`,
+  `POST /v1/requests/{id}/documents` en multipart, `POST /v1/requests` avec `source_ref=s3://…`
+  — l'objet est ingéré **avant** la planification, `GET /v1/requests/{id}` jusqu'à l'état §1.3,
+  `GET /v1/artifacts?request_id=…`, `GET /v1/artifacts/{aid}/download`) et **vérifie le `sha256`**
+  de l'artefact téléchargé : un parcours incomplet est une erreur, jamais un succès.
+  **Pilotage tranché** : ni k6 ni locust — harnais **natif Python asyncio** (k6 ajoute un binaire
+  Go, Locust 2.46 est sans support `asyncio`), donc un seul modèle de concurrence et un
+  enregistrement déterministe (commit, configuration, mesures, verdict, limitations) écrit par
+  `python -m tests.load.run_load` dans `tests/load/results/`.
+  **Aucun seuil inventé** : les huit grandeurs du §41.13 et leurs valeurs sont **lues** dans
+  `GET /v1/metrics → benchmarks` (déjà exposé), et `docs/performance_tuning.md` les documente
+  désormais **toutes** (six d'entre elles ne l'étaient pas). La portée décide de l'application :
+  `staging` compare aux seuils exposés, `local` les publie sans conclure (§41.13 situe la mesure
+  en staging) ; un seuil sans échantillon est `not_measured`, jamais `PASS`.
+  CI **manuelle** : `.github/workflows/load.yml` (`workflow_dispatch`) lance la campagne et archive
+  le rapport en artefact, le code de sortie valant `1` en `FAIL`.
+  *preuve : `tests/load/test_load_harness.py`* (26 cas : routes vérifiées contre l'OpenAPI de
+  l'application, parcours réel sur **serveur uvicorn** + PostgreSQL pgvector + stockage objet S3
+  réels, archive triée ; contre-épreuves : serveur injoignable ⇒ `FAIL`, réponse 500 ⇒ étape en
+  échec, portée `staging` ⇒ `FAIL` sur le débit sous la cible exposée **alors que** le parcours
+  réussit) + campagne réelle archivée dans `tests/load/results/`.
+- [ ] **Dettes d'exploitation** : Redis → Valkey ~~et runtime Python 3.12~~ **faits**
+  (dette n°1 : le serveur est `valkey/valkey:8-alpine` en compose dev/test/prod, en CI et
+  dans les tests, la variable `REDIS_URL` et le client `redis.asyncio` restent — protocole
+  compatible, aucune couche applicative réécrite ; dette n°7 : Python 3.12) ;
+  `gitleaks` **reste à faire** (dette n°8). *preuve : `python -m pytest -q` + CI verte*
 
 ---
 
@@ -1388,6 +1544,19 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 2026-10-03 | Cline (act) | **L7.4** | **Cellule hors-type** (§13.2). Cause racine trouvée : les cellules CSV arrivant en **texte**, `infer_schema` voyait une colonne `string` homogène et `validate_schema` n'avait **aucun prédicat** pour une union `a|b` ⇒ contrôle **sauté**. Correctif : les raisons portent sur la **nature observée** de chaque cellule (`_value_kind` : texte à valeur numérique ⇒ `number`/`integer`), la **majorité stricte** décide du type attendu, la cellule fautive est **nommée** (`row_index`, `field`, `expected`, `observed`) | `9bcaaca` | `tests/unit/tools/test_dataset_inspector_typed_cells.py` → **8 passed** ; contre-épreuve devenue preuve dans `tests/integration/test_dataset_quality_controls_e2e.py` | ✅ **Aucune valeur n'est modifiée** (signaler n'est pas corriger). ⚠️ Sans majorité stricte ⇒ **aucune violation arbitraire** : un lot ambigu n'est pas transformé en fausse alerte |
 | 2026-10-03 | Cline (act) | **L7.5** | **Gain de l'arrêt anticipé** (§17/§41.2). Le plan le réclamait explicitement (« gain **non mesuré** — reporté à L7/§41.13 »). Deux exécutions **réelles** du même chemin sont comparées avec les **mêmes doubles** : sans mémoire (acquisition complète) vs avec arrêt anticipé (étapes web non exécutées). Chaque nombre vient du **`usage_report` §41.2** (contrat de facturation : `tokens_llm_input`, `tokens_llm_output`, `web_requests`, `api_calls`, `compute_seconds`) + du **compteur d'appels des doubles** | `7454244` | `tests/performance/test_early_stop_savings.py` → **3 passed** | ✅ Mesure **structurelle**, pas une facture : avec mémoire suffisante `web_requests == 0` et le fournisseur web n'est **jamais** appelé, alors que sans mémoire il l'est au moins une fois ; l'unité mémorisée reste livrée avec son identifiant d'origine et l'absence d'acquisition est **dite** dans le colis. ⚠️ **Aucun euro, aucun prix, aucun chiffre de coût n'est fabriqué** ; la différence entre les deux colis est documentée au lieu d'être présentée comme un résultat identique |
 | 2026-10-03 | Cline (act) | **L7 (clôture)** | Vérification de bout en bout du lot, et **défaut réel trouvé par la suite complète** : `test_pgvector.py::test_orthogonal_vector_scores_lower` échouait (`KeyError` sur l'unité lexicale attendue) alors qu'il passait **seul** — le test L3 écrivait des vecteurs dans la table `embeddings` **partagée**, et ces vecteurs, plus proches du vecteur de requête, faisaient sortir l'unité lexicale du `limit=10` de la recherche §16.1. Correctif : le module enregistre les propriétaires qu'il a écrits et les **supprime après chaque test** (fixture autouse) | `c2057ea`, `a8608aa` | Suite complète `pytest -q` → **2672 passed / 4 skipped** (501,01 s), soit **+48** vs 2 624 ; les deux fichiers réunis **dans l'ordre qui échouait** → 16 passed ; `check_architecture` / `check_contracts` / `check_invariants` → **OK** ; `check_backward_compat` → **0 breaking change** (32 warnings BC005 préexistants) ; frontend `npx tsc --noEmit` **propre** + `npx vitest run` → **20 passed** (4 fichiers) | ✅ **L7 clos.** ⚠️ Les 3 findings `ruff` restants sur les fichiers du lot (`S110` ×2 dans `cache_store.py`, `UP040` sur `DatasetLike`) sont **préexistants** (vérifiés par `git show 755da14~1`) et `ruff` est **non bloquant par configuration** dans ce dépôt ; `type X = …` (UP040) exigerait Python 3.12 alors que le runtime est **3.11.9**. ⚠️ Leçon durable : **un test qui écrit dans une table partagée doit rendre la table telle qu'il l'a trouvée** — sinon il fait échouer ses voisins, et l'échec n'apparaît qu'à la suite **complète**, jamais en isolé |
+| 2026-10-04 | Cline (act) | **L8.1** | **Validateur mTLS** (§19.2, dette n°2). `app/security/certificates/` remplace le stub qui ne lisait que le `CN` d'un dictionnaire : le certificat est **réellement vérifié** — lisibilité PEM, fenêtre de validité (feuillet **et** chaîne), révocation (liste explicite ou CRL fournie), chaîne de confiance remontée jusqu'à une ancre configurée **avec contrôle explicite que chaque émetteur est un CA**, usage client si le certificat en déclare un, puis identité `CN` unique dans l'espace `AGENT_`. Échec **fermé** sans ancre. `dependency.py` l'expose comme dépendance d'authn service-à-service via l'extension **ASGI standard** `extensions.tls.client_cert_chain` ; `authn/mtls_validator.py` est réduit à un ré-export (une seule architecture). | `4d316e4` | `tests/security/test_mtls_validator.py` → **29 passed** (vrais certificats signés : signature forgée au bon nom d'émetteur, émetteur `CA:false`, expiré, pas encore valide, révoqué par liste **et** par CRL, malformé, `CN` hors espace, deux `CN`, EKU serveur, chaîne incomplète, deux niveaux, échec fermé, aucun matériau dans le message, matériaux du script du dépôt) ; `test_mtls_service_to_service.py` → **8 passed** (handshake TLS **réel**) ; `test_auth_bypass.py::TestCertificateValidation` réécrit ; checkers OK ; BC **0 breaking** ; `ruff` **clean** sur les fichiers du lot ; suite 3.12 (conteneur) → **2715 tests collectés**, soit **+39** vs 2676 | ✅ **Item L8/mTLS fermé** pour ce que le contrat demande (vérifier **et** exposer). ⚠️ **Défaut réel trouvé par la sonde** : `verify_directly_issued_by` vérifie la signature mais **pas** la qualité de CA de l'émetteur — un certificat `basicConstraints CA:false` signait un feuillet **accepté** ; la contrainte est désormais imposée explicitement (`certificate_issuer_not_a_ca`) et gardée par un test. ⚠️ **Reste ouvert** : aucune route d'`app/api/` n'utilise la dépendance, **uvicorn 0.27.0 n'exposant pas** l'extension ASGI TLS (mesuré : `client_cert` absent de tout le paquet installé). ⚠️ **Instabilité d'environnement** observée sur deux exécutions complètes en 3.12 (lecture DB, migrations, persistance d'embeddings — **tests différents à chaque fois**, tous verts isolément et réunis) : charge/IO, **aucun lien avec ce lot**. ⚠️ **Piège de méthode** : un `edit` appliqué **pendant** une exécution a laissé de la prose hors chaîne dans `certificates/__init__.py` et fait échouer les 6 tests qui relancent un interpréteur enfant — détecté, corrigé, suite relancée |
+| 2026-10-04 | Cline (act) | **Stabilité de la suite 3.12** | Deux anomalies (`1 asyncio.TimeoutError`, `1 erreur migrations`) apparaissaient **sur un test différent à chaque exécution** et passaient toutes isolément. Diagnostic en trois temps : (1) **repro minimal** hors dépôt — deux boucles successives (`asyncio.run` ×2) réutilisant `get_default_engine()` : la **boucle 2 échoue** ; (2) **contre-épreuves** — `INIS_NULL_POOL=1` → OK, `set_default_engine(None)` avant la 2ᵉ boucle → OK, c'est-à-dire **exactement les deux mitigations de P14** ; (3) **sonde** `pg_stat_activity` → **6 connexions stables**, aucune fuite. Cause exacte : un pool asyncpg appartient à la boucle qui l'a ouvert, et le cache de `get_default_engine()` n'était indexé que **par URL** alors que pytest-asyncio crée **une boucle par test** → `RuntimeError: Event loop is closed` / connexion morte (`loop=<... closed=True>`), et `TimeoutError` (timeout de connexion asyncpg de **60 s**) quand la connexion morte bloque le *preflight*. Correctif **minimal** : cache indexé par `(URL, boucle)`, moteur reconstruit au changement de boucle — ce que P14 prescrit déjà (« créer l'engine dans la boucle qui l'utilise ») | `(ce commit)` | `tests/integration/test_default_engine_across_event_loops.py` → **3 passed** *avec* le correctif, **1 failed** *sans* (`git stash` du fichier) : le test détecte donc réellement le défaut ; `test_migrations.py` seul → **12 passed** ; `test_cache_l2_postgres.py` seul → **8 passed** ; suite complète 3.12 (conteneur) → **2712 passed / 5 skipped / 1 failed**, puis **2712 passed / 5 skipped / 1 error** (2718 collectés = 2676 + 39 du lot mTLS + 3 nouveaux) | ✅ **Défaut de code démontré et corrigé** : la famille `Event loop is closed` **disparaît** (+4 tests passants, plus aucun échec de cette famille sur les deux exécutions suivant le correctif). ⚠️ **Aléa environnemental distinct, mesuré et non corrigé** : une connexion TCP+TLS vers le PostgreSQL de testcontainers peut dépasser les **60 s** du timeout asyncpg (trace `asyncpg/connection.py:2442 → asyncio/timeouts.py:115`, boucle **vivante** `closed=False`) — test **différent à chaque exécution**, toujours vert isolément, sur une machine dont le disque hôte est à ~2,8 Go libres (E/S de la VM Docker saturées). ⚠️ Piège **identique non corrigé volontairement** faute de trace l'impliquant : `session.py::ensure_session_maker` garde un cache process-wide du même genre et construit un moteur jetable à chaque appel |
+| 2026-10-04 | Cline (act) | **L8.3** | **Vault branché sur les connecteurs** (§41.4). Écart réel mesuré avant de coder : `CredentialResolver`/`auth_headers()` n'étaient appelés **nulle part** dans `app/`, `RESTConnector` n'était **jamais construit** hors de ses tests, et son point d'injection (`auth_handler`) attendait un objet qui **détenait déjà** le secret. Ajout du seul maillon manquant, `app/connectors/api/auth/vault_auth_handler.py` : `VaultAuthHandler` adapte `SourceCredential` (§41.4 `[CONFIG]`) + `CredentialResolver` au protocole `apply(headers, params)` que le connecteur accepte **déjà** — ni `RESTConnector` ni le vault ne sont modifiés, aucun mécanisme de secrets n'est introduit — et `rest_connector_for_source()` câble la source (il refuse par son nom une `credential_ref` portant un DSN). Le secret est relu **à chaque appel** (rotation sans reconstruction) et n'est jamais en configuration. PostgreSQL était déjà câblé (`dsn_from_vault`), mais **défaut réel trouvé en écrivant la preuve** : `discover()` recopiait le DSN — mot de passe compris — dans `SourceCandidate.location`, qui est une **sortie** (§11 provenance → livraison) ; corrigé par `masked_location()` (`hide_password=True`), `retrieve()` n'utilisant pas ce champ | `(ce commit)` | `tests/integration/test_authenticated_source_e2e.py` → **17 passed** : **vrai serveur HTTP local exigeant le secret** (401 sans lui) + **vrais** backends `EnvVault` et `FileVault` chiffré, clé réellement envoyée, rotation prise en compte, **contre-épreuve** (en-tête du vault retiré ⇒ les 4 cas « le secret vient du vault » **échouent**), entrée absente ⇒ **aucune requête émise**, entrée non-JSON, coffre corrompu, référence portant un DSN, secret absent des logs (`caplog` DEBUG), des erreurs (401) et du `repr`, PostgreSQL (DSN du vault → `SELECT 1`, mot de passe refusé absent de l'erreur, `location` masquée) ; ciblés + `tests/security` + connecteurs + vault → **523 passed** (3.11) / **394 passed** en **Python 3.12** (conteneur, **0 skip**) ; suite **complète** `pytest -q` → **2731 passed / 4 skipped** (817 s, **+17** vs 2 718 collectés, aucun aléa `asyncpg` sur cette exécution) ; `check_architecture` + `check_contracts` **OK** ; `ruff` **clean** sur les fichiers du lot | ✅ **L8.3 fermé** pour ce que le contrat demande (câbler l'usage **réel** du vault, côté REST **et** PostgreSQL), sans nouvelle architecture. ⚠️ **Reste ouvert** : coffre *externe* (HashiCorp/SM) derrière le protocole `CredentialVault` = décision de déploiement ; `PostgresConnector.discover()` ne ré-enveloppe pas les erreurs de connexion du pilote (hors lot, aucun secret en jeu) ; items L8 4/5/6 et dettes n°1/n°8 **non touchés** |
+| 2026-10-04 | Cline (act) | **§41.9 RGPD** | **Droits RGPD sur les nouvelles catégories** (datasets, artefacts, embeddings). Écart réel mesuré avant de coder : `GDPRHandler` / `Pseudonymizer` / `RetentionEnforcer` n'étaient appelés **nulle part** dans `app/`, et **aucune** ligne de contenu ne recevait jamais `deleted_at` — le schéma de la décision `0016` le prévoyait, seul `AccountRepository` l'écrivait. Le droit à l'oubli, la portabilité et la rectification étaient donc **dormants**. `app/governance/retention/actor_rights.py` applique les règles **existantes** aux lignes réelles, par les relations du modèle (`requests.requester.id` → `request_id` → documents/datasets/artefacts → `information_units.document_id`/`dataset_id` → `embeddings.owner_id`) : pseudonymisation des `audit_events` et des métadonnées d'unité, retrait logique (§18.2, **aucune suppression physique**) des documents/datasets/artefacts avec propagation aux unités, export construit par le **même** `export_actor_data`, rectification d'unité en `derived` (version précédente `superseded`, originale récupérable) ; chaque droit écrit son `audit_event` **sous le pseudonyme** (§0.2 inv. 6). Deux mécanismes existants ont été **étendus** plutôt que doublés : `soft_delete` n'agit que sur la **première** transition (UPDATE conditionnel atomique ⇒ effacement idempotent) et la recherche (`hybrid_search`, `vector_search`, `fulltext_search`, `hybrid_searcher`, `list_units_without_embedding`) filtre `deleted_at IS NULL` — le vecteur reste (invariant 5) mais n'est plus proposé. | `(ce commit)` | `tests/security/test_gdpr_new_data_types.py` → **16 passed** sur de **vraies** lignes PostgreSQL : retrait **sans perte de lisibilité**, journal pseudonymisé à **structure intacte** (ressource/demande/résultat conservés), effacement idempotent, export (identité, `provenance`, `sha256`), rectification (`derived` + version `superseded` + originale récupérable) ; **route HTTP réelle** : `GET …/download` → **410 Gone** après l'effacement, et les chemins de contournement exposés (`GET` détail, `/versions`, liste) refusent aussi, la raison restant **dans le journal et pas dans le corps** ; **contre-épreuve** : filtre de recherche retiré ⇒ la preuve embeddings **échoue** ; `tests/unit/governance` + nouveau fichier → **129 passed** (3.11) et **129 passed** en **Python 3.12** (conteneur) ; régression sécurité/artefacts/lineage/hybrid/repositories → **194 passed** ; `check_architecture` + `check_contracts` + `check_invariants` **OK** ; `ruff` **0 nouveau constat** (comptage strict `HEAD` vs courant, fichier par fichier) ; suite **complète** `pytest -q` → **2747 passed / 4 skipped** (725 s, **+16** vs 2 735 collectés, aucun aléa `asyncpg` sur cette exécution) | ✅ **§41.9 fermé** pour ce que le contrat demande : les droits s'appliquent enfin aux données **réellement stockées**, sans second système RGPD. ⚠️ **Interprétation documentée** : §41.9 ne définit **pas** de clé de portabilité pour `datasets` (le vocabulaire est celui des `retention_policies`, gardé par `test_exportable_types_match_the_retention_keys`) — les données d'un dataset sortent par leurs `information_units` et l'inventaire est publié à part ; `datasets`/`artifacts` n'ont **pas** de rectification en place (§0.2 inv. 4). ⚠️ **Reste ouvert** : aucune route d'`app/api/` n'exerce ces droits (le contrat n'en définit pas) ; `RetentionEnforcer` reste un sélecteur (il ne supprime rien) ; items L8.2/L8.4/L8.6 et dettes n°1/n°8 **non touchés** |
+| 2026-10-04 | Cline (act) | **Rate limiting persistant + Valkey** | **Le budget d'un acteur est partagé entre instances, et le serveur est Valkey.** Écart réel mesuré avant de coder : le store partagé existait (`RedisRateLimitStore`, script Lua atomique : refill + dépense en une opération) et le middleware était **déjà monté** (`app/main.py`, ajouté avant l'auth pour lire `request.state.actor_id`), mais **aucun test** ne prouvait qu'un dépassement vu par une instance soit vu par une autre — et la dette n°1 laissait partout un serveur `redis:7-alpine` (EOL). Preuves ajoutées contre un **vrai Valkey** (`valkey/valkey:8-alpine`, fixtures testcontainers) : budget dépensé par A vu par B (store **et** chemin HTTP réel), clé écrite dans le serveur avec TTL, budget piloté par `RATE_LIMIT_RPM`, scopes isolés, sondes toujours servies budget épuisé, backend indisponible → erreur **bruyante** (`InfrastructureError`, pas de laisser-passer), configuration invalide au démarrage → repli process-local **mais mesuré**, et **contre-épreuve** (stores en mémoire ⇒ rien n'est partagé). Migration : `valkey/valkey:8-alpine` dans compose dev/test/prod, CI et `tests/containers.py` ; `REDIS_URL` et `redis.asyncio` conservés (protocole compatible — aucune couche applicative réécrite). ⚠️ **Défaut trouvé en écrivant la preuve** : la clé de bucket du repli `X-API-Key` stockait les **32 premiers caractères de la clé d'API** dans un store partagé → remplacée par un condensé SHA-256 tronqué, gardée par un test (§14). ⚠️ **Défaut de migration mesuré** : le volume `inis_redis_data` contient un RDB **version 12** (`REDIS0012`, écrit par Redis 7.4) que Valkey 8 refuse (« Can't handle RDB format version 12 » → arrêt fatal) → Valkey a son **propre** volume, l'ancien est **laissé intact** (aucune suppression). | `(ce commit)` | `tests/security/test_rate_limit_persistent.py` → **14 passed** (dont la contre-épreuve) ; `tests/api/test_rate_limit_middleware.py` + `tests/unit/security` → **154 passed** au total ; **contre-épreuve instrumentée** : en forçant le store à rester en mémoire, **4 preuves échouent** (partage store, partage HTTP, clé dans le serveur, indisponibilité) ; service compose démarré — `Up (healthy)`, `valkey-cli ping` → `PONG`, `create_rate_limit_store(REDIS_URL=redis://localhost:6379/0)` → `RedisRateLimitStore` (2 jetons admis, 3ᵉ refusé) ; `docker compose config` dev/test/prod → **exit 0** ; `check_architecture` + `check_contracts` **OK** ; `ruff` : **0 nouveau constat** (comptage strict `HEAD` vs courant) ; suite **complète** `pytest -q` → **2761 passed / 4 skipped** (764 s, **+14** vs 2 751 collectés, aucun aléa `asyncpg`) | ✅ **Bloque fermé** : le chemin HTTP réel applique une limite **persistante** et le backend opérationnel est **Valkey** partout (spec §4 disait « Redis 7 » ; la dette EOL est soldée, protocole inchangé). ⚠️ **Reste ouvert** : aucune limite **par endpoint** (le plan n'en demande pas) ; `gitleaks` (dette n°8) non traité ; l'ancien volume `inis_redis_data` reste à la charge d'un opérateur (cache L1 éphémère) ; items L8.2/L8.4/L8.6 et clôture L9 non touchés |
+| 2026-10-04 | Cline (act) | **§41.3 langue effective** | **La langue des unités est tracée, et un mélange se dit.** Écart réel mesuré avant de coder : le bloc §41.3 était construit avec **deux silences** — `str(unit.get("language") or "en")` **déclarait « en »** une unité dont la langue est inconnue, et `except Exception: return block` faisait **disparaître** le bloc quand la politique était invalide ; il n'était en outre **jamais persisté** (`pipeline_persistence._insert_units` ne connaît pas les cinq champs) et **rien ne disait** qu'une livraison mêlait plusieurs langues. La langue effective reste celle que le dépôt observe — déclarée par la source ou établie par `detect_language` (qui répond `None` plutôt que de deviner) — et le nouveau `language_block()` la représente telle quelle : l'absence reste l'absence (`None`, type de l'entité), aucune étiquette n'est inventée. Le bloc est attaché à l'unité **et** déposé dans son `context` (champ persisté, §27) : la langue effective survit au redémarrage **sans colonne nouvelle**. `describe_observed_languages()` produit la phrase publiée dans les `limitations` : langues observées quand il y en a plusieurs, unités sans langue, langues refusées par la politique, et **traduction exigée mais non appliquée** (INIS n'a pas de traducteur ; §37 « signaler > inventer »). | `(ce commit)` | `tests/unit/knowledge/test_language_policy_applied.py` → **13 passed** : règles pures (bloc connu/absent/malformé, politique inutilisable, phrase de mélange/refus/traduction manquante) puis **intégration réelle** — `PipelineRunner.run()` alimenté par un `fr`, un `de` et une page **sans langue** : chaque unité livrée porte son bloc (`{fr, de, None}`, **jamais `en`**), la livraison **dit** « langues observées : de, fr » + « 1 unité(s) sans langue identifiée » + « exige une traduction … aucune n'a été appliquée », et les lignes **persistées** en PostgreSQL portent le bloc (`context ->> 'language'`) avec `language` inchangé ; **contre-épreuve instrumentée** : bloc non attaché ⇒ **2 preuves centrales échouent** (unités livrées, bloc persisté) ; `tests/unit/knowledge` + `tests/agentic` + `tests/api/test_pipeline_e2e.py` + `test_information_packages.py` → **420 passed** ; **42 passed en Python 3.12** (nouveau fichier + les 29 existants) ; `check_architecture` + `check_contracts` + `check_invariants` **OK** ; `ruff` : **0 nouveau constat** (et 2 de moins sur `pipeline_runner.py`) ; suite **complète** `pytest -q` → **2774 passed / 4 skipped** (739 s, **+13** vs 2 765 collectés, aucun aléa `asyncpg`) | ✅ **§41.3 fermé** pour ce que le plan demandait (langue effective tracée sur l'unité et en base, pas de mélange silencieux), sans nouveau détecteur et sans règle inventée. ⚠️ **Interprétation documentée** : la spec ne définit **aucun** code `mixed` — la représentation d'une langue non établie reste **l'absence** (`None`, convention du détecteur et de l'entité) ; la spec n'exige pas non plus de **rejet**, donc aucune règle de rejet n'a été ajoutée. ⚠️ **Reste ouvert** : aucune **traduction** réelle (le bloc l'affirme, `translation_applied=false`) ni UI multilingue ; items L8.6 (load harness) et clôture L9 non touchés |
+| 2026-10-04 | Cline (act) | **L8.6 / §41.13** | **Harnais de charge sur le chemin réel.** Écart réel mesuré avant de coder : `tests/load/test_benchmarks.py` n'appelait que `PipelineRunner` avec un LLM simulé (aucun HTTP, aucun upload, aucun download) et six des huit grandeurs du §41.13 n'étaient **pas documentées** (`docs/performance_tuning.md` ne listait que `MAX_PLAN_STEPS`/`MAX_PARALLEL_TOOL_CALLS`), alors que `GET /v1/metrics → benchmarks` les exposait déjà. `tests/load/harness.py` joue donc les six routes réelles — téléversement multipart, ingestion par `source_ref` **avant** planification, attente de l'état §1.3, artefact §24.2, téléchargement avec **`sha256` vérifié** — mesure p50/p95/p99 par étape et le débit des parcours **complets réussis**, et **lit** les seuils dans `/v1/metrics` au lieu d'en inventer : aucun chiffre n'a été ajouté, la portée `staging` applique les valeurs exposées, la portée `local` les publie sans conclure (un seuil sans échantillon reste `not_measured`, jamais `PASS`). Pilotage tranché : harnais **natif asyncio** (Locust 2.46 n'a pas de support `asyncio`, k6 ajoute un binaire Go). Archivage déterministe (`tests/load/results/`), CI manuelle `.github/workflows/load.yml`. Contre-épreuves réelles : serveur injoignable ⇒ `FAIL`, réponse 500 ⇒ étape en échec, portée `staging` ⇒ `FAIL` sur le débit sous la cible **exposée** alors que le parcours réussit |
+
+
+
+
+
+
 
 
 
@@ -1412,7 +1581,7 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | P11 | Aucun moteur PDF en écriture (C22) | ne pas promettre `.pdf` sans ADR + dépendance — ✅ **traité en L1 (option A)** : refus explicite, aucune substitution de format |
 | P12 | `git status` est sale sur la branche courante | diffs de lot illisibles : committer/stasher d'abord (L0) — ✅ **traité en L0** (branche `feat/conformance-v1`, snapshot `5c3c60f`) |
 | P13 | `POST /v1/requests` lance **aussi** un run en tâche de fond (`BackgroundTasks`), et `TestClient` l'exécute de façon **synchrone** | un test qui compte les appels d'un provider voit le run de création *et* le sien : compter après `reset_mock()`, sinon la mesure ne dit rien — ⚠️ **rencontré en L2.4** (`test_request_file_ingestion_e2e.py`) |
-| P14 | L'engine de `get_default_engine()` est **caché par URL** et lié à sa boucle d'événements | un test synchrone (`TestClient`) puis `asyncio.run(...)` réutilisent le même pool à travers deux boucles : `RuntimeError: Event loop is closed` ou un pool qui rend des connexions mortes — poser `INIS_NULL_POOL=1`, `set_default_engine(None)` et créer l'engine **dans la boucle qui l'utilise** — ⚠️ **rencontré en L2.4** |
+| P14 | L'engine de `get_default_engine()` est **caché par URL** et lié à sa boucle d'événements | un test synchrone (`TestClient`) puis `asyncio.run(...)` réutilisent le même pool à travers deux boucles : `RuntimeError: Event loop is closed` ou un pool qui rend des connexions mortes — poser `INIS_NULL_POOL=1`, `set_default_engine(None)` et créer l'engine **dans la boucle qui l'utilise** — ⚠️ **rencontré en L2.4**, puis **reproduit à l'échelle de la suite complète** (un test différent à chaque exécution, `loop=<... closed=True>`) et ✅ **corrigé à la source** : le cache de `get_default_engine()` est indexé par `(URL, boucle)` et gardé par `tests/integration/test_default_engine_across_event_loops.py` ; les deux mitigations ci-dessus restent valables pour du code qui gère ses propres moteurs — ⚠️ `session.py::ensure_session_maker` porte encore un cache du même genre |
 | P15 | Une seule ligne de `transformations` par étape §12 n'est **pas** garanti : deux producteurs d'une même étape (acquisition web + lecteur d'un fichier ingéré) produisent légitimement **deux** lignes | un test qui compte « une ligne par étape » interdit la vérité ; vérifier l'unicité par `(stage, tool)` — ⚠️ **découvert en L2.4** (`test_b4bis_persistence.py` verrouillait l'attribution erronée de l'unité agrégée du run au `FactExtractor`) |
 | P16 | Le plafond de taille n'était appliqué qu'à l'**entrée HTTP** (`POST …/documents`), pas à ce qu'INIS va **chercher** lui-même (fichier local, objet S3) | la même donnée entre par le « pull » sans passer par le quota : un knob unique bornant les deux directions, sinon la limite §41.2 est décorative — ⚠️ **corrigé en L2.4** (`app/core/size_limits.py` ; l'objet trop gros est refusé **avant** le transfert, preuve `tests/unit/storage/test_s3_stream_download.py`) |
 | P17 | `_read_local` **enveloppait** `FileNotFoundError` dans une `InfrastructureError` | remplacer l'erreur d'origine cache *quel* fichier manque : dans un contexte multi-sources, l'opérateur ne peut plus distinguer une faute de frappe d'un bug de stockage — ⚠️ **corrigé en L2.4** (l'erreur est propagée telle quelle) |

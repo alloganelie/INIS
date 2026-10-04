@@ -122,7 +122,8 @@ async def hybrid_search(
         SELECT {", ".join(_UNIT_COLUMNS)},
                ts_rank(iu.search_vector, plainto_tsquery(:query)) AS lexical_score
         FROM information_units AS iu
-        WHERE iu.search_vector @@ plainto_tsquery(:query){clause}
+        WHERE iu.search_vector @@ plainto_tsquery(:query)
+          AND iu.deleted_at IS NULL{clause}
         ORDER BY lexical_score DESC
         LIMIT :limit
         """  # nosec: B608

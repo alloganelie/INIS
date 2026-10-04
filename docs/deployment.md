@@ -1,7 +1,7 @@
 # Guide de Déploiement INIS
 
 ## 1. Déploiement Local avec Docker Compose
-Pour un démarrage complet incluant PostgreSQL, Redis, RabbitMQ, Mosquitto, S3 et Grafana :
+Pour un démarrage complet incluant PostgreSQL, Valkey, RabbitMQ, Mosquitto, S3 et Grafana :
 ```bash
 cp .env.example .env
 docker compose up -d

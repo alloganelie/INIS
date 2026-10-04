@@ -38,7 +38,7 @@ max_upload_bytes = 26214400
 # tronçons, miroir de app/knowledge/normalization/limits.py.
 max_information_units_per_request = 50
 
-# â”€â”€ Â§41.5 : cache â€” partagÃ© via Redis (L1 processuel toujours actif) â”€â”€â”€â”€â”€â”€â”€
+# â”€â”€ Â§41.5 : cache â€” partagÃ© via Valkey (L1 processuel toujours actif) â”€â”€â”€â”€â”€â”€â”€
 [cache]
 l1_enabled = true
 redis_ttl_seconds = 300

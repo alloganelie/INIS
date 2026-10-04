@@ -6,7 +6,7 @@ INIS est structuré en couches strictes sans dépendances cycliques (contrôlé 
 - **`app/domain`** : Entités pures, objets-valeurs, contrats métier sans E/S.
 - **`app/agents`** : Compréhension, planification, exécution des étapes.
 - **`app/connectors`** : Interfaces vers les sources (Web, PostgreSQL, S3, PDF...).
-- **`app/storage`** : Repositories, base de données PostgreSQL, cache Redis, recherche sémantique.
+- **`app/storage`** : Repositories, base de données PostgreSQL, cache Valkey, recherche sémantique.
 - **`app/confidence`** : Modèle d'évaluation de confiance explicable à 7 dimensions (§15).
 - **`app/governance`** : Audit, contrôle budgétaire, politiques d'accès.
 - **`app/llm`** : Routeur de modèles, tâches spécialisées, traces décisionnelles.

@@ -25,6 +25,7 @@ from sqlalchemy import (
     Text,
     insert,
     select,
+    update,
 )
 
 from app.storage.repositories.table_repository import (
@@ -73,6 +74,9 @@ def to_document_response(row: Mapping[str, Any]) -> dict[str, Any]:
         "storage_ref": data.get("storage_ref"),
         "pii_classification": as_dict(data.get("pii_classification")),
         "created_at": as_iso(data.get("created_at")),
+        # Décision ``0016`` (§18.2) : la date de retrait fait partie de ce qu'une
+        # lecture doit dire. Même projection que l'artefact.
+        "deleted_at": as_iso(data.get("deleted_at")),
     }
 
 
@@ -186,3 +190,33 @@ class DocumentRepository(TableRepository):
         async with engine.begin() as conn:
             await conn.execute(insert(documents_table).values(**row))
         return to_document_response(row)
+
+    @classmethod
+    async def soft_delete(cls, engine: Any, document_id: str) -> dict[str, Any] | None:
+        """Remove one document from the active set (§18.2, décision ``0016``).
+
+        Aucune suppression physique : ``deleted_at`` est renseigné, la ligne et
+        son ``storage_ref`` restent lisibles. Les unités extraites de ce document
+        se retirent par ``InformationUnitRepository.soft_delete_by_owner`` : la
+        suppression se propage le long de la chaîne de provenance (§41.9).
+
+        Args:
+            engine: moteur de base de données.
+            document_id: le document à retirer de l'ensemble actif.
+
+        Returns:
+            Le document relu (marqué), ou ``None`` s'il n'existe pas.
+        """
+        await cls.ensure_table(engine)
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                update(documents_table)
+                .where(
+                    documents_table.c.id == document_id,
+                    documents_table.c.deleted_at.is_(None),
+                )
+                .values(deleted_at=datetime.now(UTC))
+            )
+            if not result.rowcount:
+                return None
+        return await cls.get(engine, document_id)

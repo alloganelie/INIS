@@ -284,3 +284,35 @@ class ArtifactRepository(TableRepository):
                         .values(last_value=value)
                     )
         return format_artifact_id(target, int(value))
+
+    @classmethod
+    async def soft_delete(cls, engine: Any, artifact_id: str) -> dict[str, Any] | None:
+        """Remove one artifact from the active set (§18.2, décision ``0016``).
+
+        Aucune suppression physique : ``status`` passe à ``deleted`` **et**
+        ``deleted_at`` est renseigné — les deux marques que la route de
+        téléchargement refuse (``410 Gone``). La ligne, ses versions et son
+        lineage restent lisibles : une suppression doit rester explicable, et
+        l'index partiel ``ix_artifacts_not_deleted`` est ce sur quoi une lecture
+        §18.2 filtre.
+
+        Args:
+            engine: moteur de base de données.
+            artifact_id: l'artefact à retirer de l'ensemble actif.
+
+        Returns:
+            L'artefact relu (marqué), ou ``None`` s'il n'existe pas.
+        """
+        await cls.ensure_table(engine)
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                update(artifacts_table)
+                .where(
+                    artifacts_table.c.artifact_id == artifact_id,
+                    artifacts_table.c.deleted_at.is_(None),
+                )
+                .values(status="deleted", deleted_at=datetime.now(UTC))
+            )
+            if not result.rowcount:
+                return None
+        return await cls.get(engine, artifact_id)

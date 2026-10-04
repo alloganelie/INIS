@@ -27,7 +27,10 @@ import pytest
 
 #: Images are pinned so a test run is reproducible (§33.2).
 POSTGRES_IMAGE = "pgvector/pgvector:pg16"
-REDIS_IMAGE = "redis:7-alpine"
+#: Dette n°1 — le serveur des tests est celui de la production (Valkey), pas un
+#: Redis EOL : un test ne doit pas reproduire un backend qui n'existe plus.
+#: Le client reste `redis.asyncio` : Valkey implémente le protocole Redis.
+REDIS_IMAGE = "valkey/valkey:8-alpine"
 
 #: Container-side ports (the host port is chosen by Docker).
 POSTGRES_PORT = 5432

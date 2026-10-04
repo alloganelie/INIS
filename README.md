@@ -5,7 +5,7 @@
 [![Architecture Checks](https://img.shields.io/badge/Architecture-100%25%20OK-brightgreen)]()
 [![Contracts Checks](https://img.shields.io/badge/Contracts-100%25%20OK-brightgreen)]()
 [![Tests](https://img.shields.io/badge/Tests-566%20passed-brightgreen)]()
-[![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12-blue)]()
+[![Python](https://img.shields.io/badge/Python-3.12-blue)]()
 
 ---
 
@@ -24,7 +24,7 @@ INIS est un système d'agents d'information autonomes capables d'extraire, d'ana
 ## 2. Installation rapide
 
 ### Pré-requis
-- Python 3.11+
+- Python 3.12+ (§4.1 `[V1-FIXE]` — le contrat, la CI et les images Docker sont en 3.12)
 - Virtualenv activé
 
 ```bash

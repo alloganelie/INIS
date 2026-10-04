@@ -91,6 +91,7 @@ _MISSING_UNITS = text(
     LEFT JOIN embeddings AS e
            ON e.owner_id = iu.id AND e.owner_type = :owner_type
     WHERE e.embedding_id IS NULL
+      AND iu.deleted_at IS NULL
       AND iu.data_stage IN :stages
     ORDER BY iu.created_at DESC
     LIMIT :limit
@@ -106,6 +107,7 @@ _MISSING_UNITS_FOR_REQUEST = text(
     LEFT JOIN embeddings AS e
            ON e.owner_id = iu.id AND e.owner_type = :owner_type
     WHERE e.embedding_id IS NULL
+      AND iu.deleted_at IS NULL
       AND iu.data_stage IN :stages
       AND d.request_id = :request_id
     ORDER BY iu.created_at DESC

@@ -15,6 +15,7 @@ storage layer.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
 from datetime import timezone
 from typing import Any
@@ -27,12 +28,29 @@ Record = dict[str, Any]
 ACTOR_FIELD = "actor_id"
 AGENT_FIELD = "agent_id"
 #: Resource types of the §41.9 portability export (retention keys).
+#: ``datasets`` n'y figure **pas** : le vocabulaire §41.9 est celui du bloc
+#: ``retention_policies`` de la spec (``audit_events``, ``information_units``,
+#: ``pii_data``, ``embeddings``, ``artifacts``) et
+#: ``tests/unit/governance/test_gdpr_handler.py`` le garde tel quel. Les données
+#: d'un dataset sortent donc par leurs ``information_units`` (leur contenu), pas
+#: par une clé inventée ; ``ActorRights.export`` en publie l'inventaire à part.
 EXPORTABLE_TYPES: tuple[str, ...] = (
     "audit_events",
     "information_units",
     "pii_data",
     "embeddings",
     "artifacts",
+)
+
+
+#: Champs qui rattachent un enregistrement à un acteur (§41.9) : la demande qu'il
+#: a posée, la matière qui en vient, et le propriétaire d'un vecteur. Ce sont les
+#: relations réelles du modèle — aucune n'est devinée.
+OWNERSHIP_LINKS: tuple[str, ...] = (
+    "request_id",
+    "document_id",
+    "dataset_id",
+    "owner_id",
 )
 
 
@@ -152,16 +170,24 @@ class GDPRHandler:
         actor_id: str,
         *,
         now: datetime | None = None,
+        owned_links: Iterable[str] = (),
         **by_type: list[Record],
     ) -> dict[str, Any]:
         """Export every record linked to a requesting agent (Art. 20).
 
-        Records are selected by ``actor_id`` **or** ``agent_id``; unknown
-        resource types fail explicitly instead of being silently dropped.
+        Records are selected by ``actor_id`` **or** ``agent_id``; a record linked
+        to the actor through one of the :data:`OWNERSHIP_LINKS` relations
+        (``request_id``, ``document_id``, ``dataset_id``, ``owner_id``) whose
+        value is in *owned_links* is selected too. C'est la seule façon d'exporter
+        ce qui n'porte pas d'acteur : un artefact appartient à une **demande**,
+        une unité à la **matière** dont elle vient, un vecteur à son **unité**.
+        Unknown resource types fail explicitly instead of being silently dropped.
 
         Args:
             actor_id: the requesting agent/actor identifier.
             now: export timestamp (defaults to the current UTC time).
+            owned_links: valeurs des liens qui désignent la matière de l'acteur
+                (ids de demandes, documents, datasets, unités).
             **by_type: record lists keyed by a §41.9 resource type
                 (``audit_events``, ``information_units``, ``pii_data``,
                 ``embeddings``, ``artifacts``).
@@ -179,13 +205,17 @@ class GDPRHandler:
             raise ValueError(
                 f"Unknown resource types: {unknown}. Exportable: {list(EXPORTABLE_TYPES)}"
             )
+        owned_values = {str(link) for link in owned_links if str(link or "")}
 
         def _owned(records: list[Record]) -> list[Record]:
             owned: list[Record] = []
             for record in records:
                 if not isinstance(record, dict):
                     raise ValueError("records must be dicts")
-                if actor_id in (record.get(ACTOR_FIELD), record.get(AGENT_FIELD)):
+                if actor_id in (record.get(ACTOR_FIELD), record.get(AGENT_FIELD)) or any(
+                    str(record.get(link) or "") in owned_values
+                    for link in OWNERSHIP_LINKS
+                ):
                     owned.append(dict(record))
             return owned
 

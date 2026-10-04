@@ -25,6 +25,7 @@ from app.security.authz.abac_engine import ABACEngine
 from app.security.authz.permission_checker import PermissionChecker
 from app.security.authz.policy_evaluator import PolicyEvaluator
 from app.security.authz.rbac_engine import RBACEngine
+from tests.security import pki
 
 SECRET = "test-secret"
 
@@ -109,26 +110,67 @@ class TestJWTValidation:
 
 
 class TestCertificateValidation:
-    """§19.2 — inter-agent mTLS identity."""
+    """§19.2 — inter-agent mTLS identity.
 
-    def test_valid_certificate_returns_the_agent_id(self) -> None:
-        """The CN is the agent identity."""
-        validator = MTLSCertValidator(trusted_cas=["ca-1"])
-        assert validator.validate({"subject": {"cn": "AGENT_AGT_1"}}) == "AGENT_AGT_1"
+    L'identité vient d'un certificat **réellement vérifié** : les certificats sont
+    signés pour de vrai (:mod:`tests.security.pki`), et un certificat auto-signé qui
+    écrit le bon ``CN`` est exactement l'attaque que ce bloc refuse. Les cas
+    exhaustifs (expiration, révocation, chaîne à plusieurs niveaux) vivent dans
+    ``tests/security/test_mtls_validator.py`` ; ici, on éprouve la tentative de
+    contournement.
+    """
+
+    @pytest.fixture(scope="class")
+    def authority(self) -> pki.TestCertificate:
+        """A CA to issue the legitimate agent certificate."""
+        return pki.make_ca("INIS-Auth-Bypass-CA")
+
+    def test_valid_certificate_returns_the_agent_id(
+        self, authority: pki.TestCertificate
+    ) -> None:
+        """A CA-signed certificate yields its CN as the agent identity."""
+        client = pki.make_client(authority, "AGENT_AGT_1")
+        validator = MTLSCertValidator(trusted_cas=[authority.pem])
+        assert validator.validate([client.pem]).agent_id == "AGENT_AGT_1"
+
+    def test_a_self_signed_certificate_claiming_the_agent_name_is_rejected(
+        self, authority: pki.TestCertificate
+    ) -> None:
+        """Writing the right CN in a self-made certificate must not be enough.
+
+        C'est la tentative de contournement qui rendait l'ancien validateur (CN seul)
+        inoffensif en apparence : le nom est bon, la signature ne l'est pas.
+        """
+        forger = pki.make_ca("AGENT_AGT_1")
+        validator = MTLSCertValidator(trusted_cas=[authority.pem])
+        with pytest.raises(ValidationError):
+            validator.validate([forger.pem])
 
     @pytest.mark.parametrize(
-        "cert",
-        [
-            {},
-            {"subject": {}},
-            {"subject": {"cn": "AGT_1"}},
-            {"subject": {"cn": ""}},
-        ],
+        "common_name",
+        ["", "AGT_1", "agent-default", "SERVER_AGT_1"],
     )
-    def test_unusable_certificate_is_rejected(self, cert: dict[str, Any]) -> None:
-        """Missing subject, missing CN or a CN without the AGENT_ namespace fail."""
+    def test_a_certificate_without_a_usable_agent_identity_is_rejected(
+        self, authority: pki.TestCertificate, common_name: str
+    ) -> None:
+        """A CN outside the ``AGENT_`` namespace (or empty) is not an agent."""
+        client = pki.make_client(authority, common_name or "placeholder")
+        if not common_name:
+            client = pki.build_certificate(
+                subject_common_name=None,
+                subject_key=pki.new_key(),
+                issuer_name=authority.certificate.subject,
+                issuer_key=authority.key,
+            )
+        validator = MTLSCertValidator(trusted_cas=[authority.pem])
         with pytest.raises(ValidationError):
-            MTLSCertValidator().validate(cert)
+            validator.validate([client.pem])
+
+    def test_no_configured_trust_anchor_rejects_everything(self) -> None:
+        """Fail closed: without a trust anchor nobody is authenticated."""
+        anyone = pki.make_ca("AGENT_AGT_1")
+        with pytest.raises(ValidationError):
+            MTLSCertValidator().validate([anyone.pem])
 
 
 class TestAuthorizationBypass:

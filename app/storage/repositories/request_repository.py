@@ -189,3 +189,21 @@ class RequestRepository(TableRepository):
                 .where(requests_table.c.request_id == request_id)
                 .values(**values)
             )
+
+    @classmethod
+    async def list_ids_for_actor(cls, engine: Any, actor_id: str) -> list[str]:
+        """Return the ids of the requests that name *actor_id* as requester (§41.9).
+
+        La relation est celle du modèle, pas une convention inventée :
+        ``requests.requester`` porte le demandeur tel que le client l'envoie
+        (``{"type": "agent", "id": "..."}``), et ``requester.id`` est ce qui
+        nomme un acteur. Les demandes reviennent, la plus récente d'abord.
+        """
+        await cls.ensure_table(engine)
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                select(requests_table.c.request_id)
+                .where(requests_table.c.requester["id"].as_string() == actor_id)
+                .order_by(requests_table.c.created_at.desc())
+            )
+        return [str(row[0]) for row in result.fetchall()]

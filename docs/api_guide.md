@@ -21,7 +21,7 @@ La documentation interactive OpenAPI / Swagger est accessible sur `/v1/docs` et 
 - `GET /v1/conflicts` & `GET /v1/conflicts/{id}` : Détections de contradictions inter-sources.
 
 ### Système et Observabilité (§20, §34, §41.15)
-- `GET /health` & `GET /v1/health` : Liveness et état des composants subsystem (DB, Redis, LLM...).
+- `GET /health` & `GET /v1/health` : Liveness et état des composants subsystem (DB, Valkey, LLM...).
 - `GET /v1/health/ready` : Readiness pour orchestrateurs de conteneurs.
 - `GET /v1/metrics` : 14 métriques obligatoires §34 au format JSON ou Prometheus (`?format=prometheus`).
 - `GET /v1/changelog` : Historique des révisions et migrations.
