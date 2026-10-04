@@ -10,6 +10,9 @@ Design rules:
 * **Parameterised SQL.** Only *identifiers* (table and column names) are
   interpolated, and they must match ``^[a-zA-Z_][a-zA-Z0-9_]*$``; every value —
   including ``LIMIT`` — travels as a bound parameter.
+* **No credential in an output.** A candidate *names* the data it points at with
+  the password masked (§41.4): the connector opened the session, it does not hand
+  its credential back in ``SourceCandidate.location``.
 * **Write support.** :meth:`PostgresConnector.write` inserts rows with bound
   parameters inside one explicit transaction.
 """
@@ -20,6 +23,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.connectors.base import (
@@ -36,6 +40,28 @@ from app.storage.database.engine import create_engine
 #: PostgreSQL identifiers used without quoting must match this pattern, which is
 #: what makes the f-string interpolation of identifiers safe.
 _IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+def masked_location(connection_string: str) -> str:
+    """Return *connection_string* with its password replaced by ``***`` (§41.4).
+
+    A ``SourceCandidate`` is an *output*: it travels into provenance, artifacts and
+    delivery. Naming the source is legitimate (host, base, user) ; y recopier le
+    mot de passe ne l'est pas, et le connecteur n'en a pas besoin — ``retrieve``
+    lit la table depuis ``metadata['table']``.
+
+    Args:
+        connection_string: le DSN qui a ouvert la session.
+
+    Returns:
+        Le DSN rendu sans mot de passe ; une chaîne neutre si SQLAlchemy ne peut
+        pas l'analyser (un DSN illisible n'est jamais recopié, il pourrait
+        contenir le secret).
+    """
+    try:
+        return make_url(connection_string).render_as_string(hide_password=True)
+    except Exception:  # noqa: BLE001 - un DSN non analysable n'est pas ré-émis
+        return "postgresql://non-analysable"
 
 
 class PostgresConnector:
@@ -142,7 +168,7 @@ class PostgresConnector:
                 candidates.append(
                     SourceCandidate(
                         source_id=f"postgres-{row[0]}",
-                        location=self._connection_string,
+                        location=masked_location(self._connection_string),
                         metadata={"type": "postgresql", "table": row[0]},
                     )
                 )
