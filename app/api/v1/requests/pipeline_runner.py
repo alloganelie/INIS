@@ -2291,11 +2291,14 @@ class PipelineRunner:
         # §15 confidence could score them; Stage 5 only finalizes the payload.
 
         # -- §41.3 language metadata on every delivered unit -------------
+        # §41.3 — « Chaque InformationUnit DOIT porter » le bloc de langue. Deux
+        # silences sont retirés ici : une langue **inconnue** n'est plus déclarée
+        # « en » (aucune étiquette n'est inventée pour remplir le vide), et une
+        # politique invalide ne fait plus disparaître le bloc sans un mot.
+        language_limits: list[str] = []
+        language_policy = None
         try:
-            from app.knowledge.normalization.language_policy import (
-                LanguagePolicy,
-                build_translation_metadata,
-            )
+            from app.knowledge.normalization.language_policy import LanguagePolicy
 
             language_policy = LanguagePolicy(
                 working_language=str(context.get("working_language", "en")),
@@ -2305,23 +2308,54 @@ class PipelineRunner:
                 translation_policy=str(context.get("translation_policy", "on_demand")),
                 normalization_locale=str(context.get("normalization_locale", "en-US")),
             )
-        except Exception:
-            language_policy = None
+        except Exception as language_error:  # noqa: BLE001 - §25.2: la livraison survit
+            language_limits.append(
+                "Politique de langue §41.3 inutilisable "
+                f"({type(language_error).__name__}: {language_error}) : les unités sont "
+                "livrées sans bloc de langue plutôt qu'avec une langue inventée."
+            )
 
-        def _with_language(block: dict[str, Any], source_language: str) -> dict[str, Any]:
-            """Attach the §41.3 language block to one unit (best effort)."""
-            if language_policy is None:
-                return block
-            try:
-                metadata = build_translation_metadata(language_policy, source_language)
-                return {**block, **metadata.to_dict()}
-            except Exception:
-                return block
+        from app.knowledge.normalization.language_policy import (
+            describe_observed_languages,
+            language_block,
+        )
 
+        def _observed_language(unit: Mapping[str, Any]) -> str | None:
+            """Return the language observed for one unit, or ``None``.
+
+            La langue est celle que la source a déclarée ou que
+            ``detect_language`` a établie à partir du contenu ; rien n'est déduit
+            ici (une unité muette sur sa langue n'en reçoit pas une).
+            """
+            value = unit.get("language")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            return None
+
+        def _with_language(block: dict[str, Any], source_language: str | None) -> dict[str, Any]:
+            """Attach the §41.3 language block to one unit (absence included)."""
+            found = language_block(language_policy, source_language)
+            unit_context = block.get("context")
+            unit_context = (
+                dict(unit_context) if isinstance(unit_context, Mapping) else {}
+            )
+            # Le bloc vit aussi dans le ``context`` de l'unité : c'est ce champ qui
+            # est persisté (§27), donc la langue effective survit au redémarrage et
+            # reste lisible par /v1/information.
+            unit_context["language"] = found
+            return {**block, **found, "context": unit_context}
+
+        language_observed = [_observed_language(unit) for unit in information_units]
         information_units = [
-            _with_language(unit, str(unit.get("language") or "en"))
-            for unit in information_units
+            _with_language(unit, source_language)
+            for unit, source_language in zip(information_units, language_observed)
         ]
+        # §41.3 — un mélange de langues (ou une langue non établie) est **dit**
+        # dans la livraison : c'est le mécanisme du dépôt pour ce qui n'a pas pu
+        # être fait (§37 « signaler > inventer »).
+        language_statement = describe_observed_languages(language_policy, language_observed)
+        if language_statement:
+            language_limits.append(language_statement)
 
         summary = f"Synthesized research report for '{objective}'."
         # Seed findings with real web facts extracted in Stage 3 (§0.2-compliant)
@@ -2531,6 +2565,11 @@ class PipelineRunner:
         # §13.2/§14.4 — fraîcheur évaluée de chaque source livrée et résultat de
         # la comparaison entre sources (y compris ce qui n'a pas pu être croisé).
         base_limitations.extend(source_quality_limits)
+        # §41.3 — ce que la livraison peut dire de la langue de ses unités : les
+        # langues observées quand il y en a plusieurs, celles que la politique
+        # refuse, la traduction qu'elle exige et qui n'a pas été faite, et les
+        # unités restées sans langue identifiée.
+        base_limitations.extend(language_limits)
         # §17.1 — l'arrêt de l'acquisition, ou son refus malgré une mémoire
         # suffisante, est dit dans le colis : une décision invisible serait une
         # décision qu'on ne peut pas contester.

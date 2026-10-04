@@ -22,6 +22,7 @@ No I/O: the language layer is pure and unit-testable.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 from typing import Literal
@@ -255,3 +256,135 @@ def build_translation_metadata(
         translation_model=translation_model or "unknown-model",
         translation_transformation_id=transformation_id or "TRF_UNKNOWN",
     )
+
+
+#: §41.3 — le bloc d'une unité dont la langue n'a **pas** été établie. Aucune
+#: étiquette n'est inventée pour remplir le vide : ``None`` est la représentation
+#: du dépôt pour une langue non établie (``detect_language`` refuse de deviner,
+#: ``InformationUnit.source_language`` accepte ``None``), et ``en`` ne doit jamais
+#: servir de valeur par défaut (§0.2 : une langue fausse est pire qu'aucune).
+UNKNOWN_LANGUAGE_BLOCK: dict[str, Any] = {
+    "source_language": None,
+    "normalized_language": None,
+    "translation_applied": False,
+    "translation_model": None,
+    "translation_transformation_id": None,
+}
+
+
+def language_block(
+    policy: LanguagePolicy | None,
+    source_language: str | None,
+) -> dict[str, Any]:
+    """Return the §41.3 block of one unit — absence included, nothing invented.
+
+    Args:
+        policy: la politique de la requête, ``None`` quand sa configuration est
+            invalide (le bloc ne peut alors rien affirmer).
+        source_language: la langue **observée** de l'unité — déclarée par la
+            source ou détectée par
+            :func:`app.knowledge.enrichment.detect_language` — ou ``None``.
+
+    Returns:
+        Les cinq champs du §41.3. Sans langue observée, ou sans politique
+        valide, ``source_language``/``normalized_language`` restent ``None`` :
+        l'unité est livrée **sans** étiquette plutôt qu'avec une fausse.
+    """
+    if policy is None or not source_language:
+        return dict(UNKNOWN_LANGUAGE_BLOCK)
+    try:
+        return build_translation_metadata(policy, source_language).to_dict()
+    except InvalidLanguage:
+        # Une étiquette mal formée n'est pas une langue : elle est traitée comme
+        # une absence, et l'appelant dit combien d'unités sont dans ce cas.
+        return dict(UNKNOWN_LANGUAGE_BLOCK)
+
+
+def describe_observed_languages(
+    policy: LanguagePolicy | None,
+    languages: Iterable[str | None],
+) -> str | None:
+    """Return the §41.3 statement about the languages a delivery observed.
+
+    Le contrat exige que la langue des unités soit **tracée** : une livraison ne
+    doit donc pas laisser croire à une langue unique quand elle en a observé
+    plusieurs, ni taire une traduction que la politique exige et qui n'a pas été
+    faite (INIS n'a pas de traducteur : le §37 « signaler > inventer » s'applique).
+    Cette fonction produit la phrase qui le dit — c'est le mécanisme du dépôt pour
+    ce qui n'a pas pu être fait (``limitations[]``).
+
+    Args:
+        policy: la politique appliquée, ou ``None`` si sa configuration est invalide.
+        languages: les langues observées, une entrée par unité (``None`` = non établie).
+
+    Returns:
+        La phrase à publier dans les limitations, ou ``None`` quand il n'y a rien
+        à dire (aucune unité, ou une seule langue observée et autorisée qui est
+        déjà la langue de travail).
+    """
+    observed = [
+        validate_bcp47(language) if _is_tag(language) else None for language in languages
+    ]
+    if not observed:
+        return None
+
+    known = [tag for tag in observed if tag is not None]
+    unknown = len(observed) - len(known)
+    parts: list[str] = []
+
+    if policy is None:
+        parts.append(
+            f"{len(observed)} unité(s) livrée(s) sans bloc de langue §41.3 : la "
+            "politique de langue n'a pas pu être appliquée (voir la limitation "
+            "correspondante)."
+        )
+        return " ".join(parts)
+
+    if unknown:
+        parts.append(
+            f"{unknown} unité(s) sans langue identifiée : ni déclarée par la source "
+            "ni déductible du contenu — elles sont livrées **sans** étiquette "
+            "plutôt qu'étiquetées au hasard (§41.3, §0.2)."
+        )
+
+    by_base: dict[str, list[str]] = {}
+    for tag in known:
+        by_base.setdefault(language_base(tag), []).append(tag)
+    if len(by_base) > 1:
+        parts.append(
+            "langues observées dans cette livraison : "
+            + ", ".join(sorted(by_base))
+            + " — aucune langue unique n'est affirmée."
+        )
+
+    working = language_base(policy.working_language)
+    foreign = [tag for tag in known if language_base(tag) != working]
+    if foreign:
+        to_translate = [tag for tag in foreign if policy.requires_translation(tag)]
+        refused = [tag for tag in known if not policy.allows(tag)]
+        parts.append(
+            f"{len(foreign)} unité(s) hors langue de travail « {policy.working_language} » "
+            f"({', '.join(sorted({language_base(tag) for tag in foreign}))}) : elles sont "
+            "livrées dans leur langue source."
+        )
+        if to_translate:
+            parts.append(
+                f"La politique « {policy.translation_policy} » exige une traduction pour "
+                f"{len(to_translate)} d'entre elles et aucune n'a été appliquée : "
+                "`translation_applied` reste faux, l'écart est dit ici plutôt que masqué."
+            )
+        if refused:
+            parts.append(
+                "Langue(s) hors `source_languages_allowed` ("
+                + ", ".join(sorted({language_base(tag) for tag in refused}))
+                + ") : la politique les refuse et ne les traduit pas silencieusement."
+            )
+    return " ".join(parts) if parts else None
+
+
+def _is_tag(candidate: Any) -> bool:
+    """Return whether *candidate* looks like a BCP-47 tag at all."""
+    return isinstance(candidate, str) and bool(candidate.strip()) and bool(
+        _BCP47_RE.match(candidate.strip().replace("_", "-"))
+    )
+
