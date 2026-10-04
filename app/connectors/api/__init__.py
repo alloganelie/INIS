@@ -3,13 +3,19 @@
 from app.connectors.api.auth.api_key_handler import ApiKeyHandler
 from app.connectors.api.auth.basic_auth_handler import BasicAuthHandler
 from app.connectors.api.auth.oauth2_handler import OAuth2Handler
+from app.connectors.api.auth.vault_auth_handler import (
+    VaultAuthHandler,
+    rest_connector_for_source,
+)
 from app.connectors.api.rest_connector import RESTConnector
 from app.connectors.base import SourceConnector
 
 __all__ = [
-    "RESTConnector",
-    "SourceConnector",
     "ApiKeyHandler",
     "BasicAuthHandler",
     "OAuth2Handler",
+    "RESTConnector",
+    "SourceConnector",
+    "VaultAuthHandler",
+    "rest_connector_for_source",
 ]
