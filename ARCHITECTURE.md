@@ -18,7 +18,7 @@ inis/
 ├── .env                           # Variables locales (non versionné)
 ├── .gitignore
 ├── .dockerignore
-├── docker-compose.yml             # PostgreSQL, Redis, RabbitMQ, MinIO, MQTT, Vault, OTel, Grafana
+├── docker-compose.yml             # PostgreSQL, Valkey, RabbitMQ, MinIO, MQTT, Vault, OTel, Grafana
 ├── docker-compose.test.yml        # Stack isolée tests
 ├── docker-compose.prod.yml        # Stack production
 ├── Makefile                       # migrate, test, lint, run, certs, benchmark
@@ -303,7 +303,7 @@ app/connectors/
 │   ├── __init__.py
 │   ├── circuit_breaker.py         # États open/closed/half_open par connecteur
 │   ├── retry_policy.py            # Backoff exponentiel configurable
-│   └── resilience_state.py        # Persiste l'état des circuit breakers (Redis)
+│   └── resilience_state.py        # Persiste l'état des circuit breakers (Valkey)
 │
 ├── web/
 │   ├── __init__.py
@@ -527,7 +527,7 @@ app/security/
 ├── rate_limiting/
 │   ├── __init__.py
 │   ├── rate_limiter.py            # Limite par agent_id, IP, endpoint
-│   └── rate_limit_store.py        # Compteurs Redis pour les fenêtres glissantes
+│   └── rate_limit_store.py        # Compteurs Valkey pour les fenêtres glissantes
 │
 ├── certificates/
 │   ├── __init__.py
@@ -778,7 +778,7 @@ app/observability/
 ├── __init__.py
 ├── tracing.py                     # OpenTelemetry tracer, spans, propagation
 ├── metrics.py                     # Compteurs, histogrammes, gauges — 14 métriques spec §34
-├── health_aggregator.py           # Agrège état PostgreSQL, Redis, RabbitMQ, MinIO, circuit breakers
+├── health_aggregator.py           # Agrège état PostgreSQL, Valkey, RabbitMQ, MinIO, circuit breakers
 ├── health_endpoint.py             # /v1/health — résultat de health_aggregator
 └── metrics_endpoint.py            # /v1/metrics — exposition format Prometheus
 ```
@@ -894,7 +894,7 @@ migrations/
 tests/
 ├── __init__.py
 ├── conftest.py                    # Fixtures globales : DB, session, broker mock, factories
-├── containers.py                  # Testcontainers : PostgreSQL, Redis, RabbitMQ, MinIO
+├── containers.py                  # Testcontainers : PostgreSQL, Valkey, RabbitMQ, MinIO
 │
 ├── factories/
 │   ├── __init__.py

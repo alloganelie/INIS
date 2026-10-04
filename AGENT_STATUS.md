@@ -113,7 +113,7 @@ v2.0.0** et planifiés PHASE-12 ; aucun ne bloque la release.
 
 | # | Dette | Impact | Cible |
 |---|---|---|---|
-| 1 | Redis 7.2 EOL (février 2026) — image `redis:7-alpine` | sécurité/patching | migrer vers Valkey (PHASE-12) |
+| 1 | ~~Redis 7.2 EOL (février 2026) — image `redis:7-alpine`~~ **soldée** : le serveur est `valkey/valkey:8-alpine` partout (compose dev/test/prod, CI, `tests/containers.py`) ; la variable `REDIS_URL` et le client `redis.asyncio` restent (protocole compatible, §10) ; ⚠️ mesuré : le volume Redis existant est en RDB **version 12** (`REDIS0012`, Redis 7.4) et Valkey 8 refuse de le charger — Valkey a donc son propre volume, l'ancien est **laissé intact** (cache L1, TTL 300 s) | sécurité/patching | fait (ce lot) |
 | 2 | ~~Validateur mTLS absent (`app/security/certificates/` sans module)~~ **soldée** : `app/security/certificates/` vérifie la chaîne X.509 (signature jusqu'à une ancre, validité du feuillet et de la chaîne, révocation par liste ou CRL, émetteur réellement CA, usage client, identité `CN`) et est exposée comme dépendance d'authn par l'extension ASGI standard ; preuves `tests/security/test_mtls_validator.py` + `test_mtls_service_to_service.py` | authn service-à-service | ✅ fermée — ⚠️ aucune route d'`app/api/` ne l'utilise tant que le serveur ASGI n'expose pas le certificat client (uvicorn 0.27.0, mesuré) |
 | 3 | `SourceRepository` divergent de la migration 0002 (`source_id`/`id`) | cohérence SQLite↔Postgres | unifier les schémas (PHASE-12) |
 | 4 | Helper de timestamp non centralisé (`datetime.now(UTC)` dispersé) | cohérence temporelle | `app/core/time.py` (PHASE-12) |
