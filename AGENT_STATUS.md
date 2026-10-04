@@ -114,7 +114,7 @@ v2.0.0** et planifiés PHASE-12 ; aucun ne bloque la release.
 | 4 | Helper de timestamp non centralisé (`datetime.now(UTC)` dispersé) | cohérence temporelle | `app/core/time.py` (PHASE-12) |
 | 5 | `VersionStore` en mémoire, aucune table §27 dédiée | durabilité du versioning | persister §18.1 (PHASE-12) |
 | 6 | §41.5 — cache **L2 PostgreSQL et L3 pgvector non câblés** (L1 OK, testé) | coût/latence | câbler L2/L3 (PHASE-12) |
-| 7 | Python 3.11 EOL (oct. 2027) — matrice locale 3.11, CI 3.12 | support | migrer runtime 3.12 (PHASE-12) |
+| 7 | ~~Python 3.11 EOL (oct. 2027) — matrice locale 3.11, CI 3.12~~ **soldée** : contrat §4.1 `[V1-FIXE]` = 3.12 ; `requires-python >=3.12`, images Docker prod **et** dev en `3.12-slim`, CI/ruff/mypy déjà en 3.12 | support | ✅ fermée (`e4beac2`) |
 | 8 | `gitleaks` absent de la CI (token requis) | détection de secrets | job dédié (PHASE-12) |
 | 9 | Rate limits Docker Hub — `docker/login-action` non configuré | fiabilité CI | login CI (PHASE-12) |
 | 10 | Certificats TLS 47 jours — `cert-manager` à configurer en production | rotation | provisionner (prod, hors scope V1) |
@@ -190,7 +190,13 @@ uvicorn, clés réelles) est à **63/63 PASS, 0 FAIL**.
   le L1 est désormais testé contre Redis réel.
 - **Secrets** : `start.bat` contient une clé `SERPER_API_KEY` et une clé OpenRouter
   en clair — **rotation à faire** (le fichier est ignoré par git).
-- **Python local 3.11.9** alors que `pyproject.toml` cible `py312` : la CI fait foi.
+- **Interpréteur *local* 3.11.9** : le contrat §4.1 `[V1-FIXE]` (Python 3.12) est
+  désormais appliqué **au dépôt** — `requires-python = ">=3.12"`, images Docker de
+  production **et** de développement en `python:3.12-slim`, CI en 3.12. En revanche
+  **Python 3.12 n'est pas installé sur cette machine** : les commandes `python` /
+  `pytest` lancées ici tournent encore en 3.11.9, et 3.12 **n'est pas** une
+  découverte automatique. La validation en 3.12 est faite **dans un conteneur**
+  (`e4beac2`), pas sur l'hôte — ne pas confondre les deux.
 
 ### Comportement à connaître (documenté par les tests)
 
