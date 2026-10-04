@@ -94,8 +94,13 @@ migration. Découvert B4-bis, **non corrigé** à ce jour (hors périmètre).
 
 ### Autres dettes ouvertes (B4-bis)
 
-- Cache L2 (PostgreSQL, table `cache_entries`) et L3 (pgvector) non câblés :
-  seul le L1 in-process est branché sur `web_search` / `fetch_page`.
+- ~~Cache L2 (PostgreSQL, table `cache_entries`) et L3 (pgvector) non câblés :
+  seul le L1 in-process est branché sur `web_search` / `fetch_page`.~~
+  **Périmé (vérifié)** : le L2 est branché depuis `82d9288` (backend PostgreSQL,
+  une entrée survit au redémarrage) et le L3 depuis `755da14` (table `embeddings`
+  déjà existante, `persist_embeddings` reste le seul écrivain). Preuves :
+  `tests/integration/test_cache_l2_postgres.py` et
+  `tests/integration/test_cache_l3_embeddings.py`.
 - `pytest-asyncio` reste en `asyncio_mode = "auto"` avec quelques tests marqués
   `@pytest.mark.asyncio` : nettoyage opportun.
 
@@ -113,13 +118,13 @@ v2.0.0** et planifiés PHASE-12 ; aucun ne bloque la release.
 | 3 | `SourceRepository` divergent de la migration 0002 (`source_id`/`id`) | cohérence SQLite↔Postgres | unifier les schémas (PHASE-12) |
 | 4 | Helper de timestamp non centralisé (`datetime.now(UTC)` dispersé) | cohérence temporelle | `app/core/time.py` (PHASE-12) |
 | 5 | `VersionStore` en mémoire, aucune table §27 dédiée | durabilité du versioning | persister §18.1 (PHASE-12) |
-| 6 | §41.5 — cache **L2 PostgreSQL et L3 pgvector non câblés** (L1 OK, testé) | coût/latence | câbler L2/L3 (PHASE-12) |
+| 6 | §41.5 — cache L2 (**PostgreSQL**) et L3 (**pgvector**) ~~non câblés~~ **soldée** : L2 branché en `82d9288` (entrée durable, relue après redémarrage), L3 en `755da14` (réutilise un embedding déjà calculé, fournisseur non rappelé) ; preuves `tests/integration/test_cache_l2_postgres.py` et `test_cache_l3_embeddings.py` | coût/latence | ✅ fermée |
 | 7 | ~~Python 3.11 EOL (oct. 2027) — matrice locale 3.11, CI 3.12~~ **soldée** : contrat §4.1 `[V1-FIXE]` = 3.12 ; `requires-python >=3.12`, images Docker prod **et** dev en `3.12-slim`, CI/ruff/mypy déjà en 3.12 | support | ✅ fermée (`e4beac2`) |
 | 8 | `gitleaks` absent de la CI (token requis) | détection de secrets | job dédié (PHASE-12) |
 | 9 | Rate limits Docker Hub — `docker/login-action` non configuré | fiabilité CI | login CI (PHASE-12) |
 | 10 | Certificats TLS 47 jours — `cert-manager` à configurer en production | rotation | provisionner (prod, hors scope V1) |
 | 11 | Overrides de dépendances — `httpx>=2.12.0` et `pydantic>=2.14.2` (PYSEC-2026-3844..3849, CVE-2026-65975/58203) **n'existent pas sur l'index** : floors positionnés au maximum publié (0.28.1 / 2.13.5) | CVE non couvertes upstream | relever dès publication (PHASE-12) |
-| 12 | Sections SPEC ❌ / 🟡 de `docs/SPEC_COVERAGE.md` : `app/artifacts/**` + `app/api/v1/artifacts/` vides (§24.2, §24.3), `app/knowledge/embedding/` (§16) et `app/knowledge/enrichment/` (§12) absents, `tests/performance/**` vide (§41.13), fichiers de test vides (broker AMQP, cache Redis, connecteurs Excel/PDF/Web, `test_config.py`, `test_memory_checker.py`, `test_artifact.py`, `test_transformation.py`, factories) | couverture fonctionnelle | PHASE-12 |
+| 12 | Sections SPEC ❌ / 🟡 de `docs/SPEC_COVERAGE.md` : `app/artifacts/**` + `app/api/v1/artifacts/` vides (§24.2, §24.3), `app/knowledge/embedding/` (§16) et `app/knowledge/enrichment/` (§12) absents, `tests/performance/**` vide (§41.13), fichiers de test vides (broker AMQP, cache Redis, connecteurs Excel/PDF/Web, `test_config.py`, `test_memory_checker.py`, `test_artifact.py`, `test_transformation.py`, factories) | couverture fonctionnelle | PHASE-12 — **partiellement soldé** : `app/artifacts/**` + `app/api/v1/artifacts/` (L1, `7c1bba2`), `app/knowledge/embedding/` §16 (`755da14`), `app/knowledge/enrichment/` §12 (`51ca9a1`), `tests/performance/**` (B4-bis) |
 
 Note : la tag `v1.0.0` a été créée sur `fce8c43` (`chore(release): add v1.0.0
 refactoring report (C)`), commit de release retrouvé dans l'historique —
@@ -184,10 +189,15 @@ uvicorn, clés réelles) est à **63/63 PASS, 0 FAIL**.
   à réévaluer si un index est ajouté plus tard sur une table volumineuse. Les 27 autres warnings
   indexent une table créée dans le **même `upgrade()`** : §41.14 ne s'y applique pas.
 - **Dette n°12 (partie non soldée)** : `app/artifacts/**` + `app/api/v1/artifacts/` sont désormais
-  **implémentés et branchés** (§24.2/§24.3, L1, commit `7c1bba2`) ; `app/knowledge/embedding/` (§16)
-  et `app/knowledge/enrichment/` (§12) restent absents.
-- **Dette n°6** : cache L2 (PostgreSQL) et L3 (pgvector) toujours non câblés ;
-  le L1 est désormais testé contre Redis réel.
+  **implémentés et branchés** (§24.2/§24.3, L1, commit `7c1bba2`) ; ~~`app/knowledge/embedding/` (§16)
+  et `app/knowledge/enrichment/` (§12) restent absents~~ → **périmé (vérifié)** : les deux modules
+  existent (`app/knowledge/embedding/embeddings_generator.py`, dernier lot `755da14` ;
+  `app/knowledge/enrichment/enricher.py`, L3.1 `51ca9a1`) et sont couverts par
+  `tests/unit/knowledge/test_embeddings_generator.py`, `tests/integration/test_cache_l3_embeddings.py`
+  et l'étape ENRICHED du pipeline §12.
+- ~~**Dette n°6** : cache L2 (PostgreSQL) et L3 (pgvector) toujours non câblés ;
+  le L1 est désormais testé contre Redis réel.~~ → **soldée** (`82d9288` pour le L2,
+  `755da14` pour le L3 ; le L1 reste testé contre Redis réel).
 - **Secrets** : `start.bat` contient une clé `SERPER_API_KEY` et une clé OpenRouter
   en clair — **rotation à faire** (le fichier est ignoré par git).
 - **Interpréteur *local* 3.11.9** : le contrat §4.1 `[V1-FIXE]` (Python 3.12) est

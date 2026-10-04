@@ -34,11 +34,11 @@ Hors sections non applicables : **52/68 = 76 % ✅**. Les 16 sections non confor
 | §10.2 | Hiérarchie de fiabilité | ✅ | `tests/unit/quality/test_source_reliability.py` | |
 | §10.3 | Navigation / suivi de liens | 🟡 | `tests/unit/tools/test_web_search.py` | `app/tools/web/link_follower.py` sans test dédié |
 | §11 | Information Unit | ✅ | `tests/unit/domain/test_information_unit.py` + `tests/integration/test_phase_05_e2e.py::test_information_unit_provenance_invariant` | |
-| §12 | Cycle RAW → NORMALIZED → ENRICHED → DERIVED | 🟡 | `tests/unit/domain/test_information_package.py::test_data_stage_values` + `tests/unit/knowledge/test_chunk_splitter.py` + `tests/unit/provenance/test_lineage_tracker.py` | RAW→NORMALIZED→DERIVED tracés ; étape ENRICHED (modèle) et génération d'embeddings absentes (`app/knowledge/enrichment/` et `app/knowledge/embedding/` sans module) |
+| §12 | Cycle RAW → NORMALIZED → ENRICHED → DERIVED | 🟡 | `tests/unit/domain/test_information_package.py::test_data_stage_values` + `tests/unit/knowledge/test_chunk_splitter.py` + `tests/unit/provenance/test_lineage_tracker.py` | RAW→NORMALIZED→DERIVED tracés ; étape ENRICHED **présente** (`app/knowledge/enrichment/enricher.py`, L3.1 `51ca9a1`) et génération d'embeddings **présente** (`app/knowledge/embedding/embeddings_generator.py`, `755da14`) |
 | §13 | Qualité des données | ✅ | `tests/unit/quality/test_quality_scorer.py` + checks `test_completeness_check.py`, `test_freshness_check.py`, `test_anomaly_check.py`, `test_provenance_check.py` | |
 | §14 | Preuves et contradictions | ✅ | `tests/api/test_evidence_conflicts.py` + `tests/unit/quality/test_conflict_detector.py` + `tests/agentic/test_conflicting_sources.py` | |
 | §15 | Modèle de confiance | ✅ | `tests/unit/confidence/test_confidence_scorer.py` (7 dimensions, poids = 1.0) + `tests/agentic/test_single_reliable_source.py` | |
-| §16 | Recherche vectorielle (§16.1/16.2) | 🟡 | `tests/integration/test_pgvector.py`, `test_hybrid_search.py`, `test_fulltext_search.py` | recherche vectorielle + hybride testées ; **pipeline d'embeddings non câblé** (aucun générateur) |
+| §16 | Recherche vectorielle (§16.1/16.2) | 🟡 | `tests/integration/test_pgvector.py`, `test_hybrid_search.py`, `test_fulltext_search.py` | recherche vectorielle + hybride testées ; **pipeline d'embeddings branché** (`app/knowledge/embedding/embeddings_generator.py`) et **cache L3** dans la table `embeddings` (`755da14`, `tests/integration/test_cache_l3_embeddings.py`) |
 | §17 | Mémoire | 🟡 | `tests/agentic/test_memory_reuse.py` + `tests/agentic/test_stale_information.py::test_stale_cache_entry_is_never_reused` | réutilisation vérifiée de bout en bout ; `tests/unit/planning/test_memory_checker.py` couvre le vérificateur de mémoire |
 | §18 | Gouvernance de la donnée | ✅ | `tests/unit/governance/test_versioning.py` (22), `test_soft_delete.py` (12), `test_retention.py` | versioning append-only, soft delete, temporalité |
 | §19 | Sécurité (§19.1→19.4) | ✅ | `tests/security/test_auth_bypass.py`, `test_injection_prevention.py`, `test_pii_redaction.py`, `tests/unit/security/test_jwt.py`, `test_rate_limiter.py`, `test_secret_hygiene.py` | mTLS : voir dette PHASE-12 |
@@ -75,7 +75,7 @@ Hors sections non applicables : **52/68 = 76 % ✅**. Les 16 sections non confor
 | §41.2 | Quotas et facturation interne | ✅ | `tests/unit/governance/test_quotas.py` (18) + `test_budget_enforcer.py` (26) + `tests/api/test_request_usage.py` + `tests/agentic/test_budget_exceeded.py` | 7 unités de coût, dépassement explicite, jamais silencieux |
 | §41.3 | Internationalisation / multilinguisme | 🟡 | `tests/unit/knowledge/test_language_policy.py` (29 tests, BCP-47) | normalisation de locale et validation BCP-47 seulement : **aucune traduction UI**, pas de détection de langue de contenu |
 | §41.4 | Sources requérant authentification | ✅ | `tests/unit/security/test_credential_vault.py` (30) + `tests/unit/connectors/test_oauth2_handler.py` (13, refresh + expiry) | secrets jamais loggés (redaction récursive) |
-| §41.5 | Stratégie de cache et invalidation | 🟡 | `tests/unit/storage/test_cache_store.py` (21) + `tests/api/test_pipeline_cache.py` (4) + `tests/agentic/test_data_changed_between_searches.py` | **L1 câblé** (TTL + fraîcheur + invalidation on_source_update) et validé sur Redis réel ; **L2 PostgreSQL et L3 pgvector non câblés** |
+| §41.5 | Stratégie de cache et invalidation | 🟡 | `tests/unit/storage/test_cache_store.py` (21) + `tests/api/test_pipeline_cache.py` (4) + `tests/agentic/test_data_changed_between_searches.py` + `tests/integration/test_cache_l2_postgres.py` + `tests/integration/test_cache_l3_embeddings.py` | ~~L2/L3 non câblés~~ **les trois niveaux sont branchés** : L1 (Redis), L2 (PostgreSQL, `82d9288` : survit au redémarrage) et L3 (pgvector, `755da14`). ⚠️ Reste partiel sur le seul point vérifié : la politique `[CONFIG]` accepte les trois déclencheurs (`on_source_update`, `on_conflict_detected`, `on_quality_failure`) mais seul `on_source_update` a un **appelant** identifié dans `app/` |
 | §41.6 | Données structurées volumineuses | ✅ | `tests/unit/normalization/test_chunked_dataset.py` (13 tests) | seuils lignes/octets, streaming polars, chunks bornés |
 | §41.7 | Désinformation / manipulation | ✅ | `tests/unit/quality/test_suspicion.py` (17 tests) | `detect_synthetic` (4 signaux) + `mirror` (copie exacte/proche), seuils configurables |
 | §41.8 | Retry et circuit breaker | ✅ | `tests/unit/connectors/test_circuit_breaker.py` (13) + `tests/integration/test_circuit_breaker.py` (8) + `tests/unit/llm/test_model_router_real.py` (retry upstream) | états closed/open/half-open, budget de sondes ; retry câblé sur les appels LLM (upstream 5xx et enveloppe d'erreur 200), **défaut porté à 3 tentatives par modèle** (`LLM_RETRY_ATTEMPTS` surcharge) |
@@ -127,8 +127,15 @@ Les fichiers vides listés par cet audit ont été remplis et les `tests/perform
 `test_artifact.py` (§24.2), `test_transformation.py`, ainsi que les factories de
 `tests/factories/**`. `tests/performance/` couvre désormais §41.13 (débit, queue,
 agents concurrents, latence recherche vectorielle/hybride pgvector).
-Reste ouvert : §24.2/§24.3 (artifacts et export Excel, cf. dettes 1-2),
+Reste ouvert à cette date : §24.2/§24.3 (artifacts et export Excel, cf. dettes 1-2),
 §16 et §12, cache L2/L3 (§41.5), `SourceRepository` divergent de la migration 0002.
+
+> **Mise à jour L7 (2026-10-04) — sur cette liste, sont désormais soldés** :
+> §24.2/§24.3 (L1, `7c1bba2`), §16 (`app/knowledge/embedding/`, `755da14`) et §12
+> (`app/knowledge/enrichment/`, `51ca9a1`), ainsi que le **cache L2/L3** (§41.5 :
+> L2 `82d9288`, L3 `755da14`) — chaque ligne est adossée à un test qui existe
+> (`tests/integration/test_cache_l2_postgres.py`, `test_cache_l3_embeddings.py`).
+> **Reste ouvert** : la dette n°3 (`SourceRepository` divergent de la migration 0002).
 
 
 
