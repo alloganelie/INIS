@@ -3,7 +3,7 @@
 # Séparée de `docker/Dockerfile.dev` : ici aucune dépendance de build (gcc) n'est
 # conservée, les sources ne sont pas montées et le processus tourne sous un
 # utilisateur non privilégié.
-FROM python:3.11-slim AS builder
+FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
@@ -18,7 +18,7 @@ RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
     && /opt/venv/bin/pip install .
 
-FROM python:3.11-slim AS runtime
+FROM python:3.12-slim AS runtime
 
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \

@@ -5,7 +5,10 @@ build-backend = "setuptools.build_meta"
 name = "inis"
 version = "2.0.0"
 description = "INIS — Intelligent Networked Information System"
-requires-python = ">=3.11"
+# §4.1 `[V1-FIXE]` : le runtime cible de la V1 est Python 3.12 — le plancher suit
+# le contrat, il ne le précède pas. `[tool.ruff] target-version` et
+# `[tool.mypy] python_version` valaient déjà `3.12` ; les images Docker aussi.
+requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
     "paho-mqtt>=2.0",
