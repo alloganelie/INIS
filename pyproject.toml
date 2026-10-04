@@ -11,6 +11,12 @@ description = "INIS — Intelligent Networked Information System"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
+    # §4.3/§41.14 — l'API est servie par uvicorn en production (`docker/Dockerfile`,
+    # `docker-compose.yml`). Déclaré ici (et non plus seulement dans les images ou
+    # l'extra `dev`) : `pip install .` doit suffire à faire tourner le serveur, sans
+    # quoi l'image de production ne peut pas démarrer. `[standard]` = uvloop/httptools
+    # pour un serveur de production.
+    "uvicorn[standard]>=0.30",
     "paho-mqtt>=2.0",
     "pydantic>=2.13.5",
     "sqlalchemy[asyncio]>=2.0",
@@ -56,18 +62,18 @@ dev = [
     "mypy",
     "aiosqlite>=0.19",
     "redis>=5",
-    # §41.13 — le harnais de charge sert l'application sur un vrai socket
-    # (`uvicorn.Server`) pour mesurer le parcours réel : le serveur est donc
-    # requis par les tests. Il n'est pas déclaré en production parce que l'image
-    # le fournit séparément (`docker/Dockerfile.dev`), ce qui est signalé comme
-    # écart dans le rapport de lot (l'image de production, `pip install .`, ne
-    # l'installe pas alors que son `CMD` l'appelle).
-    "uvicorn>=0.30",
 ]
 
 # ─────────────────────────────────────────────────────────────
-# pytest : active la découverte des tests
+# §9.2 — les connecteurs exclus de la V1 (OCR, audio, vidéo,
+# streaming temps réel) DOIVENT être prévus comme plugins : un
+# package externe s'enregistre dans ce groupe sans modifier le
+# cœur. Aucun plugin V1 n'est livré ici ; le mécanisme (registre
+# `app/connectors/plugins.py`) et la démonstration (`tests/`)
+# constituent le socle. Voir `docs/adr/010_plugin_registration.md`.
 # ─────────────────────────────────────────────────────────────
+[project.entry-points."inis.connectors"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
