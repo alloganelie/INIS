@@ -1282,9 +1282,34 @@ incohérence produit un colis où ces trois défauts sont **explicitement listé
 
 ### L8 — Sécurité, gouvernance, i18n, charge (§19, §41.3, §41.9, §41.13) (4–5 j) · Devin + OpenCode + Cursor
 
-- [ ] **Dette n°2 — validateur mTLS** : implémenter `app/security/certificates/` (chaîne X.509,
-  expiration, révocation) et l'exposer comme dépendance d'authn service-à-service (§19.2).
-  *preuve : `tests/security/test_mtls_validator.py`* (`scripts/generate_certs.sh` fournit les matériaux)
+- [x] **Dette n°2 — validateur mTLS** : `app/security/certificates/` remplace le stub qui ne
+  lisait que le `CN`. `validator.py` vérifie **réellement** un certificat X.509 : signature
+  remontée jusqu'à une ancre de confiance configurée, fenêtre de validité (feuillet **et**
+  chaîne), révocation (liste explicite ou CRL fournie — aucune distribution inventée, la spec
+  n'en définit aucune), qualité de CA de chaque émetteur, usage client si le certificat en
+  déclare un, identité `CN` unique dans l'espace `AGENT_`. `dependency.py` l'expose comme
+  dépendance d'authn service-à-service via l'extension **ASGI standard**
+  `extensions.tls.client_cert_chain` ; échec fermé (503 si non configuré, 401 si absent ou
+  refusé). `app/security/authn/mtls_validator.py` ne fait plus que ré-exporter : une seule
+  architecture d'authentification.
+  *preuves : `tests/security/test_mtls_validator.py`* (29 cas sur de **vrais** certificats
+  signés : signature forgée avec le bon nom d'émetteur, CA inconnue, émetteur `CA:false`,
+  expiré, pas encore valide, révoqué par liste **et** par CRL, malformé, `CN` hors espace,
+  deux `CN`, EKU serveur, chaîne incomplète, chaîne à deux niveaux, échec fermé, aucun
+  matériau de certificat dans le message de refus, et les matériaux produits par
+  `scripts/generate_certs.sh` acceptés) ; `tests/security/test_mtls_service_to_service.py`
+  (handshake TLS **réel** : le serveur relit le certificat présenté et n'accepte rien sans
+  certificat, puis chaîne du handshake → dépendance → 200/401/503) ;
+  `tests/security/test_auth_bypass.py::TestCertificateValidation` (un certificat auto-signé
+  portant le bon `CN` est refusé).
+  ⚠️ **Reste ouvert** : aucune route d'`app/api/` n'utilise la dépendance, parce que
+  **uvicorn 0.27.0 n'expose pas** l'extension ASGI TLS (mesuré : `client_cert` est absent de
+  tout le paquet installé). La brancher exige soit un serveur conforme ASGI, soit un en-tête
+  de proxy signé : c'est une décision de déploiement, pas une invention à faire dans ce lot.
+  ⚠️ Défaut trouvé en écrivant la preuve : `verify_directly_issued_by` vérifie la signature
+  mais **pas** la qualité de CA de l'émetteur — un certificat `CA:false` pouvait signer un
+  feuillet accepté. La contrainte est désormais imposée explicitement
+  (`certificate_issuer_not_a_ca`) et gardée par un test.
 - [ ] Rate limiting persistant (aujourd'hui in-memory) : s'appuyer sur Redis/Valkey.
   *preuve : `tests/security/test_rate_limit_persistent.py`*
 - [ ] §41.4 : authentification des sources (credential vault) branchée sur `RESTConnector`/
@@ -1388,6 +1413,8 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 2026-10-03 | Cline (act) | **L7.4** | **Cellule hors-type** (§13.2). Cause racine trouvée : les cellules CSV arrivant en **texte**, `infer_schema` voyait une colonne `string` homogène et `validate_schema` n'avait **aucun prédicat** pour une union `a|b` ⇒ contrôle **sauté**. Correctif : les raisons portent sur la **nature observée** de chaque cellule (`_value_kind` : texte à valeur numérique ⇒ `number`/`integer`), la **majorité stricte** décide du type attendu, la cellule fautive est **nommée** (`row_index`, `field`, `expected`, `observed`) | `9bcaaca` | `tests/unit/tools/test_dataset_inspector_typed_cells.py` → **8 passed** ; contre-épreuve devenue preuve dans `tests/integration/test_dataset_quality_controls_e2e.py` | ✅ **Aucune valeur n'est modifiée** (signaler n'est pas corriger). ⚠️ Sans majorité stricte ⇒ **aucune violation arbitraire** : un lot ambigu n'est pas transformé en fausse alerte |
 | 2026-10-03 | Cline (act) | **L7.5** | **Gain de l'arrêt anticipé** (§17/§41.2). Le plan le réclamait explicitement (« gain **non mesuré** — reporté à L7/§41.13 »). Deux exécutions **réelles** du même chemin sont comparées avec les **mêmes doubles** : sans mémoire (acquisition complète) vs avec arrêt anticipé (étapes web non exécutées). Chaque nombre vient du **`usage_report` §41.2** (contrat de facturation : `tokens_llm_input`, `tokens_llm_output`, `web_requests`, `api_calls`, `compute_seconds`) + du **compteur d'appels des doubles** | `7454244` | `tests/performance/test_early_stop_savings.py` → **3 passed** | ✅ Mesure **structurelle**, pas une facture : avec mémoire suffisante `web_requests == 0` et le fournisseur web n'est **jamais** appelé, alors que sans mémoire il l'est au moins une fois ; l'unité mémorisée reste livrée avec son identifiant d'origine et l'absence d'acquisition est **dite** dans le colis. ⚠️ **Aucun euro, aucun prix, aucun chiffre de coût n'est fabriqué** ; la différence entre les deux colis est documentée au lieu d'être présentée comme un résultat identique |
 | 2026-10-03 | Cline (act) | **L7 (clôture)** | Vérification de bout en bout du lot, et **défaut réel trouvé par la suite complète** : `test_pgvector.py::test_orthogonal_vector_scores_lower` échouait (`KeyError` sur l'unité lexicale attendue) alors qu'il passait **seul** — le test L3 écrivait des vecteurs dans la table `embeddings` **partagée**, et ces vecteurs, plus proches du vecteur de requête, faisaient sortir l'unité lexicale du `limit=10` de la recherche §16.1. Correctif : le module enregistre les propriétaires qu'il a écrits et les **supprime après chaque test** (fixture autouse) | `c2057ea`, `a8608aa` | Suite complète `pytest -q` → **2672 passed / 4 skipped** (501,01 s), soit **+48** vs 2 624 ; les deux fichiers réunis **dans l'ordre qui échouait** → 16 passed ; `check_architecture` / `check_contracts` / `check_invariants` → **OK** ; `check_backward_compat` → **0 breaking change** (32 warnings BC005 préexistants) ; frontend `npx tsc --noEmit` **propre** + `npx vitest run` → **20 passed** (4 fichiers) | ✅ **L7 clos.** ⚠️ Les 3 findings `ruff` restants sur les fichiers du lot (`S110` ×2 dans `cache_store.py`, `UP040` sur `DatasetLike`) sont **préexistants** (vérifiés par `git show 755da14~1`) et `ruff` est **non bloquant par configuration** dans ce dépôt ; `type X = …` (UP040) exigerait Python 3.12 alors que le runtime est **3.11.9**. ⚠️ Leçon durable : **un test qui écrit dans une table partagée doit rendre la table telle qu'il l'a trouvée** — sinon il fait échouer ses voisins, et l'échec n'apparaît qu'à la suite **complète**, jamais en isolé |
+| 2026-10-04 | Cline (act) | **L8.1** | **Validateur mTLS** (§19.2, dette n°2). `app/security/certificates/` remplace le stub qui ne lisait que le `CN` d'un dictionnaire : le certificat est **réellement vérifié** — lisibilité PEM, fenêtre de validité (feuillet **et** chaîne), révocation (liste explicite ou CRL fournie), chaîne de confiance remontée jusqu'à une ancre configurée **avec contrôle explicite que chaque émetteur est un CA**, usage client si le certificat en déclare un, puis identité `CN` unique dans l'espace `AGENT_`. Échec **fermé** sans ancre. `dependency.py` l'expose comme dépendance d'authn service-à-service via l'extension **ASGI standard** `extensions.tls.client_cert_chain` ; `authn/mtls_validator.py` est réduit à un ré-export (une seule architecture). | `4d316e4` | `tests/security/test_mtls_validator.py` → **29 passed** (vrais certificats signés : signature forgée au bon nom d'émetteur, émetteur `CA:false`, expiré, pas encore valide, révoqué par liste **et** par CRL, malformé, `CN` hors espace, deux `CN`, EKU serveur, chaîne incomplète, deux niveaux, échec fermé, aucun matériau dans le message, matériaux du script du dépôt) ; `test_mtls_service_to_service.py` → **8 passed** (handshake TLS **réel**) ; `test_auth_bypass.py::TestCertificateValidation` réécrit ; checkers OK ; BC **0 breaking** ; `ruff` **clean** sur les fichiers du lot ; suite 3.12 (conteneur) → **2715 tests collectés**, soit **+39** vs 2676 | ✅ **Item L8/mTLS fermé** pour ce que le contrat demande (vérifier **et** exposer). ⚠️ **Défaut réel trouvé par la sonde** : `verify_directly_issued_by` vérifie la signature mais **pas** la qualité de CA de l'émetteur — un certificat `basicConstraints CA:false` signait un feuillet **accepté** ; la contrainte est désormais imposée explicitement (`certificate_issuer_not_a_ca`) et gardée par un test. ⚠️ **Reste ouvert** : aucune route d'`app/api/` n'utilise la dépendance, **uvicorn 0.27.0 n'exposant pas** l'extension ASGI TLS (mesuré : `client_cert` absent de tout le paquet installé). ⚠️ **Instabilité d'environnement** observée sur deux exécutions complètes en 3.12 (lecture DB, migrations, persistance d'embeddings — **tests différents à chaque fois**, tous verts isolément et réunis) : charge/IO, **aucun lien avec ce lot**. ⚠️ **Piège de méthode** : un `edit` appliqué **pendant** une exécution a laissé de la prose hors chaîne dans `certificates/__init__.py` et fait échouer les 6 tests qui relancent un interpréteur enfant — détecté, corrigé, suite relancée |
+
 
 
 

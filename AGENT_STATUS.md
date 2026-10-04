@@ -114,7 +114,7 @@ v2.0.0** et planifiés PHASE-12 ; aucun ne bloque la release.
 | # | Dette | Impact | Cible |
 |---|---|---|---|
 | 1 | Redis 7.2 EOL (février 2026) — image `redis:7-alpine` | sécurité/patching | migrer vers Valkey (PHASE-12) |
-| 2 | Validateur mTLS absent (`app/security/certificates/` sans module) | authn service-à-service | implémenter (PHASE-12) |
+| 2 | ~~Validateur mTLS absent (`app/security/certificates/` sans module)~~ **soldée** : `app/security/certificates/` vérifie la chaîne X.509 (signature jusqu'à une ancre, validité du feuillet et de la chaîne, révocation par liste ou CRL, émetteur réellement CA, usage client, identité `CN`) et est exposée comme dépendance d'authn par l'extension ASGI standard ; preuves `tests/security/test_mtls_validator.py` + `test_mtls_service_to_service.py` | authn service-à-service | ✅ fermée — ⚠️ aucune route d'`app/api/` ne l'utilise tant que le serveur ASGI n'expose pas le certificat client (uvicorn 0.27.0, mesuré) |
 | 3 | `SourceRepository` divergent de la migration 0002 (`source_id`/`id`) | cohérence SQLite↔Postgres | unifier les schémas (PHASE-12) |
 | 4 | Helper de timestamp non centralisé (`datetime.now(UTC)` dispersé) | cohérence temporelle | `app/core/time.py` (PHASE-12) |
 | 5 | `VersionStore` en mémoire, aucune table §27 dédiée | durabilité du versioning | persister §18.1 (PHASE-12) |
