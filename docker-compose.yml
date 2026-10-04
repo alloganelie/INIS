@@ -2,7 +2,7 @@
 #
 #   docker compose up -d
 #
-# Démarre PostgreSQL+pgvector, Redis, RabbitMQ, Mosquitto (MQTT), le stockage
+# Démarre PostgreSQL+pgvector, Valkey, RabbitMQ, Mosquitto (MQTT), le stockage
 # objet S3-compatible, le collecteur OTel, Prometheus, Grafana et l'API.
 # Les identifiants par défaut sont des valeurs de *développement* : pour la
 # production, utilisez `docker-compose.prod.yml` et un `.env` renseigné.
@@ -21,7 +21,11 @@ x-api-environment: &api-environment
   #          `postgresql+asyncpg` évite d'embarquer psycopg/psycopg2 dans l'image).
   INIS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-inis}:${POSTGRES_PASSWORD:-inis_dev_password}@postgres:5432/${POSTGRES_DB:-inis_db}
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-inis}:${POSTGRES_PASSWORD:-inis_dev_password}@postgres:5432/${POSTGRES_DB:-inis_db}
-  REDIS_URL: redis://redis:6379/0
+  # Dette n°1 — le serveur est **Valkey** (successeur du Redis 7.2 EOL). Le nom
+  # de la variable reste `REDIS_URL` : le client Python parle le protocole Redis
+  # (`redis://`), que Valkey implémente à l'identique — un seul réglage, aucune
+  # couche applicative réécrite.
+  REDIS_URL: redis://valkey:6379/0
   # §4.4 — l'API accepte `AMQP_URL` ou `INIS_BROKER_URL`.
   AMQP_URL: amqp://${RABBITMQ_USER:-inis}:${RABBITMQ_PASSWORD:-inis_dev_password}@rabbitmq:5672//
   INIS_BROKER_URL: amqp://${RABBITMQ_USER:-inis}:${RABBITMQ_PASSWORD:-inis_dev_password}@rabbitmq:5672//
@@ -63,15 +67,17 @@ services:
       timeout: 5s
       retries: 10
 
-  redis:
-    image: redis:7-alpine
-    container_name: inis-redis
+  valkey:
+    image: valkey/valkey:8-alpine
+    container_name: inis-valkey
     ports:
       - "6379:6379"
     volumes:
-      - redis_data:/data
+      # Dette n°1 — même volume physique qu'avant la migration (`inis_redis_data`) :
+      # renommer la clé ne doit pas perdre ce qui est déjà stocké.
+      - valkey_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -182,7 +188,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
+      valkey:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
@@ -196,7 +202,13 @@ services:
 
 volumes:
   postgres_data:
-  redis_data:
+  # Dette n°1 — Valkey a son **propre** volume : celui de Redis ne peut pas être
+  # réutilisé. Mesuré : `inis_redis_data/dump.rdb` commence par `REDIS0012` (RDB
+  # version 12, écrite par `redis:7-alpine`), et Valkey 8.1 refuse de la charger
+  # (« Can't handle RDB format version 12 » → arrêt immédiat). L'ancien volume est
+  # **laissé intact** (rien n'est supprimé) : son contenu est le cache L1, dont le
+  # TTL est de 300 s par conception.
+  valkey_data:
   rabbitmq_data:
   mosquitto_data:
   object_storage_data:

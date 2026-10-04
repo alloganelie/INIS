@@ -20,9 +20,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
     restart: always
 
-  redis:
+  valkey:
     ports: !reset []
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["valkey-server", "--appendonly", "yes"]
     restart: always
 
   rabbitmq:
