@@ -30,6 +30,7 @@ is an explicit intent to enforce it.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 from typing import Any
@@ -153,13 +154,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         Prefers the authenticated ``actor_id``; falls back to the client host so
         unauthenticated traffic is still metered per caller.
+
+        En-tête ``X-API-Key`` : la clé **ne doit pas** se retrouver dans la clé
+        de bucket. Les 32 premiers caractères d'une clé d'API sont une amorce
+        exploitable, et cette clé est écrite dans un store partagé : seul un
+        condensé stable de la clé est utilisé (§14, §19).
         """
         actor_id = getattr(request.state, "actor_id", None)
         if actor_id:
             return str(actor_id)
         api_key = request.headers.get("x-api-key")
         if api_key:
-            return f"apikey:{api_key[:32]}"
+            digest = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+            return f"apikey:{digest}"
         client = request.client
         if client is not None and client.host:
             return f"ip:{client.host}"
