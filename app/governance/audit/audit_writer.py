@@ -142,6 +142,41 @@ class AuditWriter:
         return [dict(event) for event in result.mappings().all()]
 
     @staticmethod
+    async def pseudonymize_actor(
+        engine: AsyncEngine, actor_id: str, pseudonym: str
+    ) -> int:
+        """Replace *actor_id* by *pseudonym* in the persisted audit trail (§41.9).
+
+        C'est la lettre de §41.9 : une demande d'effacement « DOIT déclencher la
+        pseudonymisation de tous les ``audit_event`` […] liés, sans supprimer la
+        structure de provenance ». La ligne, son horodatage, son action et ses
+        empreintes ``before_hash``/``after_hash`` restent en place : seule la
+        valeur identifiante change, dans la colonne ``actor_id`` qui existe.
+
+        Args:
+            engine: moteur de base de données.
+            actor_id: l'acteur dont on efface l'identité.
+            pseudonym: le pseudonyme stable produit par le ``Pseudonymizer``.
+
+        Returns:
+            Le nombre d'événements réécrits.
+
+        Raises:
+            ValueError: quand l'acteur ou le pseudonyme est vide.
+        """
+        if not actor_id or not pseudonym:
+            raise ValueError("actor_id et pseudonym sont requis (§41.9)")
+        async with engine.begin() as connection:
+            result = await connection.execute(
+                text(
+                    "UPDATE audit_events SET actor_id = :pseudonym "
+                    "WHERE actor_id = :actor_id"
+                ),
+                {"pseudonym": pseudonym, "actor_id": actor_id},
+            )
+        return int(result.rowcount or 0)
+
+    @staticmethod
     def _utc_timestamp() -> str:
         """Format timestamps according to the INIS UTC identifier convention."""
         return datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
