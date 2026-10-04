@@ -57,6 +57,10 @@ _HYBRID_SQL = text(
                    AS raw_score
         FROM embeddings AS e
         WHERE e.owner_type = :owner_type
+          AND NOT EXISTS (
+                SELECT 1 FROM information_units AS iu
+                WHERE iu.id = e.owner_id AND iu.deleted_at IS NOT NULL
+          )
           AND (CAST(:source_id AS text) IS NULL OR EXISTS (
                 SELECT 1 FROM information_units AS iu
                 WHERE iu.id = e.owner_id AND iu.source_id = :source_id
@@ -75,6 +79,7 @@ _HYBRID_SQL = text(
                ts_rank(iu.search_vector, plainto_tsquery(:query)) AS raw_score
         FROM information_units AS iu
         WHERE iu.search_vector @@ plainto_tsquery(:query)
+          AND iu.deleted_at IS NULL
           AND (CAST(:source_id AS text) IS NULL OR iu.source_id = :source_id)
         ORDER BY raw_score DESC
         LIMIT :candidates
@@ -107,6 +112,7 @@ _LEXICAL_ONLY_SQL = text(
                ts_rank(iu.search_vector, plainto_tsquery(:query)) AS raw_score
         FROM information_units AS iu
         WHERE iu.search_vector @@ plainto_tsquery(:query)
+          AND iu.deleted_at IS NULL
           AND (CAST(:source_id AS text) IS NULL OR iu.source_id = :source_id)
         ORDER BY raw_score DESC
         LIMIT :candidates

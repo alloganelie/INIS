@@ -58,6 +58,13 @@ class VectorSearch:
                 "SELECT owner_id, 1 - (vector <=> CAST(:query_vector AS vector)) AS score "
                 "FROM embeddings "
                 "WHERE owner_type = :owner_type "
+                # §18.2/§41.9 — le vecteur d'une donnée retirée de l'ensemble actif
+                # ne doit plus être proposé : la ligne reste (aucune suppression
+                # physique), mais elle ne participe plus à la réponse.
+                "AND NOT EXISTS ("
+                "  SELECT 1 FROM information_units AS iu "
+                "  WHERE iu.id = embeddings.owner_id AND iu.deleted_at IS NOT NULL "
+                ") "
                 "ORDER BY vector <=> CAST(:query_vector AS vector) "
                 "LIMIT :limit"
                 ),
