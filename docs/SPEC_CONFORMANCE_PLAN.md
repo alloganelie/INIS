@@ -1464,14 +1464,14 @@ incohérence produit un colis où ces trois défauts sont **explicitement listé
 
 > La spec n'exige pas l'OCR/audio/vidéo en V1, mais exige qu'ils soient **prévus comme plugins**.
 
-- [ ] Mécanisme de plugin : `entry_points` (groupe `inis.connectors`) dans `pyproject.toml` +
+- [x] Mécanisme de plugin : `entry_points` (groupe `inis.connectors`) dans `pyproject.toml` +
   registre de chargement paresseux (`app/connectors/plugins.py`), contrat = `SourceConnector`
   existant (`app/connectors/base.py`). Un connecteur externe doit pouvoir s'enregistrer sans
   modifier le cœur. *preuve : `tests/unit/connectors/test_plugin_discovery.py`*
-- [ ] Plugin factice de test (fixture) démontrant l'ajout d'un type de source `ocr` non
+- [x] Plugin factice de test (fixture) démontrant l'ajout d'un type de source `ocr` non
   implémenté, exposé comme capacité mais **refusant** tant qu'il n'est pas installé.
   *preuve : `tests/integration/test_plugin_absent_degrades.py`*
-- [ ] Documenter dans `ARCHITECTURE.md` + `docs/adr/010_*` la procédure d'ajout d'un connecteur
+- [x] Documenter dans `docs/adr/010_plugin_registration.md` la procédure d'ajout d'un connecteur
   externe. *preuve : revue de docs (pas de test)*
 
 ---
@@ -1487,14 +1487,14 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 3 | Un agent peut envoyer une demande JSON via le protocole | `[~]` HTTP OK, AMQP non live | L7 | `tests/integration/test_amqp_broker.py` (live) |
 | 4 | INIS construit automatiquement un plan | `[x]` | — | `tests/unit/planning/test_plan_builder.py` |
 | 5 | INIS peut rechercher sur le Web | `[x]` | — | `tests/integration/test_v2_full_stack.py` |
-| 6 | **INIS peut ingérer un fichier structuré** | `[x]` ✅ (L2.3/L2.6 : CSV/JSON/XML/XLSX **et** PDF/DOCX/images) | L2 | ⚠️ correction de preuve : le plan attendait `tests/integration/test_file_ingestion_e2e.py`, **ce fichier n'existe pas** — les preuves sont `tests/integration/test_request_file_ingestion_e2e.py` (CSV → colis), `tests/integration/test_pdf_ingestion_e2e.py` (PDF → pages localisées) et `tests/unit/knowledge/test_document_ingestor.py` (tous les formats) |
+| 6 | **INIS peut ingérer un fichier structuré** | `[x]` ✅ (L2.3/L2.6 : CSV/JSON/XML/XLSX **et** PDF/DOCX/images) | L2 | ⚠️ correction de preuve : le plan attendait `test_file_ingestion_e2e.py`, **ce fichier n'existe pas** — les preuves sont `tests/integration/test_request_file_ingestion_e2e.py` (CSV → colis), `tests/integration/test_pdf_ingestion_e2e.py` (PDF → pages localisées) et `tests/unit/knowledge/test_document_ingestor.py` (tous les formats) |
 | 7 | **INIS peut interroger PostgreSQL** | `[x]` | L2.5 | `tests/integration/test_request_database_read_e2e.py` |
 | 8 | INIS stocke les sources et leurs métadonnées | `[~]` web seulement, repo divergent | L6 | `tests/unit/storage/test_source_repository.py` |
-| 9 | INIS conserve la provenance | `[~]` vrai pour le web, à étendre | L2.3 | `tests/agentic/test_file_unit_traceability.py` |
+| 9 | INIS conserve la provenance | `[~]` vrai pour le web, à étendre | L2.3 | `test_file_unit_traceability.py` |
 | 10 | INIS peut retourner une information avec son contexte | `[x]` | — | `tests/integration/test_smoke.py` |
 | 11 | INIS peut détecter un conflit | `[~]` web seulement | L5 | `tests/agentic/test_conflict_file_vs_web.py` |
 | 12 | INIS attribue un score de confiance explicable | `[x]` | — | `tests/unit/confidence/test_confidence_scorer.py` + `tests/api/test_confidence.py` |
-| 13 | INIS peut solliciter un autre agent | `[~]` code présent, e2e partiel | L7 | `tests/agentic/test_delegation_cycle_detection.py` (existant) + `tests/agentic/test_delegation_e2e.py` (à créer) |
+| 13 | INIS peut solliciter un autre agent | `[~]` code présent, e2e partiel | L7 | `tests/agentic/test_delegation_cycle_detection.py` (existant) + `test_delegation_e2e.py` (à créer) |
 | 14 | INIS journalise l'ensemble de l'exécution | `[x]` | — | `tests/unit/governance/test_audit_writer.py` |
 | 15 | INIS respecte les politiques de permission | `[x]` (+ download artefacts) | L1.4 | `tests/security/test_artifact_download_authz.py` |
 | 16 | Une information modifiée peut être retrouvée dans son historique | `[~]` `VersionStore` en mémoire | L6 | `tests/integration/test_version_store_persistence.py` |
@@ -1661,5 +1661,6 @@ Statut initial = constat vérifié du 2026-09-29. **Aucun critère ne passe `[x]
 | 2026-09-30 | Cline (act) | **§17 (arrêt anticipé)** | `early_stop_decision` (`app/planning/memory_checker.py`) sépare **suffisance** et **arrêt** : seule une recherche **hybride sans limitation** conclut, avec ses critères ; quand elle conclut, les étapes d'acquisition **web** ne sont pas exécutées (fournisseur non appelé) et restent dans le colis en `skipped` avec la raison ; les sources propres à la requête (fichier, base) ne sont jamais sautées ; la décision voyage dans `provenance.memory`, dans une `limitations` explicite et dans l'événement §20 | `e986222` | `pytest -q` → **2526 passed / 4 skipped** (241,60 s) ; 3 checkers OK ; `ruff` clean sur les fichiers du lot ; cas d'intégration rejoués seuls (2 cas sur PostgreSQL réel) | ✅ **§17 clos** — 28 nouveaux tests (13 décision, 9 pipeline, 4 audit, 2 intégration). ⚠️ Garde-fou vérifié : une mémoire suffisante mais **lexicale seule** ou **limitée** réutilise **sans arrêter** le run, et une mémoire insuffisante laisse l'acquisition inchangée. ⚠️ Non mesuré : le gain de coût/tokens (relève de L7/§41.13) |
 
 | 2026-10-01 | Cline (act) | **Validation globale E2E** | Parcours complet sur la pile réelle : POST `/v1/requests` (agent → InformationRequest) → ingestion d'un vrai CSV (`ingest_document`, lecteur CSV réel) → `PipelineRunner` → Acquisition/Extraction/Qualité/Confiance/Provenance/§12.1 → artifact → version + lignage → PostgreSQL → MinIO → téléchargement HTTP avec `ETag`/`X-Checksum-Sha256`, AuthZ §19.3, refus des supprimés, événement §24.3 ; plus 5 contre-preuves adversariales | (voir commits poussés) | `pytest -q` → **passe** (2624 tests) ; frontend `vitest` 20 verts ; `tsc` clean ; 3 checkers OK ; BC 0 breaking ; `ruff` clean sur les fichiers du lot | ✅ **Parcours démontré de bout en bout** (10 cas) + 5 contre-preuves. ⚠️ **Anomalie réelle trouvée et corrigée** : `build_transformations` appelé deux fois → l'artefact citait des `TRF_` **inexistants** en base ; le runner persiste désormais le jeu déjà cité et n'ajoute que l'étape `derived` du second appel. ⚠️ Restent ouverts : cache L3, `progress`, §41.6, CSV `[~]`, mesure §17 → **tous traités en L7** (voir lignes L7.1→L7.5 ci-dessous) |
+
 
 

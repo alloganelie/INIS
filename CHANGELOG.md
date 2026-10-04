@@ -14,6 +14,28 @@ Ce fichier conserve uniquement les changements importants de gouvernance, archit
 - Migration:
 - Tests:
 
+### 2026-10-04 — Clôture produit (conformance V1)
+
+- Added:
+  - §9.2 : registre de plugins `inis.connectors` (`app/connectors/plugins.py`,
+    groupe d'`entry_points` dans `pyproject.toml`), ADR 010, démonstration `ocr`
+    par fixtures (capabilité déclarée, opérations refusées tant que le moteur absent).
+  - Dette n°8 : gitleaks en CI (`.github/workflows/security.yml`) + `.gitleaks.toml`
+    (placeholders `*.example` et fixture de test autorisés ; historique complet → 0 fuite).
+  - `max_information_units_per_request` exposé dans `GET /v1/metrics → benchmarks` :
+    les huit grandeurs §41.13 sont désormais toutes exposées.
+- Changed:
+  - `uvicorn[standard]` déclaré en **dépendance de production** : `pip install .`
+    suffit pour servir l'API (l'image `docker/Dockerfile` démarre réellement).
+  - `GET /v1/metrics` : suppression du repli silencieux (`except Exception: pass`) ;
+    le payload §34 est toujours complet.
+  - `tests/load/test_benchmarks.py` : assertions faibles remplacées par des
+    garde-fous honnêtes (le vrai chemin est mesuré par `tests/load/harness.py`).
+- Tests:
+  - `tests/unit/connectors/test_plugin_discovery.py` (6) +
+    `tests/integration/test_plugin_absent_degrades.py` (5).
+  - `tests/unit/observability/test_metrics.py` : les 8 noms §41.13 exposés.
+
 ### 2026-09-27 — Version 2.0.0 (Release)
 
 - Added:

@@ -1,0 +1,5132 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "INIS API",
+    "version": "2.0.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Get Health",
+        "description": "Health check endpoint returning status and API version.",
+        "operationId": "get_health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Get Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/version": {
+      "get": {
+        "summary": "Get Version",
+        "description": "Version metadata endpoint returning API version and git commit.",
+        "operationId": "get_version_version_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Get Version Version Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/status": {
+      "get": {
+        "summary": "Get V1 Status",
+        "description": "Status endpoint returning operational readiness.",
+        "operationId": "get_v1_status_v1_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Get V1 Status V1 Status Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts": {
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Register a new user account per §19.2",
+        "description": "Create a new account with hashed password and unique identifier.",
+        "operationId": "create_account_v1_accounts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Get account details by ID per §19.2",
+        "description": "Retrieve account details by ID.",
+        "operationId": "get_account_v1_accounts__account_id__get",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Account Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Update account properties per §19.2",
+        "description": "Update email, password, role, scopes or active status.",
+        "operationId": "update_account_v1_accounts__account_id__patch",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Account Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Soft delete an account per §0.2 and §19.2",
+        "description": "Soft delete account by marking status as deleted and is_active as False.",
+        "operationId": "delete_account_v1_accounts__account_id__delete",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Account Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/accounts/{account_id}/change-password": {
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Change account password per §19.2",
+        "description": "Verify old password and update to new password.",
+        "operationId": "change_password_v1_accounts__account_id__change_password_post",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Account Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Change Password V1 Accounts  Account Id  Change Password Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Authenticate and obtain access token per §19.2",
+        "description": "Authenticate with username/password and return JWT token.",
+        "operationId": "login_v1_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Logout and invalidate token per §19.2",
+        "description": "Revoke the caller's session row, then report the logout.",
+        "operationId": "logout_v1_auth_logout_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Logout V1 Auth Logout Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/refresh": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Refresh an expired access token",
+        "description": "Exchange a valid refresh token for a new access token.",
+        "operationId": "refresh_v1_auth_refresh_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Get current authenticated actor per §19",
+        "description": "Return actor_id and scopes of the authenticated caller.",
+        "operationId": "get_me_v1_auth_me_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/requests": {
+      "post": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Create a new Information Request",
+        "description": "Create a new information request, trigger the pipeline runner, and return generated request_id.\n\nWhen the payload names a ``source_ref`` (§5.2), the object is **ingested\nbefore** the run is scheduled: the plan must know the document the request\nowns, otherwise the source it named would be invisible to its own run. A\nsource that cannot be read is a refusal naming the cause, not a request\ncreated around a source that does not exist (§25.2).\n\nRaises:\n    HTTPException: 422 when the named source cannot be ingested.",
+        "operationId": "create_request_v1_requests_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InformationRequestCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InformationRequestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/requests/{id}": {
+      "get": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Get an Information Request by ID",
+        "description": "Retrieve an existing information request by its ID including its latest pipeline state.\n\nThe lookup is memory-first, then PostgreSQL: a request created by another\nworker (or before a restart) is still served, with the status the table\nstored. Its live ``pipeline_state`` is by nature process-local, so a\nrestored request reports ``pipeline_state = None`` rather than a state\nnobody observed.",
+        "operationId": "get_request_v1_requests__id__get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InformationRequestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/requests/{id}/cancel": {
+      "post": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Cancel an Information Request (§32)",
+        "description": "Cancel a request and return its updated state (§1.3 ``CANCELLED``).\n\nCancellation is idempotent: cancelling an already-cancelled request returns\nthe same state instead of failing, so a client retry after a timeout is\nsafe. An unknown request is a 404, never a silent success.",
+        "operationId": "cancel_request_v1_requests__id__cancel_post",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InformationRequestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/requests/{id}/events": {
+      "get": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Stream pipeline execution events via SSE",
+        "description": "Stream Server-Sent Events (SSE) for the request pipeline execution.",
+        "operationId": "get_request_events_v1_requests__id__events_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/requests/{id}/usage": {
+      "get": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Get the §41.2 consumption report of a request",
+        "description": "Return the ``usage_report`` of one Information Request (§41.2).",
+        "operationId": "get_request_usage_v1_requests__id__usage_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Request Usage V1 Requests  Id  Usage Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/requests/{id}/llm-traces": {
+      "get": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Get the §41.12 LLM decision traces of a request",
+        "description": "Return every ``llm_decision_trace`` recorded for one Information Request.\n\nTraces expose the sha256 digest of each prompt, never the prompt itself.",
+        "operationId": "get_request_llm_traces_v1_requests__id__llm_traces_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Request Llm Traces V1 Requests  Id  Llm Traces Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/requests/{id}/progress": {
+      "get": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Get progress of an Information Request",
+        "description": "Return the current execution progress of an information request.\n\nThe snapshot is read from the real :class:`RequestLifecycle` maintained by\nthe pipeline runner (§41.1) instead of being derived from the request\nstatus. Requests that never entered the pipeline fall back to the\nnominal §28 step count so callers always get a coherent payload.\n\n§41.1 — la progression est aussi **persistée** (table ``progress``, écrite au\nmême moment que le point de reprise). Quand l'état en mémoire a disparu —\nredémarrage du worker, autre processus, requête servie par une autre\ninstance — la dernière projection connue est relue en base plutôt que\nd'inventer un état ou de renvoyer un 404 sur une requête qui existe.",
+        "operationId": "get_request_progress_v1_requests__id__progress_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestProgress"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/requests/{id}/resume": {
+      "get": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Get the resume state of an interrupted request (opaque token) per §41.1",
+        "description": "Return the last committed step and an opaque resume token.",
+        "operationId": "get_resume_state_v1_requests__id__resume_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResumeState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Resume an interrupted Information Request per §41.1",
+        "description": "Resume an interrupted request from its last committed step.",
+        "operationId": "resume_request_v1_requests__id__resume_post",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResumeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResumeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/requests/{id}/expire": {
+      "post": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Deliver the partial result of an expired request (graceful expiry) per §41.1",
+        "description": "Force the graceful expiry path and return the PARTIAL_SUCCESS payload.",
+        "operationId": "expire_request_v1_requests__id__expire_post",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Expire Request V1 Requests  Id  Expire Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/usage/global": {
+      "get": {
+        "tags": [
+          "usage"
+        ],
+        "summary": "Get the aggregated §41.2 consumption across all requests",
+        "description": "Return the aggregated consumption of every tracked request (§41.2).",
+        "operationId": "get_global_usage_v1_usage_global_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Global Usage V1 Usage Global Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/agents": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "List registered agents",
+        "description": "Return all currently registered agents.",
+        "operationId": "list_agents_v1_agents_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AgentIdentity"
+                  },
+                  "type": "array",
+                  "title": "Response List Agents V1 Agents Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/agents/register": {
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Register a new agent",
+        "description": "Register or update an agent in the registry.",
+        "operationId": "register_agent_v1_agents_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentIdentity"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentIdentity"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/agents/{id}": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Get an agent by ID",
+        "description": "Retrieve an agent by ID or return 404.",
+        "operationId": "get_agent_v1_agents__id__get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentIdentity"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/agents/{agent_id}/schema": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Get JSON Schema specification for an agent per §41.15",
+        "description": "Return input and output JSON schemas for the registered agent.",
+        "operationId": "get_agent_schema_v1_agents__agent_id__schema_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Agent Schema V1 Agents  Agent Id  Schema Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/artifacts": {
+      "get": {
+        "tags": [
+          "artifacts"
+        ],
+        "summary": "List delivered artifacts, optionally filtered by request_id (§24.2)",
+        "description": "Return the §24.2 artifacts delivered for a request (or all of them).\n\n§19.3 — what a caller cannot read is not listed. The refusal is pronounced\n**before** the lookup when authentication is configured, and every artifact\nthat survives the lookup is still checked individually: a list is not a\npermission to read what it contains.",
+        "operationId": "list_artifacts_v1_artifacts_get",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by request_id",
+              "title": "Request Id"
+            },
+            "description": "Filter by request_id"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/artifacts/{artifact_id}": {
+      "get": {
+        "tags": [
+          "artifacts"
+        ],
+        "summary": "Get one artifact by ID (§24.2)",
+        "description": "Return one §24.2 artifact, or 404 when it was never delivered.\n\n§19.3 — the same check as the download: reading the *metadata* of an artifact\nis reading it. An unauthorized caller learns only that access was denied.",
+        "operationId": "get_artifact_v1_artifacts__artifact_id__get",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Artifact Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/artifacts/{artifact_id}/download": {
+      "get": {
+        "tags": [
+          "artifacts"
+        ],
+        "summary": "Download the bytes of an artifact (§24.2)",
+        "description": "Return the delivered file with its §24.2 ``mime_type`` and name (§19.3).",
+        "operationId": "download_artifact_v1_artifacts__artifact_id__download_get",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Artifact Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/artifacts/{artifact_id}/versions": {
+      "get": {
+        "tags": [
+          "artifacts"
+        ],
+        "summary": "Version history of an artifact and the version currently delivered",
+        "description": "Return every version of an artifact, oldest first, and the current one.\n\n§18.1 — the history is append-only: a version is never rewritten. An artifact\ndelivered **before** this history existed has no version row; the response\nthen reports the version the `artifacts` row carries and an empty history\nrather than inventing a past.",
+        "operationId": "list_artifact_versions_v1_artifacts__artifact_id__versions_get",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Artifact Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactVersionList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/artifacts/{artifact_id}/lineage": {
+      "get": {
+        "tags": [
+          "artifacts"
+        ],
+        "summary": "Lineage and deliveries of an artifact: source → … → download",
+        "description": "Return the per-version lineage and every recorded delivery (§24.2/§24.3).",
+        "operationId": "get_artifact_lineage_v1_artifacts__artifact_id__lineage_get",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Artifact Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactLineageView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/requests/{request_id}/documents": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Upload a document for an Information Request (§9.1, §36.6)",
+        "description": "Accept a file, store it, classify it and describe what was received.\n\nRaises:\n    HTTPException: 404 unknown request, 413 over the storage budget, 415\n        unsupported type, 422 empty file, 503 object storage unavailable.",
+        "operationId": "upload_document_v1_requests__request_id__documents_post",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_document_v1_requests__request_id__documents_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentUploadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/documents": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "List stored documents, optionally filtered by request_id (§9.1)",
+        "description": "Return the documents of a request (or all of them).",
+        "operationId": "list_documents_v1_documents_get",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by request_id",
+              "title": "Request Id"
+            },
+            "description": "Filter by request_id"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/documents/{document_id}": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Get one document by ID (§9.1)",
+        "description": "Return one stored document, or 404 when it was never accepted.",
+        "operationId": "get_document_v1_documents__document_id__get",
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sources": {
+      "get": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "List registered sources",
+        "description": "Return all sources, optionally filtered by source_type.",
+        "operationId": "list_sources_v1_sources_get",
+        "parameters": [
+          {
+            "name": "source_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Type"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Register a new source",
+        "description": "Register a new source and return its generated source_id.",
+        "operationId": "create_source_v1_sources_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sources/{id}": {
+      "get": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Get a source by ID",
+        "description": "Retrieve an existing source by its ID or return 404.",
+        "operationId": "get_source_v1_sources__id__get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/information": {
+      "get": {
+        "tags": [
+          "information"
+        ],
+        "summary": "List information units, optionally filtered by source_id",
+        "description": "Return stored information units, optionally filtered by source_id.",
+        "operationId": "list_information_v1_information_get",
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InformationList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "information"
+        ],
+        "summary": "Record a new information unit",
+        "description": "Record a new information unit and return its generated information_id.",
+        "operationId": "create_information_v1_information_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InformationUnitCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InformationUnitResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/information/{id}": {
+      "get": {
+        "tags": [
+          "information"
+        ],
+        "summary": "Get an information unit by ID",
+        "description": "Retrieve an existing information unit by its ID or return 404.",
+        "operationId": "get_information_v1_information__id__get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InformationUnitResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/evidence": {
+      "get": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "List evidence items, optionally filtered by claim_id",
+        "description": "Return stored evidence items, optionally filtered by claim_id, source_id, or information_id.",
+        "operationId": "list_evidence_v1_evidence_get",
+        "parameters": [
+          {
+            "name": "claim_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Claim Id"
+            }
+          },
+          {
+            "name": "source_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Id"
+            }
+          },
+          {
+            "name": "information_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Information Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Record new evidence",
+        "description": "Record a new evidence entry and return its generated evidence_id.",
+        "operationId": "create_evidence_v1_evidence_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/evidence/{id}": {
+      "get": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Get an evidence item by ID",
+        "description": "Retrieve an existing evidence item by its ID or return 404.",
+        "operationId": "get_evidence_v1_evidence__id__get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/conflicts": {
+      "get": {
+        "tags": [
+          "conflicts"
+        ],
+        "summary": "List conflicts, optionally filtered by status",
+        "description": "Return stored conflicts, optionally filtered by status.",
+        "operationId": "list_conflicts_v1_conflicts_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "conflicts"
+        ],
+        "summary": "Record a detected conflict",
+        "description": "Record a new conflict and return its generated conflict_id.",
+        "operationId": "create_conflict_v1_conflicts_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConflictCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/conflicts/{id}": {
+      "get": {
+        "tags": [
+          "conflicts"
+        ],
+        "summary": "Get a conflict by ID",
+        "description": "Retrieve an existing conflict by its ID or return 404.",
+        "operationId": "get_conflict_v1_conflicts__id__get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConflictResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/quality/check": {
+      "post": {
+        "tags": [
+          "quality"
+        ],
+        "summary": "Run quality checks on an entity per §13",
+        "description": "Evaluate quality rules on an InformationUnit or resource and cache report.",
+        "operationId": "run_quality_check_v1_quality_check_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QualityCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QualityCheckResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/quality/report/{target_id}": {
+      "get": {
+        "tags": [
+          "quality"
+        ],
+        "summary": "Get quality report for a target entity per §13",
+        "description": "Retrieve an existing quality evaluation report or return 404.",
+        "operationId": "get_quality_report_v1_quality_report__target_id__get",
+        "parameters": [
+          {
+            "name": "target_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Target Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QualityReportResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/confidence/{information_id}": {
+      "get": {
+        "tags": [
+          "confidence"
+        ],
+        "summary": "Get confidence score and dimensions for an InformationUnit per §15",
+        "description": "Return confidence score and explicable dimensions, or not_implemented.",
+        "operationId": "get_confidence_v1_confidence__information_id__get",
+        "parameters": [
+          {
+            "name": "information_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Information Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Confidence V1 Confidence  Information Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/confidence/matrix/{request_id}": {
+      "get": {
+        "tags": [
+          "confidence"
+        ],
+        "summary": "Get confidence matrix for a request per §15",
+        "description": "Return confidence matrix for all findings of a request, or not_implemented.",
+        "operationId": "get_confidence_matrix_v1_confidence_matrix__request_id__get",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Confidence Matrix V1 Confidence Matrix  Request Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/changelog": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Get the machine-readable API changelog (§41.15)",
+        "description": "Return the changelog per §41.15 with both history and phase breakdown.",
+        "operationId": "get_changelog_v1_changelog_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Changelog V1 Changelog Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/metrics": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Get system observability metrics per §34",
+        "description": "Return the 14 §34 metrics plus pipeline runner stats.\n\n``?format=prometheus`` serves the Prometheus text exposition format;\nthe default JSON payload is kept unchanged for existing consumers.",
+        "operationId": "get_metrics_v1_metrics_get",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Exposition format: 'json' (default) or 'prometheus'.",
+              "default": "json",
+              "title": "Format"
+            },
+            "description": "Exposition format: 'json' (default) or 'prometheus'."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Get Metrics V1 Metrics Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/health": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Liveness and subsystem status per §32",
+        "description": "Report the real state of every dependency plus the §41.8 breaker states and §41.14 migration info.",
+        "operationId": "get_health_v1_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/health/ready": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Subsystem readiness check per §32, §34",
+        "description": "Aggregate the subsystem checks and expose the readiness verdict.\n\nReturns HTTP 200 with ``ready`` or ``degraded``, HTTP 503 with\n``not_ready`` when a *configured* dependency is down.\nFormat: ``{\"status\": ready | degraded | not_ready, \"checks\": {...}}``",
+        "operationId": "get_health_ready_v1_health_ready_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AccountCreateRequest": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 3,
+            "title": "Username",
+            "description": "Unique username"
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 5,
+            "title": "Email",
+            "description": "Unique email address"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 6,
+            "title": "Password",
+            "description": "Plain text password"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "description": "Account role (admin, operator, reader)",
+            "default": "operator"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scopes",
+            "description": "Assigned permissions and scopes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "username",
+          "email",
+          "password"
+        ],
+        "title": "AccountCreateRequest",
+        "description": "Payload to register a new account."
+      },
+      "AccountResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "Unique account identifier (ULID prefixed ACC_)"
+          },
+          "username": {
+            "type": "string",
+            "title": "Username",
+            "description": "Account username"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email",
+            "description": "Account email address"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "description": "Assigned role"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scopes",
+            "description": "Assigned authorization scopes"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "description": "Whether the account is active",
+            "default": true
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Account lifecycle status (active, deleted)",
+            "default": "active"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At",
+            "description": "ISO 8601 UTC creation timestamp"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At",
+            "description": "ISO 8601 UTC last update timestamp"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "username",
+          "email",
+          "role",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AccountResponse",
+        "description": "Account representation returned by the API."
+      },
+      "AccountUpdateRequest": {
+        "properties": {
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 5
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email",
+            "description": "New email address"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 6
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password",
+            "description": "New plain text password"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role",
+            "description": "New role"
+          },
+          "scopes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scopes",
+            "description": "New list of scopes"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active",
+            "description": "Active status"
+          }
+        },
+        "type": "object",
+        "title": "AccountUpdateRequest",
+        "description": "Payload to update an existing account."
+      },
+      "AgentIdentity": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Agent Id",
+            "description": "Unique agent identifier"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Name",
+            "description": "Human-readable agent name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "description": "Functional description",
+            "default": ""
+          },
+          "version": {
+            "type": "string",
+            "title": "Version",
+            "description": "Semver version string",
+            "default": "0.1.0"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "available",
+              "degraded",
+              "unavailable",
+              "maintenance"
+            ],
+            "title": "Status",
+            "default": "available"
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Capabilities"
+          },
+          "protocols": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Protocols"
+          },
+          "message_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Message Types"
+          },
+          "input_schemas": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Input Schemas"
+          },
+          "output_schemas": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Output Schemas"
+          },
+          "security_requirements": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Security Requirements"
+          },
+          "health": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Health"
+          },
+          "performance_profile": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Performance Profile"
+          },
+          "learning_profile": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Learning Profile"
+          },
+          "registered_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registered At"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "name"
+        ],
+        "title": "AgentIdentity",
+        "description": "Identity card and capabilities of an agent in the registry."
+      },
+      "ArtifactDeliveryEventResponse": {
+        "properties": {
+          "delivery_event_id": {
+            "type": "string",
+            "title": "Delivery Event Id"
+          },
+          "artifact_id": {
+            "type": "string",
+            "title": "Artifact Id"
+          },
+          "target": {
+            "type": "string",
+            "title": "Target"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "delivered_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivered At"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "delivery_event_id",
+          "artifact_id",
+          "target",
+          "status"
+        ],
+        "title": "ArtifactDeliveryEventResponse",
+        "description": "One delivery of an artifact's bytes (§24.3)."
+      },
+      "ArtifactLineageResponse": {
+        "properties": {
+          "artifact_lineage_id": {
+            "type": "string",
+            "title": "Artifact Lineage Id"
+          },
+          "artifact_id": {
+            "type": "string",
+            "title": "Artifact Id"
+          },
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Source Ids"
+          },
+          "dataset_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Dataset Ids"
+          },
+          "transformation_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Transformation Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "artifact_lineage_id",
+          "artifact_id"
+        ],
+        "title": "ArtifactLineageResponse",
+        "description": "The inputs one artifact version was derived from (§24.2)."
+      },
+      "ArtifactLineageView": {
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "title": "Artifact Id"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/ArtifactVersionResponse"
+            },
+            "type": "array",
+            "title": "Versions"
+          },
+          "delivery_events": {
+            "items": {
+              "$ref": "#/components/schemas/ArtifactDeliveryEventResponse"
+            },
+            "type": "array",
+            "title": "Delivery Events"
+          }
+        },
+        "type": "object",
+        "required": [
+          "artifact_id"
+        ],
+        "title": "ArtifactLineageView",
+        "description": "The whole chain of one artifact: per-version lineage and deliveries."
+      },
+      "ArtifactList": {
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/ArtifactResponse"
+            },
+            "type": "array",
+            "title": "Artifacts"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "ArtifactList",
+        "description": "The artifacts of one request (or of the instance)."
+      },
+      "ArtifactResponse": {
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "title": "Artifact Id"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "artifact_type": {
+            "type": "string",
+            "title": "Artifact Type"
+          },
+          "file_name": {
+            "type": "string",
+            "title": "File Name"
+          },
+          "mime_type": {
+            "type": "string",
+            "title": "Mime Type"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version",
+            "default": "1.0.0"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes",
+            "default": 0
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256",
+            "default": ""
+          },
+          "storage_ref": {
+            "type": "string",
+            "title": "Storage Ref",
+            "default": ""
+          },
+          "purpose": {
+            "type": "string",
+            "title": "Purpose",
+            "default": ""
+          },
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Source Ids"
+          },
+          "dataset_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Dataset Ids"
+          },
+          "transformation_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Transformation Ids"
+          },
+          "quality_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality Score"
+          },
+          "confidence_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence Score"
+          },
+          "provenance_complete": {
+            "type": "boolean",
+            "title": "Provenance Complete",
+            "default": false
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "available"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "artifact_id",
+          "artifact_type",
+          "file_name",
+          "mime_type"
+        ],
+        "title": "ArtifactResponse",
+        "description": "One §24.2 artifact as the API exposes it."
+      },
+      "ArtifactVersionList": {
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "title": "Artifact Id"
+          },
+          "current_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Version"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/ArtifactVersionResponse"
+            },
+            "type": "array",
+            "title": "Versions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "artifact_id"
+        ],
+        "title": "ArtifactVersionList",
+        "description": "The version history of one artifact, and which version is current."
+      },
+      "ArtifactVersionResponse": {
+        "properties": {
+          "artifact_version_id": {
+            "type": "string",
+            "title": "Artifact Version Id"
+          },
+          "artifact_id": {
+            "type": "string",
+            "title": "Artifact Id"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "lineage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArtifactLineageResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "artifact_version_id",
+          "artifact_id",
+          "version"
+        ],
+        "title": "ArtifactVersionResponse",
+        "description": "One version of an artifact, with the lineage of that version (§18.1)."
+      },
+      "Body_upload_document_v1_requests__request_id__documents_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "description": "Document to ingest"
+          },
+          "source_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Name",
+            "description": "Human label of the origin"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_document_v1_requests__request_id__documents_post"
+      },
+      "ChangePasswordRequest": {
+        "properties": {
+          "old_password": {
+            "type": "string",
+            "title": "Old Password",
+            "description": "Current password"
+          },
+          "new_password": {
+            "type": "string",
+            "minLength": 6,
+            "title": "New Password",
+            "description": "New password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "old_password",
+          "new_password"
+        ],
+        "title": "ChangePasswordRequest",
+        "description": "Payload to update an account's password."
+      },
+      "ConflictCreate": {
+        "properties": {
+          "information_a": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Information A",
+            "description": "First contradictory information ID (INF_...)"
+          },
+          "information_b": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Information B",
+            "description": "Second contradictory information ID (INF_...)"
+          },
+          "information_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Information Ids",
+            "description": "List of contradictory information IDs"
+          },
+          "claim_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Claim Ids",
+            "description": "Contradictory claim IDs"
+          },
+          "difference_type": {
+            "type": "string",
+            "enum": [
+              "value",
+              "definition",
+              "date",
+              "methodology",
+              "scope"
+            ],
+            "title": "Difference Type",
+            "default": "value"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "title": "Severity",
+            "default": "medium"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "investigated",
+              "unresolved",
+              "resolved"
+            ],
+            "title": "Status",
+            "default": "open"
+          },
+          "resolution_status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "investigated",
+              "unresolved",
+              "resolved"
+            ],
+            "title": "Resolution Status",
+            "default": "open"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Human readable description of the conflict"
+          },
+          "resolution_evidence": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Resolution Evidence",
+            "description": "Evidence resolving the contradiction"
+          }
+        },
+        "type": "object",
+        "title": "ConflictCreate",
+        "description": "Payload to record a detected conflict/contradiction."
+      },
+      "ConflictList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ConflictResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "conflicts": {
+            "items": {
+              "$ref": "#/components/schemas/ConflictResponse"
+            },
+            "type": "array",
+            "title": "Conflicts"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "ConflictList",
+        "description": "Container for a list of conflicts."
+      },
+      "ConflictResponse": {
+        "properties": {
+          "conflict_id": {
+            "type": "string",
+            "title": "Conflict Id",
+            "description": "Canonical CONFLICT_ prefixed ULID"
+          },
+          "information_a": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Information A"
+          },
+          "information_b": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Information B"
+          },
+          "information_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Information Ids"
+          },
+          "claim_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Claim Ids"
+          },
+          "difference_type": {
+            "type": "string",
+            "title": "Difference Type",
+            "default": "value"
+          },
+          "severity": {
+            "type": "string",
+            "title": "Severity",
+            "default": "medium"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "open"
+          },
+          "resolution_status": {
+            "type": "string",
+            "title": "Resolution Status",
+            "default": "open"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "resolution_evidence": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Resolution Evidence"
+          },
+          "detected_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detected At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "conflict_id"
+        ],
+        "title": "ConflictResponse",
+        "description": "Full representation of a Conflict per §14.3."
+      },
+      "DocumentList": {
+        "properties": {
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentResponse"
+            },
+            "type": "array",
+            "title": "Documents"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "DocumentList",
+        "description": "The documents of one request (or of the instance)."
+      },
+      "DocumentResponse": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Name"
+          },
+          "mime_type": {
+            "type": "string",
+            "title": "Mime Type"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "storage_ref": {
+            "type": "string",
+            "title": "Storage Ref"
+          },
+          "pii_classification": {
+            "$ref": "#/components/schemas/PiiClassification"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "source_id",
+          "mime_type",
+          "sha256",
+          "storage_ref"
+        ],
+        "title": "DocumentResponse",
+        "description": "One stored document as the API exposes it."
+      },
+      "DocumentUploadResponse": {
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Name"
+          },
+          "mime_type": {
+            "type": "string",
+            "title": "Mime Type"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "storage_ref": {
+            "type": "string",
+            "title": "Storage Ref"
+          },
+          "pii_classification": {
+            "$ref": "#/components/schemas/PiiClassification"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "idempotent": {
+            "type": "boolean",
+            "title": "Idempotent",
+            "default": false
+          },
+          "information_units": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Information Units"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Limitations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "source_id",
+          "mime_type",
+          "sha256",
+          "storage_ref"
+        ],
+        "title": "DocumentUploadResponse",
+        "description": "The document that was accepted, plus what the ingestion did with it."
+      },
+      "EvidenceCreate": {
+        "properties": {
+          "claim_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Id",
+            "description": "Associated claim ID (CLM_...)"
+          },
+          "information_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Information Id",
+            "description": "Associated information unit ID (INF_...)"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id",
+            "description": "Source ID (SRC_...)"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id",
+            "description": "Parent document ID (DOC_...)"
+          },
+          "dataset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Id",
+            "description": "Dataset ID (DATA_...)"
+          },
+          "transformation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transformation Id",
+            "description": "Transformation ID (TRF_...)"
+          },
+          "excerpt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excerpt",
+            "description": "Excerpt from the source"
+          },
+          "location": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Location",
+            "description": "Location within document or source"
+          },
+          "strength": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Strength",
+            "description": "Strength of the evidence (0-1)",
+            "default": 1.0
+          },
+          "confidence": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Confidence",
+            "description": "Confidence metrics"
+          },
+          "provenance": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Provenance",
+            "description": "Provenance metadata"
+          },
+          "epistemic_status": {
+            "type": "string",
+            "title": "Epistemic Status",
+            "description": "Epistemic status",
+            "default": "fact"
+          }
+        },
+        "type": "object",
+        "title": "EvidenceCreate",
+        "description": "Payload to create or record an Evidence."
+      },
+      "EvidenceList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceResponse"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "EvidenceList",
+        "description": "Container for a list of evidence items."
+      },
+      "EvidenceResponse": {
+        "properties": {
+          "evidence_id": {
+            "type": "string",
+            "title": "Evidence Id",
+            "description": "Canonical EVID_ prefixed ULID"
+          },
+          "claim_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Id"
+          },
+          "information_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Information Id"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "dataset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Id"
+          },
+          "transformation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transformation Id"
+          },
+          "excerpt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excerpt"
+          },
+          "location": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Location"
+          },
+          "strength": {
+            "type": "number",
+            "title": "Strength",
+            "default": 1.0
+          },
+          "confidence": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Confidence"
+          },
+          "provenance": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Provenance"
+          },
+          "epistemic_status": {
+            "type": "string",
+            "title": "Epistemic Status",
+            "default": "fact"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "evidence_id"
+        ],
+        "title": "EvidenceResponse",
+        "description": "Full representation of an Evidence per §14.2."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "InformationList": {
+        "properties": {
+          "units": {
+            "items": {
+              "$ref": "#/components/schemas/InformationUnitResponse"
+            },
+            "type": "array",
+            "title": "Units"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/InformationUnitResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "InformationList",
+        "description": "List container for information units."
+      },
+      "InformationRequestCreate": {
+        "properties": {
+          "objective": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Objective",
+            "description": "Primary research objective"
+          },
+          "request_type": {
+            "type": "string",
+            "enum": [
+              "research",
+              "source",
+              "evidence",
+              "data",
+              "artifact"
+            ],
+            "title": "Request Type",
+            "default": "research"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
+          },
+          "context": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Context"
+          },
+          "required_information": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Required Information"
+          },
+          "constraints": {
+            "$ref": "#/components/schemas/RequestConstraints"
+          },
+          "required_output": {
+            "$ref": "#/components/schemas/RequiredOutput"
+          },
+          "requester": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Requester"
+          },
+          "permissions": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Permissions"
+          },
+          "budget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RequestBudget"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Ttl Seconds",
+            "default": 900
+          },
+          "source_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Ref",
+            "description": "Object already in the INIS bucket (s3://bucket/cle), §5.2"
+          }
+        },
+        "type": "object",
+        "required": [
+          "objective"
+        ],
+        "title": "InformationRequestCreate",
+        "description": "Payload to submit a new InformationRequest."
+      },
+      "InformationRequestResponse": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "request_type": {
+            "type": "string",
+            "enum": [
+              "research",
+              "source",
+              "evidence",
+              "data",
+              "artifact"
+            ],
+            "title": "Request Type",
+            "default": "research"
+          },
+          "objective": {
+            "type": "string",
+            "title": "Objective"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
+          },
+          "context": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Context"
+          },
+          "required_information": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Required Information"
+          },
+          "constraints": {
+            "$ref": "#/components/schemas/RequestConstraints"
+          },
+          "required_output": {
+            "$ref": "#/components/schemas/RequiredOutput"
+          },
+          "requester": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Requester"
+          },
+          "permissions": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Permissions"
+          },
+          "budget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RequestBudget"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "received"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "pipeline_state": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline State"
+          },
+          "usage_report": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usage Report"
+          },
+          "resume_state": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resume State"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "objective"
+        ],
+        "title": "InformationRequestResponse",
+        "description": "Representation of an active or stored InformationRequest."
+      },
+      "InformationUnitCreate": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "text",
+              "number",
+              "table",
+              "record",
+              "image_region",
+              "document_fragment"
+            ],
+            "title": "Type",
+            "default": "text"
+          },
+          "content": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Content",
+            "description": "Extracted factual payload"
+          },
+          "raw_reference": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Raw Reference",
+            "description": "Raw reference and offsets"
+          },
+          "source_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Source Id",
+            "description": "Originating source ID (SRC_...)"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id",
+            "description": "Optional parent document ID (DOC_...)"
+          },
+          "dataset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Id",
+            "description": "Optional dataset ID (DATA_...)"
+          },
+          "location": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Location",
+            "description": "Location within the source/document"
+          },
+          "context": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Context",
+            "description": "Surrounding contextual data"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language",
+            "description": "Language code"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit",
+            "description": "Measurement unit if applicable"
+          },
+          "time": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Time",
+            "description": "Temporal metadata"
+          },
+          "classification": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Classification",
+            "description": "Security/content classification"
+          },
+          "quality": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Quality",
+            "description": "Quality evaluation metrics"
+          },
+          "confidence": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Confidence",
+            "description": "Confidence evaluation metrics"
+          },
+          "provenance": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Provenance",
+            "description": "Traceability and origin records"
+          },
+          "data_stage": {
+            "type": "string",
+            "enum": [
+              "raw",
+              "normalized",
+              "enriched",
+              "derived"
+            ],
+            "title": "Data Stage",
+            "default": "raw"
+          },
+          "epistemic_status": {
+            "type": "string",
+            "enum": [
+              "factual",
+              "hypothesis",
+              "assumption",
+              "intention",
+              "uncertainty"
+            ],
+            "title": "Epistemic Status",
+            "default": "factual"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_id"
+        ],
+        "title": "InformationUnitCreate",
+        "description": "Payload to create or ingest an Information Unit."
+      },
+      "InformationUnitResponse": {
+        "properties": {
+          "information_id": {
+            "type": "string",
+            "title": "Information Id",
+            "description": "Canonical INF_ prefixed ULID"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "text",
+              "number",
+              "table",
+              "record",
+              "image_region",
+              "document_fragment"
+            ],
+            "title": "Type",
+            "default": "text"
+          },
+          "content": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Content"
+          },
+          "raw_reference": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Raw Reference"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "dataset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dataset Id"
+          },
+          "location": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Location"
+          },
+          "context": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Context"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "time": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Time"
+          },
+          "classification": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Classification"
+          },
+          "quality": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Quality"
+          },
+          "confidence": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Confidence"
+          },
+          "provenance": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Provenance"
+          },
+          "data_stage": {
+            "type": "string",
+            "title": "Data Stage",
+            "default": "raw"
+          },
+          "epistemic_status": {
+            "type": "string",
+            "title": "Epistemic Status",
+            "default": "factual"
+          },
+          "versions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Versions"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "information_id",
+          "source_id"
+        ],
+        "title": "InformationUnitResponse",
+        "description": "Full representation of an Information Unit per §11."
+      },
+      "LoginRequest": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "title": "Username",
+            "description": "Username or actor identifier"
+          },
+          "password": {
+            "type": "string",
+            "title": "Password",
+            "description": "Password or secret"
+          }
+        },
+        "type": "object",
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "LoginRequest",
+        "description": "User credentials for authentication."
+      },
+      "MeResponse": {
+        "properties": {
+          "actor_id": {
+            "type": "string",
+            "title": "Actor Id",
+            "description": "Authenticated actor identifier"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scopes",
+            "description": "Granted authorization scopes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "actor_id"
+        ],
+        "title": "MeResponse",
+        "description": "Current authenticated actor information."
+      },
+      "PiiClassification": {
+        "properties": {
+          "sensitivity": {
+            "type": "string",
+            "title": "Sensitivity",
+            "default": "low"
+          },
+          "pii": {
+            "type": "boolean",
+            "title": "Pii",
+            "default": false
+          },
+          "categories": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Categories"
+          }
+        },
+        "type": "object",
+        "title": "PiiClassification",
+        "description": "§19.4 classification of what was received (name, metadata)."
+      },
+      "QualityCheckRequest": {
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "title": "Target Id",
+            "description": "Target entity ID (e.g. INF_..., DOC_..., DATA_...)"
+          },
+          "target_type": {
+            "type": "string",
+            "title": "Target Type",
+            "description": "Target entity type",
+            "default": "information_unit"
+          },
+          "checks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Checks",
+            "description": "Optional subset of checks to execute"
+          }
+        },
+        "type": "object",
+        "required": [
+          "target_id"
+        ],
+        "title": "QualityCheckRequest",
+        "description": "Payload to request a quality check on an Information Unit or target entity."
+      },
+      "QualityCheckResponse": {
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "title": "Target Id"
+          },
+          "passed": {
+            "type": "boolean",
+            "title": "Passed",
+            "default": true
+          },
+          "overall_score": {
+            "type": "number",
+            "title": "Overall Score",
+            "default": 1.0
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/QualityCheckResult"
+            },
+            "type": "array",
+            "title": "Checks"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timestamp"
+          }
+        },
+        "type": "object",
+        "required": [
+          "target_id"
+        ],
+        "title": "QualityCheckResponse",
+        "description": "Response returned after running quality checks per §13."
+      },
+      "QualityCheckResult": {
+        "properties": {
+          "check_name": {
+            "type": "string",
+            "title": "Check Name"
+          },
+          "passed": {
+            "type": "boolean",
+            "title": "Passed"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score",
+            "default": 1.0
+          },
+          "weight": {
+            "type": "number",
+            "title": "Weight",
+            "default": 0.15
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "check_name",
+          "passed"
+        ],
+        "title": "QualityCheckResult",
+        "description": "Result of an individual quality check rule per §13.2."
+      },
+      "QualityReportResponse": {
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "title": "Target Id"
+          },
+          "quality_score": {
+            "type": "number",
+            "title": "Quality Score",
+            "default": 1.0
+          },
+          "dimensions": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Dimensions"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/QualityCheckResult"
+            },
+            "type": "array",
+            "title": "Checks"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "evaluated"
+          },
+          "generated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "target_id"
+        ],
+        "title": "QualityReportResponse",
+        "description": "Comprehensive quality evaluation report per §13.3."
+      },
+      "RefreshRequest": {
+        "properties": {
+          "refresh_token": {
+            "type": "string",
+            "title": "Refresh Token",
+            "description": "JWT refresh token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "refresh_token"
+        ],
+        "title": "RefreshRequest",
+        "description": "Token refresh request."
+      },
+      "RequestBudget": {
+        "properties": {
+          "max_llm_tokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Llm Tokens"
+          },
+          "max_web_requests": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Web Requests"
+          },
+          "max_api_calls": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Api Calls"
+          },
+          "max_storage_bytes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Storage Bytes"
+          },
+          "max_compute_seconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Compute Seconds"
+          },
+          "max_total_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Total Cost Usd"
+          }
+        },
+        "type": "object",
+        "title": "RequestBudget",
+        "description": "Per-dimension budget of a request (§41.2 ``[CONFIG]``)."
+      },
+      "RequestConstraints": {
+        "properties": {
+          "date_range": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date Range"
+          },
+          "source_preferences": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Source Preferences"
+          },
+          "minimum_confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Minimum Confidence",
+            "default": 0.8
+          },
+          "maximum_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximum Cost"
+          },
+          "maximum_execution_time_seconds": {
+            "type": "integer",
+            "title": "Maximum Execution Time Seconds",
+            "default": 300
+          },
+          "maximum_iterations": {
+            "type": "integer",
+            "title": "Maximum Iterations",
+            "default": 12
+          },
+          "maximum_web_depth": {
+            "type": "integer",
+            "title": "Maximum Web Depth",
+            "default": 3
+          }
+        },
+        "type": "object",
+        "title": "RequestConstraints",
+        "description": "Wire representation of the §7 execution constraints."
+      },
+      "RequestProgress": {
+        "properties": {
+          "steps_total": {
+            "type": "integer",
+            "title": "Steps Total"
+          },
+          "steps_done": {
+            "type": "integer",
+            "title": "Steps Done"
+          },
+          "current_step": {
+            "type": "string",
+            "title": "Current Step"
+          },
+          "estimated_completion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Completion"
+          },
+          "partial_findings_available": {
+            "type": "boolean",
+            "title": "Partial Findings Available"
+          }
+        },
+        "type": "object",
+        "required": [
+          "steps_total",
+          "steps_done",
+          "current_step",
+          "partial_findings_available"
+        ],
+        "title": "RequestProgress",
+        "description": "Progress snapshot for an in-flight or completed Information Request."
+      },
+      "RequiredOutput": {
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "evidence_package",
+              "json",
+              "csv",
+              "xlsx",
+              "pdf",
+              "xml"
+            ],
+            "title": "Format",
+            "default": "evidence_package"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fields"
+          }
+        },
+        "type": "object",
+        "title": "RequiredOutput",
+        "description": "Wire representation of the §7 required delivery format."
+      },
+      "ResumeRequest": {
+        "properties": {
+          "resume_token": {
+            "type": "string",
+            "minLength": 8,
+            "title": "Resume Token",
+            "description": "Opaque token from a prior run"
+          }
+        },
+        "type": "object",
+        "required": [
+          "resume_token"
+        ],
+        "title": "ResumeRequest",
+        "description": "Payload to resume an interrupted Information Request (§41.1)."
+      },
+      "ResumeResponse": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "last_committed_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Committed Step"
+          },
+          "resumable": {
+            "type": "boolean",
+            "title": "Resumable"
+          },
+          "steps_done": {
+            "type": "integer",
+            "title": "Steps Done"
+          },
+          "steps_total": {
+            "type": "integer",
+            "title": "Steps Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "status",
+          "resumable",
+          "steps_done",
+          "steps_total"
+        ],
+        "title": "ResumeResponse",
+        "description": "Result of a successful resume operation (§41.1)."
+      },
+      "ResumeState": {
+        "properties": {
+          "resumable": {
+            "type": "boolean",
+            "title": "Resumable"
+          },
+          "last_committed_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Committed Step"
+          },
+          "last_committed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Committed At"
+          },
+          "resume_token": {
+            "type": "string",
+            "title": "Resume Token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "resumable",
+          "resume_token"
+        ],
+        "title": "ResumeState",
+        "description": "Resume projection of an Information Request (§41.1)."
+      },
+      "SourceCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Name",
+            "description": "Human-readable source name"
+          },
+          "source_type": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Source Type",
+            "description": "Source connector type (e.g. rest_api, web_page, postgres)"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url",
+            "description": "Source URI or network endpoint"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Functional summary of the source"
+          },
+          "trust_level": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Trust Level",
+            "description": "Base trustworthiness score between 0.0 and 1.0",
+            "default": 1.0
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Operational status: active, archived, deleted, superseded",
+            "default": "active"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata",
+            "description": "Arbitrary connector or source metadata"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "source_type"
+        ],
+        "title": "SourceCreate",
+        "description": "Payload to register a new Source."
+      },
+      "SourceList": {
+        "properties": {
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/SourceResponse"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SourceResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "SourceList",
+        "description": "List container for sources."
+      },
+      "SourceResponse": {
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "title": "Source Id",
+            "description": "Canonical SRC_ prefixed ULID"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "source_type": {
+            "type": "string",
+            "title": "Source Type"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "trust_level": {
+            "type": "number",
+            "title": "Trust Level",
+            "default": 1.0
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "active"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_id",
+          "name",
+          "source_type"
+        ],
+        "title": "SourceResponse",
+        "description": "Representation of an active or stored Source."
+      },
+      "TokenResponse": {
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "title": "Access Token",
+            "description": "JWT access token"
+          },
+          "token_type": {
+            "type": "string",
+            "title": "Token Type",
+            "description": "Token type",
+            "default": "Bearer"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In",
+            "description": "Expiration time in seconds",
+            "default": 3600
+          },
+          "refresh_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refresh Token",
+            "description": "Optional refresh token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "access_token"
+        ],
+        "title": "TokenResponse",
+        "description": "Authentication token response per §19.2."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}
