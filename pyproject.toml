@@ -56,6 +56,13 @@ dev = [
     "mypy",
     "aiosqlite>=0.19",
     "redis>=5",
+    # §41.13 — le harnais de charge sert l'application sur un vrai socket
+    # (`uvicorn.Server`) pour mesurer le parcours réel : le serveur est donc
+    # requis par les tests. Il n'est pas déclaré en production parce que l'image
+    # le fournit séparément (`docker/Dockerfile.dev`), ce qui est signalé comme
+    # écart dans le rapport de lot (l'image de production, `pip install .`, ne
+    # l'installe pas alors que son `CMD` l'appelle).
+    "uvicorn>=0.30",
 ]
 
 # ─────────────────────────────────────────────────────────────
