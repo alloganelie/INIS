@@ -1,44 +1,32 @@
-"""mTLS certificate validation per INIS §19.2."""
+"""§19.2 — chemin d'import historique vers le validateur mTLS.
 
-from typing import Any
+L'implémentation réelle vit dans :mod:`app.security.certificates.validator` (le
+plan L8 place la validation X.509 dans ``app/security/certificates/``). Ce module
+ne fait que **ré-exporter** la même classe : il n'existe pas de seconde
+architecture d'authentification, et le nom ``MTLSCertValidator`` reste valide pour
+les appelants historiques comme pour ``app.security``.
 
-from app.core.errors import ValidationError
+Ce qui a changé, et pourquoi : l'ancienne implémentation acceptait un
+dictionnaire ``{"subject": {"cn": ...}}`` et ne vérifiait que le préfixe du nom
+commun. Un ``CN`` n'est pas une preuve — n'importe qui peut écrire le bon nom dans
+un certificat auto-signé. Le validateur exige désormais un certificat PEM réel,
+vérifie sa signature jusqu'à une ancre de confiance configurée, sa fenêtre de
+validité, sa non-révocation, puis seulement son identité.
+"""
 
+from __future__ import annotations
 
-class MTLSCertValidator:
-    """Validate mTLS certificates for inter-agent authentication."""
+from app.security.certificates.validator import (
+    AGENT_IDENTITY_NAMESPACE,
+    AgentCertificate,
+    CertificateRejected,
+    MTLSCertValidator,
+)
 
-    def __init__(self, trusted_cas: list[str] | None = None):
-        """Initialize mTLS certificate validator.
+__all__ = [
+    "AGENT_IDENTITY_NAMESPACE",
+    "AgentCertificate",
+    "CertificateRejected",
+    "MTLSCertValidator",
+]
 
-        Args:
-            trusted_cas: List of trusted CA certificates (stub for V1)
-        """
-        self.trusted_cas = trusted_cas or []
-
-    def validate(self, cert: dict[str, Any]) -> str:
-        """Validate mTLS certificate and return agent ID.
-
-        Args:
-            cert: Certificate dictionary with subject, issuer, etc.
-
-        Returns:
-            Agent ID if certificate is valid
-
-        Raises:
-            ValidationError: If certificate is invalid
-        """
-        if not cert or "subject" not in cert:
-            raise ValidationError("Invalid certificate: missing subject")
-
-        subject = cert["subject"]
-
-        if "cn" not in subject:
-            raise ValidationError("Invalid certificate: missing common name")
-
-        agent_id = subject["cn"]
-
-        if not agent_id.startswith("AGENT_"):
-            raise ValidationError("Invalid certificate: CN must start with AGENT_")
-
-        return agent_id
