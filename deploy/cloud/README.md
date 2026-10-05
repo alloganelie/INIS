@@ -21,8 +21,8 @@ The following environment variables configure the INIS API, workers, message bro
 ### Core Database & Caching
 | Variable | Description | Example |
 |---|---|---|
-| `DATABASE_URL` | PostgreSQL connection string (asyncpg/psycopg) | `postgresql://inis_user:secret@postgres.cloud:5432/inis_db` |
-| `INIS_DATABASE_URL` | Explicit INIS database URI for repository layer | `postgresql://inis_user:secret@postgres.cloud:5432/inis_db` |
+| `DATABASE_URL` | PostgreSQL connection string — **driver `asyncpg` obligatoire** (l'app et Alembic construisent un moteur async) | `postgresql+asyncpg://inis_user:secret@postgres.cloud:5432/inis_db` |
+| `INIS_DATABASE_URL` | Canonical database URL for the repository layer and the async engine (§4.2) | `postgresql+asyncpg://inis_user:secret@postgres.cloud:5432/inis_db` |
 | `REDIS_URL` | Redis endpoint for cache, rate limiting, and ephemeral state | `redis://:redis_secret@redis.cloud:6379/0` |
 
 ### Message Broker (AMQP / RabbitMQ)

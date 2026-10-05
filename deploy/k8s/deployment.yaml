@@ -53,8 +53,12 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 3
           readinessProbe:
+            # §32/§34 — la sonde de disponibilité interroge le contrat réel
+            # (database, redis/Valkey, broker, llm). `/v1/status` répond
+            # `ready` sans rien vérifier : l'utiliser rendait un pod « prêt »
+            # même base ou broker indisponible.
             httpGet:
-              path: /v1/status
+              path: /v1/health/ready
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5
