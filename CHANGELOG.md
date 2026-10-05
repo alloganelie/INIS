@@ -14,6 +14,20 @@ Ce fichier conserve uniquement les changements importants de gouvernance, archit
 - Migration:
 - Tests:
 
+### 2026-10-04 — Horloge unique (dette D10)
+
+- Added:
+  - `app/core/time.py::utc_now()` — seule lecture de l'horloge de la plateforme
+    (UTC, *timezone-aware*, microseconde ; aucune abstraction ajoutée).
+- Changed:
+  - 74 fichiers migrés : `datetime.now(UTC)` / `datetime.now(timezone.utc)`
+    (114 occurrences) et 5 helpers locaux (`_utc_now`) remplacés par le helper
+    central ; plus aucune génération directe dans `app/`.
+- Tests:
+  - `tests/unit/core/test_time.py` (7) dont une garde qui interdit la réapparition
+    d'une lecture directe de l'horloge.
+  - Suite complète Python 3.12 : **2815 passed / 5 skipped / 0 failed**.
+
 ### 2026-10-04 — Clôture produit (conformance V1)
 
 - Added:
