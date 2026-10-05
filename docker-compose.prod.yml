@@ -43,8 +43,14 @@ services:
       INIS_AUTH_ENABLED: ${INIS_AUTH_ENABLED:-true}
       INIS_RATE_LIMIT_ENABLED: ${INIS_RATE_LIMIT_ENABLED:-true}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      # §4.2 — le moteur de l'application ET celui d'Alembic sont **async**
+      # (`app/storage/database/engine.py`, `migrations/env.py`) : les deux URL
+      # doivent donc porter le driver `asyncpg`. Une URL `postgresql://` fait
+      # échouer `alembic upgrade head` (`No module named 'psycopg'`).
+      # `INIS_DATABASE_URL` est la variable canonique ; `DATABASE_URL` reste
+      # l'alias accepté par les outils, aligné sur la même valeur async.
       INIS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       SERPER_API_KEY: ${SERPER_API_KEY:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
@@ -56,7 +62,10 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # Même règle que pour l'API : Alembic construit un moteur async, donc le
+      # driver `asyncpg` est obligatoire.
+      INIS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     depends_on:
       postgres:
         condition: service_healthy

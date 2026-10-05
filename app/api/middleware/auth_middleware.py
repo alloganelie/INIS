@@ -24,6 +24,12 @@ EXEMPT_EXACT_PATHS = {
     "/v1/openapi.json",
     "/v1/auth/login",
     "/v1/auth/refresh",
+    # §32/§34 — opérationnel, jamais authentifié : l'orchestrateur (readiness
+    # k8s, healthcheck) doit pouvoir interroger l'état des sous-systèmes sans
+    # porter d'identifiant. Le rate limiter l'exempte déjà explicitement
+    # (`rate_limit_middleware.EXTRA_EXEMPT_PREFIXES`) ; l'auth doit faire de même,
+    # sinon `/v1/health/ready` répond 401 et le pod n'est jamais prêt.
+    "/v1/status",
 }
 
 EXEMPT_PREFIXES = (
@@ -35,6 +41,8 @@ EXEMPT_PREFIXES = (
     "/openapi",
     "/v1/auth/login",
     "/v1/auth/refresh",
+    # `/v1/health` et `/v1/health/ready` — voir `EXEMPT_EXACT_PATHS`.
+    "/v1/health",
 )
 
 AUTH_ENABLED = os.getenv("INIS_AUTH_ENABLED", "false").lower() in ("1", "true", "yes")
