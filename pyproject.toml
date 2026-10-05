@@ -51,6 +51,13 @@ dependencies = [
     "litellm>=1.83.10",      # CVE-2026-42208 (SQL injection)
     "cryptography>=46.0.6",  # transitive via boto3
     "urllib3>=2.5.0",        # transitive via boto3
+    # §19/§41.5 — le store de rate limiting et le cache L2 passent par
+    # `REDIS_URL` (serveur Valkey, protocole Redis). Sans ce paquet dans
+    # l'image de production, `REDIS_URL` configuré est inutilisable : le
+    # limiter retombe silencieusement en per-process et `/v1/health/ready`
+    # répond `not_ready` (mesuré). C'est donc une dépendance de **production**,
+    # pas seulement de test.
+    "redis>=5",
 ]
 
 [project.optional-dependencies]
@@ -61,7 +68,6 @@ dev = [
     "ruff",
     "mypy",
     "aiosqlite>=0.19",
-    "redis>=5",
 ]
 
 # ─────────────────────────────────────────────────────────────
