@@ -11,7 +11,7 @@ re-acquire what the interrupted run already held.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -26,6 +26,7 @@ from sqlalchemy import (
     select,
 )
 
+from app.core.time import utc_now
 from app.storage.repositories.table_repository import (
     JSON_TYPE,
     TableRepository,
@@ -128,7 +129,7 @@ class CheckpointRepository(TableRepository):
         from its own content.
         """
         await cls.ensure_table(engine)
-        now = datetime.now(UTC)
+        now = utc_now()
         row = {
             "checkpoint_id": cls.checkpoint_id(request_id),
             "request_id": request_id,

@@ -11,9 +11,10 @@ silently pretends to persist would be worse than no cache.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
+from app.core.time import utc_now
 from app.storage.cache.cache_store import L2, CacheEntry
 from app.storage.database.engine import get_default_engine
 from app.storage.repositories.cache_repository import CacheEntryRepository
@@ -50,7 +51,7 @@ class PostgresCacheBackend:
             value=row.get("payload"),
             level=str(row.get("level") or L2),
             source_freshness=row.get("source_freshness"),
-            created_at=row.get("created_at") or datetime.now(UTC),
+            created_at=row.get("created_at") or utc_now(),
             expires_at=row.get("expires_at"),
             source_id=row.get("source_id"),
         )
@@ -62,7 +63,7 @@ class PostgresCacheBackend:
             return False
         expires_at = entry.expires_at
         if expires_at is None and ttl_seconds > 0:
-            expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+            expires_at = utc_now() + timedelta(seconds=ttl_seconds)
         await CacheEntryRepository.put(
             engine,
             {

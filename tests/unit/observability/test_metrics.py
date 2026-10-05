@@ -2,8 +2,7 @@
 
 import pytest
 
-from app.observability.metrics import METRIC_NAMES
-from app.observability.metrics import MetricsRegistry
+from app.observability.metrics import METRIC_NAMES, MetricsRegistry
 from app.observability.metrics_endpoint import get_metrics
 
 
@@ -58,3 +57,37 @@ class TestMetrics:
         assert payload["service"] == "inis"
         assert "generated_at" in payload
         assert payload["metrics"]["llm_cost"]["count"] == 3
+
+
+class TestBenchmarkThresholds:
+    """§41.13 — the eight benchmarks are exposed under ``/v1/metrics → benchmarks``.
+
+    They are *thresholds* (configuration + deployment targets), never measured
+    results. §41.13 names exactly eight; none may stay in an unreachable zone.
+    """
+
+    #: §41.13 names → whether the exposed value is a count (int) or a target (float).
+    EXPECTED_NAMES = (
+        ("max_plan_steps", int),
+        ("max_parallel_tool_calls", int),
+        ("max_information_units_per_request", int),
+        ("target_requests_per_second", float),
+        ("vector_search_latency_p99_ms", float),
+        ("postgres_query_latency_p99_ms", float),
+        ("amqp_message_latency_p99_ms", float),
+        ("llm_call_latency_p99_ms", float),
+    )
+
+    def test_the_eight_names_are_exposed_with_the_right_kind(self) -> None:
+        from app.api.v1.system.metrics_router import _benchmarks
+
+        benchmarks = _benchmarks()
+        expected = dict(self.EXPECTED_NAMES)
+
+        assert set(benchmarks) == set(expected), "§41.13 names eight benchmarks, no more, no less"
+        for name, kind in expected.items():
+            assert isinstance(benchmarks[name], kind), f"{name} should be a {kind.__name__}"
+        assert benchmarks["max_information_units_per_request"] > 0
+        assert benchmarks["max_plan_steps"] > 0
+        assert benchmarks["max_parallel_tool_calls"] > 0
+

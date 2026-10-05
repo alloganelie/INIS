@@ -1,11 +1,12 @@
 """Domain representation of a delivered InformationPackage."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from app.core.errors import ValidationError
+from app.core.time import utc_now
 
 
 class InformationPackage(BaseModel):
@@ -16,7 +17,7 @@ class InformationPackage(BaseModel):
     units: list[dict]
     confidence: dict
     provenance: dict
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=utc_now)
     data_stage: Literal["raw", "normalized", "enriched", "derived"]
 
     def validate(self) -> None:

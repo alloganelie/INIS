@@ -24,14 +24,12 @@ import base64
 import hashlib
 import hmac
 import os
-import secrets
-import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
-from typing import Literal
-from typing import Protocol
+from typing import Any, Literal, Protocol
+
+from app.core.time import utc_now as _utc_now
 
 #: The authentication mechanisms of §41.4.
 AuthType = Literal["oauth2", "api_key", "basic", "certificate", "none"]
@@ -69,10 +67,6 @@ class CredentialNotFound(KeyError):
 
 class VaultError(RuntimeError):
     """Raised when the vault cannot fulfil a request."""
-
-
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
 
 
 def _iso_z(moment: datetime) -> str:

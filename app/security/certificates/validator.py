@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from cryptography import x509
@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.x509.oid import ExtensionOID, NameOID
 
 from app.core.errors import InfrastructureError, ValidationError
+from app.core.time import utc_now
 
 #: Espace de nommage des identités d'agent, hérité de l'implémentation d'origine
 #: (`app/security/authn/mtls_validator.py`) : le `CN` du certificat client est
@@ -153,7 +154,7 @@ class MTLSCertValidator:
         self._trust_anchors = _load_anchors(trusted_cas)
         self._revoked_serials = frozenset(int(serial) for serial in revoked_serials)
         self._crls = _load_crls(crl)
-        self._clock = clock or (lambda: datetime.now(UTC))
+        self._clock = clock or (utc_now)
         self._require_namespace = require_agent_namespace
 
     @property

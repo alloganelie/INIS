@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pydantic import BaseModel, Field, field_validator
 from ulid import ULID as PythonUlid
 
+from app.core.time import utc_now
 from app.domain.enums.account_status import AccountStatus
 from app.domain.value_objects.email import Email
 
@@ -18,8 +19,8 @@ class Account(BaseModel):
     password_hash: str
     status: AccountStatus = AccountStatus.ACTIVE
     scopes: list[str] = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
     @field_validator("account_id")
     @classmethod

@@ -16,10 +16,10 @@ cycle never swallows an error to look successful.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable, Iterable, Mapping
 
 from app.core.errors import ValidationError
+from app.core.time import utc_now
 
 #: The §28 stages in spec order (stable identifiers for plans and traces).
 CYCLE_STAGES: tuple[str, ...] = (
@@ -52,7 +52,7 @@ StageHandler = Callable[["RequestCycle"], Awaitable[Any]]
 
 
 def _utc_timestamp() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    return utc_now().isoformat().replace("+00:00", "Z")
 
 
 @dataclass(slots=True)

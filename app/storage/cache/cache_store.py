@@ -27,8 +27,10 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any, Protocol
+
+from app.core.time import utc_now as _utc_now
 
 #: The two cache levels handled here (L3 = pgvector lives elsewhere).
 L1 = "L1"
@@ -49,10 +51,6 @@ INVALIDATION_TRIGGERS: tuple[str, ...] = (
     "on_conflict_detected",
     "on_quality_failure",
 )
-
-
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
 
 
 def _iso_z(moment: datetime) -> str:

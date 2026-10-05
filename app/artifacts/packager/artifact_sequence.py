@@ -20,6 +20,7 @@ import threading
 from datetime import UTC, datetime
 
 from app.core.errors import ValidationError
+from app.core.time import utc_now
 
 __all__ = [
     "ANNUAL_CAPACITY",
@@ -42,7 +43,7 @@ ANNUAL_CAPACITY = 10**SEQUENCE_WIDTH
 
 def artifact_year(moment: datetime | None = None) -> int:
     """Return the UTC calendar year a new artifact belongs to (§24.2)."""
-    current = moment or datetime.now(UTC)
+    current = moment or utc_now()
     if current.tzinfo is None:
         current = current.replace(tzinfo=UTC)
     return current.astimezone(UTC).year

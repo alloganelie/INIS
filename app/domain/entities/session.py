@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from pydantic import BaseModel, field_validator
 from ulid import ULID as PythonUlid
 
+from app.core.time import utc_now
+
 
 class Session(BaseModel):
     """A refresh-token session belonging to an account."""
@@ -48,7 +50,7 @@ class Session(BaseModel):
 
     def is_expired(self) -> bool:
         """Return whether this session has reached its UTC expiry time."""
-        return datetime.now(UTC) >= self.expires_at
+        return utc_now() >= self.expires_at
 
     def revoke(self) -> None:
         """Revoke this session so its refresh token can no longer be used."""

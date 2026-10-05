@@ -1,0 +1,14 @@
+# gitleaks configuration for INIS (§19 — no real secret may be committed).
+#
+# The CI scan (`security.yml`) targets *tracked* files through git, so the local
+# `.env` (gitignored) is never scanned. The only findings gitleaks raises on the
+# tracked tree are placeholders and a test fixture — allowlisted here with an
+# explicit reason, never by disabling a rule globally.
+title = "INIS gitleaks config"
+
+[allowlist]
+description = "Placeholders d'exemple (*.example) et fixture de test : aucune clé réelle"
+paths = [
+  '''^deploy/cloud/.*\.example$''',
+  '''^tests/security/test_rate_limit_persistent\.py$''',
+]

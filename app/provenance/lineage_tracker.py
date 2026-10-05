@@ -9,12 +9,12 @@ being silently lost.
 
 import asyncio
 import json
-from datetime import UTC, datetime
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.errors import InfrastructureError
+from app.core.time import utc_now
 
 
 class LineageTracker:
@@ -174,7 +174,7 @@ class LineageTracker:
             "tool": None,
             "tool_version": None,
             "parameters": json.dumps({}),
-            "timestamp": datetime.now(UTC),
+            "timestamp": utc_now(),
             "result": None,
             "justification": None,
         }

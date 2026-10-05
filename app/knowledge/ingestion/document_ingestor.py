@@ -36,11 +36,11 @@ from __future__ import annotations
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from app.core.errors import InisError
+from app.core.time import utc_now
 from app.domain.entities.dataset import Dataset
 from app.domain.entities.information_unit import InformationUnit
 from app.domain.value_objects.ulid import ULID
@@ -158,7 +158,7 @@ class IngestionOutcome:
 
 def _now() -> str:
     """Return the current UTC instant as an ISO 8601 string."""
-    return datetime.now(UTC).isoformat()
+    return utc_now().isoformat()
 
 
 def _row_text(row: dict) -> str:

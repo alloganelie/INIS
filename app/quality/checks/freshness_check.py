@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from app.core.time import utc_now
 from app.quality.checks import QualityResult, quality_result, target_mapping
 
 
@@ -22,7 +23,7 @@ class FreshnessCheck:
                 parsed = parsed.replace(tzinfo=UTC)
         except ValueError:
             return quality_result(0.0, {"updated_at": timestamp}, ["updated_at is invalid"])
-        age = datetime.now(UTC) - parsed.astimezone(UTC)
+        age = utc_now() - parsed.astimezone(UTC)
         stale = age > self._max_age
         # §34 — every freshness decision feeds the stale_data_rate gauge.
         try:

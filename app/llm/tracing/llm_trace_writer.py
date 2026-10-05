@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import Column, DateTime, Float, Integer, MetaData, String, Table, Text
 from ulid import ULID as UlidFactory
 
 from app.core.errors import ValidationError
+from app.core.time import utc_now
 from app.llm.tracing.prompt_hasher import hash_prompt, is_prompt_hash
 
 _METADATA = MetaData()
@@ -100,7 +100,7 @@ class LLMTraceWriter:
             "decision_summary": decision_summary,
             "alternatives_considered": list(alternatives_considered or []),
             "confidence_in_decision": confidence_in_decision,
-            "timestamp": datetime.now(UTC),
+            "timestamp": utc_now(),
         }
 
     def write(self, trace: Mapping[str, Any]) -> dict[str, Any]:
@@ -130,7 +130,7 @@ class LLMTraceWriter:
             raise ValidationError("confidence_in_decision must be a float in 0-1")
         stored: dict[str, Any] = dict(trace)
         stored.setdefault("llm_decision_id", str(UlidFactory()))
-        stored.setdefault("timestamp", datetime.now(UTC))
+        stored.setdefault("timestamp", utc_now())
         stored.setdefault("input_token_count", 0)
         stored.setdefault("output_token_count", 0)
         stored.setdefault("latency_ms", 0)
@@ -189,7 +189,7 @@ class LLMTraceWriter:
                     trace.get("alternatives_considered", [])
                 ),
                 "confidence_in_decision": float(trace.get("confidence_in_decision", 0.0)),
-                "timestamp": trace.get("timestamp") or datetime.now(UTC),
+                "timestamp": trace.get("timestamp") or utc_now(),
             }
             for trace in traces
         ]

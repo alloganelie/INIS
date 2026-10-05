@@ -1,11 +1,12 @@
 """In-memory tracking of execution budgets with optional persistence."""
 
-from datetime import UTC, datetime
+import json
 from time import monotonic
 from typing import Any
 
-import json
 from sqlalchemy import text
+
+from app.core.time import utc_now
 
 
 class BudgetTracker:
@@ -47,7 +48,7 @@ class BudgetTracker:
             "iterations": self.iterations,
             "cost_usd": self.cost,
             "elapsed_seconds": monotonic() - self._started_at,
-            "timestamp": datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+            "timestamp": utc_now().isoformat(timespec="microseconds").replace("+00:00", "Z"),
         }
 
     async def persist_usage(self, engine: Any) -> None:
@@ -80,6 +81,6 @@ class BudgetTracker:
                     "request_id": self.request_id,
                     "usage": usage_json,
                     "total_cost_usd": self.cost,
-                    "recorded_at": datetime.now(UTC),
+                    "recorded_at": utc_now(),
                 },
             )

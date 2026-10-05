@@ -6,7 +6,6 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncGenerator, Mapping, Sequence
-from datetime import UTC, datetime
 from typing import Any
 
 from ulid import ULID as PythonUlid
@@ -21,6 +20,7 @@ from app.artifacts.delivery.delivery_service import deliver_artifacts
 from app.core.errors import InisError
 from app.core.logging import get_logger
 from app.core.statuses import CANCELLED_STATUS, resolve_delivery_status
+from app.core.time import utc_now
 from app.core.version import API_VERSION
 from app.domain.value_objects.ulid import ULID
 from app.governance.budget.quotas import (
@@ -524,7 +524,7 @@ class PipelineRunner:
             namespace,
             *parts,
             value=value,
-            source_freshness=datetime.now(UTC),
+            source_freshness=utc_now(),
             source_id=source_id,
         )
 
@@ -642,7 +642,7 @@ class PipelineRunner:
         killed mid-write. Cancelling twice returns the same ``CANCELLED``
         state, so the endpoint never depends on the caller's timing.
         """
-        cancelled_at = datetime.now(UTC).isoformat()
+        cancelled_at = utc_now().isoformat()
         state = dict(self._run_states.get(request_id, {}))
         state.update(
             {
@@ -729,7 +729,7 @@ class PipelineRunner:
             {
                 "status": "resumed",
                 "resumed_from_step": checkpoint.step_id if checkpoint else None,
-                "resumed_at": datetime.now(UTC).isoformat(),
+                "resumed_at": utc_now().isoformat(),
             }
         )
         self._run_states[request_id] = state
@@ -968,7 +968,7 @@ class PipelineRunner:
                 "step": "received",
                 "status": "received",
                 "request_id": request_id,
-                "timestamp": datetime.now(UTC).isoformat(),
+                "timestamp": utc_now().isoformat(),
             }
             yield f"data: {json.dumps(init_event)}\n\n"
         else:
@@ -1242,7 +1242,7 @@ class PipelineRunner:
             else None
         )
         start_time = time.monotonic()
-        start_iso = datetime.now(UTC).isoformat()
+        start_iso = utc_now().isoformat()
         self._running.add(request_id)
 
         objective = getattr(payload, "objective", None) or (
@@ -1840,7 +1840,7 @@ class PipelineRunner:
                                 # §15.1 — the acquisition instant feeds the
                                 # freshness dimension; an ISO 8601 UTC stamp,
                                 # never a guessed publication date.
-                                "retrieved_at": datetime.now(UTC).isoformat(),
+                                "retrieved_at": utc_now().isoformat(),
                             })
                             step_output_snippets.append(
                                 f"[{result.title}] {snippet}"
@@ -1915,7 +1915,7 @@ class PipelineRunner:
         # because §15 scores what was actually collected. The aggregate internal
         # unit stays first: it is the synthesis of the run, never a substitute
         # for the information that was really acquired.
-        now_iso = datetime.now(UTC).isoformat()
+        now_iso = utc_now().isoformat()
         inf_id = ULID.new("INF_")
         evid_id = ULID.new("EVID_")
         resp_id = f"RESP_{PythonUlid()}"

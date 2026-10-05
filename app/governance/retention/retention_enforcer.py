@@ -8,9 +8,10 @@ the storage layer (logical delete per §0.2 invariant 5).
 
 from __future__ import annotations
 
-from datetime import datetime
-from datetime import timezone
+from datetime import datetime, timezone
 from typing import Any
+
+from app.core.time import utc_now
 
 #: Development-default retention durations in days (§41.9 keys).
 DEFAULT_POLICIES: dict[str, int] = {
@@ -75,7 +76,7 @@ class RetentionEnforcer:
         now: datetime | None = None,
     ) -> bool:
         """Return True when a record is past its retention duration."""
-        moment = now or datetime.now(timezone.utc)
+        moment = now or utc_now()
         if moment.tzinfo is None:
             moment = moment.replace(tzinfo=timezone.utc)
         return moment >= self.expiry_date(resource_type, created_at)

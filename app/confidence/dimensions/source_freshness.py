@@ -7,8 +7,9 @@ Accepts dicts and attribute objects. Dates are ISO 8601 strings.
 
 from __future__ import annotations
 
-from datetime import datetime
-from datetime import timezone
+from datetime import datetime, timezone
+
+from app.core.time import utc_now
 
 _FRESHNESS_WINDOW_DAYS = 365.0
 
@@ -43,7 +44,7 @@ def compute(source: object, now: datetime | None = None) -> float:
     """Return the 0..1 freshness of a source (§15.1)."""
     if source is None:
         raise ValueError("source must not be None")
-    moment = now or datetime.now(timezone.utc)
+    moment = now or utc_now()
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
     raw = _read_date(source)

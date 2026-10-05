@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.v1.evidence.schemas import (
@@ -11,6 +9,7 @@ from app.api.v1.evidence.schemas import (
     EvidenceList,
     EvidenceResponse,
 )
+from app.core.time import utc_now
 from app.domain.value_objects.ulid import ULID
 from app.storage.repositories.evidence_repository import (
     EvidenceRepository,
@@ -63,7 +62,7 @@ async def list_evidence(
 async def create_evidence(payload: EvidenceCreate) -> EvidenceResponse:
     """Record a new evidence entry and return its generated evidence_id."""
     evidence_id = ULID.new("EVID_")
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now().isoformat()
     evidence_dict = {
         "evidence_id": evidence_id,
         "claim_id": payload.claim_id,

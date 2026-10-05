@@ -13,7 +13,6 @@ resource that says so** (``content = {"action": "archive", ...}``,
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -29,6 +28,7 @@ from sqlalchemy import (
     update,
 )
 
+from app.core.time import utc_now
 from app.domain.value_objects.ulid import ULID
 from app.storage.repositories.table_repository import (
     JSON_TYPE,
@@ -104,7 +104,7 @@ class InformationVersionRepository(TableRepository):
             version=next_version,
             content=dict(content),
             superseded=False,
-            created_at=datetime.now(UTC),
+            created_at=utc_now(),
         )
         async with engine.begin() as conn:
             await conn.execute(statement)
@@ -184,7 +184,7 @@ class InformationVersionRepository(TableRepository):
                     "version": version,
                     "content": item,
                     "superseded": False,
-                    "created_at": as_datetime(item.get("timestamp"), datetime.now(UTC)),
+                    "created_at": as_datetime(item.get("timestamp"), utc_now()),
                 }
             )
         return await insert_rows(session, information_versions_table, rows)

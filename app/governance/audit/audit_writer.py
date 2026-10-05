@@ -1,7 +1,7 @@
 """In-memory and database-backed writers for INIS audit events."""
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import text
@@ -10,8 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from app.core.errors import ValidationError
 from app.core.hashing import after_hash as compute_after_hash
 from app.core.hashing import before_hash as compute_before_hash
+from app.core.time import utc_now
 from app.domain.value_objects.ulid import ULID
-
 
 _REQUIRED_EVENT_FIELDS = frozenset(
     {
@@ -81,7 +81,7 @@ class AuditWriter:
         elif isinstance(raw_timestamp, datetime):
             parsed_dt = raw_timestamp
         else:
-            parsed_dt = datetime.now(UTC)
+            parsed_dt = utc_now()
 
         insert_statement = text(
             """
@@ -179,4 +179,4 @@ class AuditWriter:
     @staticmethod
     def _utc_timestamp() -> str:
         """Format timestamps according to the INIS UTC identifier convention."""
-        return datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+        return utc_now().isoformat(timespec="microseconds").replace("+00:00", "Z")

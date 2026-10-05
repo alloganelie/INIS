@@ -8,7 +8,6 @@ is used **only** when no database is configured at all.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Response, status
@@ -21,6 +20,7 @@ from app.api.v1.accounts.schemas import (
     AccountUpdateRequest,
     ChangePasswordRequest,
 )
+from app.core.time import utc_now
 from app.storage.database.session import account_repository, database_configured
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
@@ -163,7 +163,7 @@ async def create_account(payload: AccountCreateRequest) -> AccountResponse:
             )
 
     account_id = f"ACC_{PythonUlid()}"
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now().isoformat()
     account_data = {
         "id": account_id,
         "username": payload.username,
@@ -270,7 +270,7 @@ async def update_account(account_id: str, payload: AccountUpdateRequest) -> Acco
         account["is_active"] = payload.is_active
         account["status"] = "active" if payload.is_active else "deleted"
 
-    account["updated_at"] = datetime.now(timezone.utc).isoformat()
+    account["updated_at"] = utc_now().isoformat()
     return AccountResponse(**account)
 
 
@@ -301,7 +301,7 @@ async def delete_account(account_id: str) -> Response:
         )
     account["is_active"] = False
     account["status"] = "deleted"
-    account["updated_at"] = datetime.now(timezone.utc).isoformat()
+    account["updated_at"] = utc_now().isoformat()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -342,7 +342,7 @@ async def change_password(account_id: str, payload: ChangePasswordRequest) -> di
             detail="Incorrect current password",
         )
     account["hashed_password"] = PasswordHasher.hash(payload.new_password)
-    account["updated_at"] = datetime.now(timezone.utc).isoformat()
+    account["updated_at"] = utc_now().isoformat()
     return {"status": "success", "message": "Password changed successfully"}
 
 

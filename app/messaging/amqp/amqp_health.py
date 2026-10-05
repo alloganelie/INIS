@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime
-from datetime import timezone
-from typing import Any
-from typing import Protocol
+from typing import Any, Protocol
 
+from app.core.time import utc_now
 from app.messaging.amqp.topology import MAIN_QUEUE
 
 
@@ -34,7 +32,7 @@ async def health_check(
     """
     _ = timeout_seconds
     started = time.perf_counter()
-    checked_at = datetime.now(timezone.utc).isoformat()
+    checked_at = utc_now().isoformat()
     if broker is None:
         return {
             "status": "unknown",

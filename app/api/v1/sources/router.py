@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.v1.sources.repository import SourceRepository, get_database_engine
 from app.api.v1.sources.schemas import SourceCreate, SourceList, SourceResponse
+from app.core.time import utc_now
 from app.domain.value_objects.ulid import ULID
 
 router = APIRouter(prefix="/sources", tags=["sources"])
@@ -43,7 +42,7 @@ async def list_sources(source_type: str | None = None) -> SourceList:
 async def create_source(payload: SourceCreate) -> SourceResponse:
     """Register a new source and return its generated source_id."""
     src_id = ULID.new("SRC_")
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now().isoformat()
     source_dict = {
         "source_id": src_id,
         "name": payload.name,

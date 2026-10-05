@@ -1,11 +1,12 @@
 """Repository for Session entity per §19.2 (authentication)."""
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import Result, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time import utc_now
 from app.storage.models.account import Session
 
 
@@ -97,7 +98,7 @@ class SessionRepository:
         await self._session.execute(
             update(Session)
             .where(Session.session_id == session_id)
-            .values(revoked_at=datetime.now(timezone.utc))
+            .values(revoked_at=utc_now())
         )
         await self._session.flush()
         return await self.get(session_id)
@@ -108,7 +109,7 @@ class SessionRepository:
         Returns:
             The number of sessions deleted.
         """
-        now = datetime.now(timezone.utc)
+        now = utc_now()
         result = await self._session.execute(
             delete(Session).where(Session.expires_at < now)
         )
@@ -124,7 +125,7 @@ class SessionRepository:
         Returns:
             List of active Session instances.
         """
-        now = datetime.now(timezone.utc)
+        now = utc_now()
         result: Result = await self._session.execute(
             select(Session)
             .where(

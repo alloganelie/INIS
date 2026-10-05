@@ -20,10 +20,10 @@ the allowed ones; **no default action is ever substituted** (§0.2, §22.3, §37
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
 from typing import Any
 
 from app.core.errors import ValidationError
+from app.core.time import utc_now
 from app.domain.value_objects.ulid import ULID
 
 __all__ = ["InvalidPlanAction", "PlanBuilder", "closed_actions"]
@@ -99,7 +99,7 @@ class PlanBuilder:
                 "max_cost": budget["max_cost"],
                 "max_execution_time_seconds": budget["max_execution_time_seconds"],
             },
-            "created_at": datetime.now(UTC).isoformat(timespec="microseconds").replace(
+            "created_at": utc_now().isoformat(timespec="microseconds").replace(
                 "+00:00", "Z"
             ),
         }

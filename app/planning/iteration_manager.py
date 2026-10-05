@@ -1,8 +1,8 @@
 """Management of iteration lifecycle and decision-making (§8.3)."""
 
-from datetime import UTC, datetime
 from typing import Any
 
+from app.core.time import utc_now
 from app.domain.value_objects.ulid import ULID
 
 
@@ -119,7 +119,7 @@ class IterationManager:
     ) -> None:
         """Record an action taken during the iteration."""
         iteration["actions"].append(
-            {"action": action, "tool": tool, "inputs": inputs, "timestamp": datetime.now(UTC).isoformat()}
+            {"action": action, "tool": tool, "inputs": inputs, "timestamp": utc_now().isoformat()}
         )
 
     def record_tool_usage(self, iteration: dict[str, Any], tool: str) -> None:

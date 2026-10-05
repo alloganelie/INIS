@@ -20,7 +20,6 @@ second copy has to be decided together with the ``datasets`` materialisation
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -40,6 +39,7 @@ from sqlalchemy import (
 )
 
 from app.artifacts.packager.artifact_sequence import artifact_year, format_artifact_id
+from app.core.time import utc_now
 from app.storage.repositories.table_repository import (
     JSON_TYPE,
     TableRepository,
@@ -201,7 +201,7 @@ class ArtifactRepository(TableRepository):
         if existing is not None:
             return existing
 
-        now = datetime.now(UTC)
+        now = utc_now()
         row: dict[str, Any] = {
             "artifact_id": artifact_id,
             "artifact_type": str(record.get("artifact_type") or "other"),
@@ -311,7 +311,7 @@ class ArtifactRepository(TableRepository):
                     artifacts_table.c.artifact_id == artifact_id,
                     artifacts_table.c.deleted_at.is_(None),
                 )
-                .values(status="deleted", deleted_at=datetime.now(UTC))
+                .values(status="deleted", deleted_at=utc_now())
             )
             if not result.rowcount:
                 return None

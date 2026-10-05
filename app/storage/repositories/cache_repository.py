@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Column, DateTime, MetaData, String, Table, delete, func, select, update
 
+from app.core.time import utc_now
 from app.storage.repositories.table_repository import (
     JSON_TYPE,
     TableRepository,
@@ -73,7 +74,7 @@ def to_cache_row(entry: Mapping[str, Any]) -> dict[str, Any]:
         "source_id": item.get("source_id"),
         "source_freshness": as_datetime(item.get("source_freshness")),
         "expires_at": as_datetime(item.get("expires_at")),
-        "created_at": as_datetime(item.get("created_at"), datetime.now(UTC)),
+        "created_at": as_datetime(item.get("created_at"), utc_now()),
     }
 
 
@@ -166,7 +167,7 @@ class CacheEntryRepository(TableRepository):
     async def drop_expired(cls, engine: Any, now: datetime | None = None) -> int:
         """Drop the entries whose TTL elapsed; return how many were removed."""
         await cls.ensure_table(engine)
-        moment = now or datetime.now(UTC)
+        moment = now or utc_now()
         async with engine.begin() as conn:
             result = await conn.execute(
                 delete(cache_entries_table).where(

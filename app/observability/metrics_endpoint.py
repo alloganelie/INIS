@@ -6,12 +6,10 @@ module only builds it from a :class:`MetricsRegistry` snapshot.
 
 from __future__ import annotations
 
-from datetime import datetime
-from datetime import timezone
 from typing import Any
 
-from app.observability.metrics import DEFAULT_REGISTRY
-from app.observability.metrics import MetricsRegistry
+from app.core.time import utc_now
+from app.observability.metrics import DEFAULT_REGISTRY, MetricsRegistry
 
 
 def get_metrics(registry: MetricsRegistry | None = None) -> dict[str, Any]:
@@ -19,7 +17,7 @@ def get_metrics(registry: MetricsRegistry | None = None) -> dict[str, Any]:
     active = registry or DEFAULT_REGISTRY
     return {
         "service": "inis",
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": utc_now().isoformat(),
         "metrics": active.snapshot(),
     }
 

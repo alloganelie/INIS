@@ -1,12 +1,13 @@
 """SQLAlchemy models for accounts and sessions per §19.2 (authentication)."""
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.time import utc_now
 from app.storage.models.base import Base, SoftDeleteMixin, TimestampMixin
 
 #: ``scopes`` storage type: JSONB on PostgreSQL (migration 0009) but plain
@@ -90,7 +91,7 @@ class Session(Base, TimestampMixin):
 
     def is_expired(self) -> bool:
         """Check if the session is expired."""
-        return datetime.now(timezone.utc) > self.expires_at
+        return utc_now() > self.expires_at
 
     def is_revoked(self) -> bool:
         """Check if the session is revoked."""

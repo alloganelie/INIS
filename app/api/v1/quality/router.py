@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.v1.quality.schemas import (
@@ -12,6 +10,7 @@ from app.api.v1.quality.schemas import (
     QualityCheckResult,
     QualityReportResponse,
 )
+from app.core.time import utc_now
 
 router = APIRouter(tags=["quality"])
 
@@ -37,7 +36,7 @@ DEFAULT_QUALITY_WEIGHTS: dict[str, float] = {
 )
 def run_quality_check(payload: QualityCheckRequest) -> QualityCheckResponse:
     """Evaluate quality rules on an InformationUnit or resource and cache report."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now().isoformat()
     check_results: list[QualityCheckResult] = []
     dimensions: dict[str, float] = {}
 

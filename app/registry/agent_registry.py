@@ -4,15 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.core.errors import DomainError
-
-
-def utc_now() -> datetime:
-    """Return the current timezone-aware UTC timestamp.
-
-    Centralises the UTC clock used by registry timestamps so that no
-    deprecated naive-UTC helper remains in the code base.
-    """
-    return datetime.now(UTC)
+from app.core.time import utc_now
 
 
 def to_utc_iso_z(value: datetime) -> str:

@@ -15,11 +15,11 @@ process-local dict the pipeline never filled, so every persisted unit answered
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import Column, DateTime, MetaData, String, Table, insert, select, update
 
+from app.core.time import utc_now
 from app.domain.value_objects.ulid import ULID
 from app.storage.database.engine import get_default_engine
 from app.storage.repositories.document_repository import documents_table
@@ -158,7 +158,7 @@ class InformationUnitRepository(TableRepository):
         await cls.ensure_table(engine)
         item = dict(unit)
         information_id = str(item.get("information_id") or ULID.new("INF_"))
-        now = datetime.now(UTC)
+        now = utc_now()
         row = {
             "id": information_id,
             "type": item.get("type") or "text",
@@ -224,7 +224,7 @@ class InformationUnitRepository(TableRepository):
             result = await conn.execute(
                 update(information_units_table)
                 .where(condition, information_units_table.c.deleted_at.is_(None))
-                .values(deleted_at=datetime.now(UTC))
+                .values(deleted_at=utc_now())
             )
         return int(result.rowcount or 0)
 
@@ -258,7 +258,7 @@ class InformationUnitRepository(TableRepository):
                 .values(
                     provenance=dict(provenance),
                     context=dict(context),
-                    updated_at=datetime.now(UTC),
+                    updated_at=utc_now(),
                 )
             )
 

@@ -1,114 +1,79 @@
-﻿"""Benchmarks and sizing tests per §41.13."""
+"""Unit-level sizing guards per §41.13 — *not* system performance measurements.
+
+The real end-to-end load path is measured by `tests/load/harness.py` and
+`tests/load/test_load_harness.py` (a real uvicorn server, real PostgreSQL and
+real object storage). This file only asserts **invariants** that must hold even
+under a mocked LLM:
+
+1. the pipeline does not serialise on I/O — concurrent runs make progress;
+2. a completed LLM call feeds the §34/§41.13 ``llm_latency`` histogram.
+
+No number here is a capacity of the deployed system: those come from a campaign
+(`python -m tests.load.run_load`) or from ``GET /v1/metrics``.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import time
+
 import pytest
-from app.api.v1.requests.pipeline_runner import PipelineRunner, PLANNING_LIMIT_EXCEEDED_STATUS
-from app.domain.value_objects.ulid import ULID
+
+from app.api.v1.requests.pipeline_runner import PipelineRunner
+from app.observability.metrics import DEFAULT_REGISTRY
 
 
 @pytest.mark.asyncio
-async def test_throughput_requests_per_second(mock_llm):
-    """Benchmark: pipeline throughput with mock LLM."""
+async def test_concurrent_pipeline_runs_make_progress(mock_llm) -> None:
+    """The runner must not block the whole process on one in-flight request."""
     mock_llm.configure('{"summary": "load test", "findings": []}')
     runner = PipelineRunner()
-    
-    start = time.perf_counter()
     n_requests = 10
-    tasks = [
-        runner.run(f"REQ_LOAD_{i}", {"objective": f"Benchmark request {i}"})
-        for i in range(n_requests)
-    ]
-    results = await asyncio.gather(*tasks)
+
+    start = time.perf_counter()
+    results = await asyncio.gather(
+        *[
+            runner.run(f"REQ_LOAD_{i}", {"objective": f"Benchmark request {i}"})
+            for i in range(n_requests)
+        ]
+    )
     elapsed = time.perf_counter() - start
-    
+
     assert len(results) == n_requests
-    rps = n_requests / elapsed
-    assert rps > 0.5  # Safe lower bound for local runs
+    assert all(result.get("status") is not None for result in results)
+    # Coarse smoke guard only: ten runs must finish well inside a per-run budget,
+    # proving the process is not serialising. This is not a capacity claim.
+    assert elapsed < 60.0
 
 
 @pytest.mark.asyncio
-async def test_max_information_units_per_request():
-    """Benchmark: processing request generating multiple units."""
-    runner = PipelineRunner()
-    res = await runner.run("REQ_UNITS_LOAD", {"objective": "Batch units extraction"})
-    assert "information_units" in res
-    assert isinstance(res["information_units"], list)
+async def test_a_completed_llm_call_feeds_the_latency_metric(mock_llm) -> None:
+    """§41.13/§34 — ``llm_latency`` is *observed* by the pipeline, never invented."""
+    mock_llm.configure('{"summary": "load test", "findings": []}')
+    before = DEFAULT_REGISTRY.snapshot()["llm_latency"]["observed"]
+
+    await PipelineRunner().run("REQ_LLM_METRIC", {"objective": "ping"})
+
+    after = DEFAULT_REGISTRY.snapshot()["llm_latency"]["observed"]
+    assert after > before, "un appel LLM complété doit alimenter l'histogramme llm_latency"
 
 
-@pytest.mark.asyncio
-async def test_llm_call_latency_p99_ms(mock_llm):
-    """Benchmark: mock LLM call p99 latency."""
-    from app.llm.router.model_router import ModelRouter, LLMTask
-    mock_llm.configure("speed test")
-    
-    latencies = []
-    router = ModelRouter()
-    for _ in range(20):
-        t0 = time.perf_counter()
-        await router.complete(LLMTask(task_type="default"), "ping")
-        latencies.append((time.perf_counter() - t0) * 1000.0)
-    
-    latencies.sort()
-    p99 = latencies[int(len(latencies) * 0.99)]
-    assert p99 < 50.0  # Mock in-memory call must be well under 50ms
-
-
-@pytest.mark.asyncio
-async def test_safeguard_max_plan_steps(monkeypatch):
-    """Safeguard: plan steps exceeding threshold trigger PLANNING_LIMIT_EXCEEDED."""
-    monkeypatch.setenv("MAX_PLAN_STEPS", "5")
-    runner = PipelineRunner()
-    
-    # Payload with plan containing 10 steps
-    payload = {
-        "objective": "Deep hierarchical research",
-        "plan": {
-            "steps": [{"step_id": f"STEP_{i}", "action": "search"} for i in range(10)]
-        }
-    }
-    # To ensure steps_to_run has 10 steps, mock the internal planning phase
-    async def mock_run_with_large_plan(req_id, p):
-        # Directly invoke runner with pre-planned steps
-        return await runner.run(req_id, payload)
-        
-    res = await runner.run("REQ_GUARD_TEST", payload)
-    # Runner plan builder or fallback
-    assert res is not None
-
-
-@pytest.mark.asyncio
-async def test_safeguard_triggers_rejection(monkeypatch):
-    """Explicitly verify rejection when steps_to_run exceeds MAX_PLAN_STEPS."""
-    monkeypatch.setenv("MAX_PLAN_STEPS", "2")
-    runner = PipelineRunner()
-    
-    # Patch plan creation in runner to return 5 steps
-    from unittest.mock import AsyncMock
-    large_plan = {
-        "plan_id": "PLAN_LARGE",
-        "steps": [{"step_id": f"STEP_{i}", "action": "collect_information"} for i in range(5)]
-    }
-    
-    # Run with injected steps
-    res = await runner.run("REQ_LARGE_PLAN", {"objective": "large", "plan": large_plan})
-    # Since plan is parsed from LLM or builder, let's verify runner responds
-    assert res["status"] in (PLANNING_LIMIT_EXCEEDED_STATUS, "completed", "INSUFFICIENT_EVIDENCE")
-
-
-def test_metrics_exposes_benchmarks():
-    """Verify /v1/metrics exposes benchmark and safeguard thresholds."""
+def test_metrics_exposes_all_eight_benchmarks() -> None:
+    """``GET /v1/metrics → benchmarks`` lists the eight §41.13 names (HTTP level)."""
     from fastapi.testclient import TestClient
+
     from app.main import app
-    client = TestClient(app)
-    
-    res = client.get("/v1/metrics")
+
+    res = TestClient(app).get("/v1/metrics")
+
     assert res.status_code == 200
-    data = res.json()
-    assert "benchmarks" in data
-    b = data["benchmarks"]
-    assert "max_plan_steps" in b
-    assert "max_parallel_tool_calls" in b
-    assert b["max_plan_steps"] > 0
+    assert set(res.json()["benchmarks"]) == {
+        "max_plan_steps",
+        "max_parallel_tool_calls",
+        "max_information_units_per_request",
+        "target_requests_per_second",
+        "vector_search_latency_p99_ms",
+        "postgres_query_latency_p99_ms",
+        "amqp_message_latency_p99_ms",
+        "llm_call_latency_p99_ms",
+    }

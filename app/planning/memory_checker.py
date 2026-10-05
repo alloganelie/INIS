@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from app.core.time import utc_now
 from app.domain.entities.memory_result import MemoryCandidate, MemoryResult
 
 __all__ = [
@@ -68,7 +69,7 @@ class MemoryRequirements:
 
     def freshness_cutoff(self, now: datetime | None = None) -> datetime:
         """Return the oldest acceptable ``source_freshness`` instant."""
-        return (now or datetime.now(UTC)) - timedelta(
+        return (now or utc_now()) - timedelta(
             hours=self.freshness_threshold_hours
         )
 

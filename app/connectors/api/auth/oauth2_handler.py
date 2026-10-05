@@ -11,11 +11,11 @@ intended for logs and ``audit_event`` (§41.4).
 
 from __future__ import annotations
 
-from collections.abc import Awaitable
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
 from app.core.errors import InfrastructureError
+from app.core.time import utc_now
 
 #: Signature of the injected token endpoint: ``(refresh_token) -> token payload``.
 TokenFetcher = Callable[[str], Awaitable[dict]]
@@ -62,7 +62,7 @@ class OAuth2Handler:
         """Return whether the bearer token is expired (or about to be)."""
         if not self._expires_at:
             return False
-        moment = now or datetime.now(UTC)
+        moment = now or utc_now()
         expiry = datetime.fromisoformat(str(self._expires_at).replace("Z", "+00:00"))
         if expiry.tzinfo is None:
             expiry = expiry.replace(tzinfo=UTC)
@@ -93,7 +93,7 @@ class OAuth2Handler:
         if payload.get("refresh_token"):
             self._refresh_token = str(payload["refresh_token"])
         if payload.get("expires_in") is not None:
-            expires = datetime.now(UTC) + timedelta(seconds=int(payload["expires_in"]))
+            expires = utc_now() + timedelta(seconds=int(payload["expires_in"]))
             self._expires_at = expires.isoformat().replace("+00:00", "Z")
         return self._token
 
