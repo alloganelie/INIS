@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Column, DateTime, Float, Integer, MetaData, String, Table
+
+from app.core.time import utc_now
 
 _METADATA = MetaData()
 
@@ -31,7 +33,7 @@ class UsageEntry:
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float = 0.0
-    recorded_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    recorded_at: datetime = field(default_factory=utc_now)
 
 
 class CostTracker:

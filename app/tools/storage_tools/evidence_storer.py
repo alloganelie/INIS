@@ -9,13 +9,13 @@ as an untraceable row (§0.2, §33.4).
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.errors import InfrastructureError, ValidationError
+from app.core.time import utc_now
 from app.domain.entities.evidence import Evidence
 from app.tools.engine_access import resolve_engine
 
@@ -88,7 +88,7 @@ async def store_evidence(
         "document_id": payload.get("document_id") or None,
         "quote": str(quote),
         "confidence": float(strength) if strength is not None else None,
-        "created_at": datetime.now(UTC),
+        "created_at": utc_now(),
     }
     try:
         async with active_engine.begin() as connection:

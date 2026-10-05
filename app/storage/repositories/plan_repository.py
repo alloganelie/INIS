@@ -12,11 +12,11 @@ happened instead of being re-invented.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table, Text, select, update
 
+from app.core.time import utc_now
 from app.domain.value_objects.ulid import ULID
 from app.storage.repositories.table_repository import (
     JSON_TYPE,
@@ -106,7 +106,7 @@ class PlanRepository(TableRepository):
             "request_id": item.get("request_id"),
             "status": item.get("status") or "draft",
             "objective": item.get("objective"),
-            "created_at": as_datetime(item.get("created_at"), datetime.now(UTC)),
+            "created_at": as_datetime(item.get("created_at"), utc_now()),
         }
         await insert_rows(engine, plans_table, [row])
         created = await cls.get(engine, plan_id)

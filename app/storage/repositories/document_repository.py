@@ -12,7 +12,6 @@ the storage key deterministic.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -28,6 +27,7 @@ from sqlalchemy import (
     update,
 )
 
+from app.core.time import utc_now
 from app.storage.repositories.table_repository import (
     JSON_TYPE,
     TableRepository,
@@ -181,7 +181,7 @@ class DocumentRepository(TableRepository):
             "mime_type": str(record.get("mime_type") or "application/octet-stream"),
             "content_hash": content_hash,
             "storage_ref": str(record.get("storage_ref") or ""),
-            "created_at": as_datetime(record.get("created_at"), datetime.now(UTC)),
+            "created_at": as_datetime(record.get("created_at"), utc_now()),
             "file_name": record.get("file_name"),
             "size_bytes": int(size_bytes) if size_bytes is not None else None,
             "request_id": request_id,
@@ -215,7 +215,7 @@ class DocumentRepository(TableRepository):
                     documents_table.c.id == document_id,
                     documents_table.c.deleted_at.is_(None),
                 )
-                .values(deleted_at=datetime.now(UTC))
+                .values(deleted_at=utc_now())
             )
             if not result.rowcount:
                 return None

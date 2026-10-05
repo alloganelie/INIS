@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, status
@@ -16,6 +15,7 @@ from app.api.v1.requests.schemas import (
 )
 from app.core.errors import InisError
 from app.core.statuses import CANCELLED_STATUS
+from app.core.time import utc_now
 from app.domain.value_objects.ulid import ULID
 from app.governance.budget.quotas import GLOBAL_USAGE
 from app.knowledge.ingestion.object_intake import intake_source_ref
@@ -164,7 +164,7 @@ async def create_request(
                 ),
             ) from exc
 
-    created_at = datetime.now(UTC).isoformat()
+    created_at = utc_now().isoformat()
     item = InformationRequestResponse(
         request_id=req_id,
         request_type=payload.request_type,

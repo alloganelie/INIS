@@ -26,13 +26,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
 
 from app.artifacts.generators import FILE_FORMATS, PDF_UNAVAILABLE_REASON, file_formats_message
 from app.artifacts.packager.artifact_packager import ArtifactPackager
 from app.artifacts.packager.artifact_sequence import InProcessArtifactSequence
 from app.core.errors import ValidationError
+from app.core.time import utc_now
 from app.core.version import API_VERSION
 from app.domain.value_objects.request_constraints import DEFAULT_REQUIRED_OUTPUT
 from app.storage.object_storage.object_storage_factory import build_object_storage
@@ -347,7 +347,7 @@ def workbook_sheets(
                 "evidence_count": len(evidence),
                 "started_at": (delivery.get("timestamps") or {}).get("started_at"),
                 "completed_at": (delivery.get("timestamps") or {}).get("completed_at"),
-                "generated_at": datetime.now(UTC).isoformat(),
+                "generated_at": utc_now().isoformat(),
             }
         ],
         "dictionary": [
@@ -398,7 +398,7 @@ def workbook_sheets(
                 "format": "xlsx",
                 "spec": "§24.3 (export Excel)",
                 "api_version": API_VERSION,
-                "generated_at": datetime.now(UTC).isoformat(),
+                "generated_at": utc_now().isoformat(),
             }
         ],
     }
@@ -517,7 +517,7 @@ async def deliver_artifacts(
 
     record = result.artifact.to_dict()
     record["request_id"] = request_id
-    record["created_at"] = datetime.now(UTC).isoformat()
+    record["created_at"] = utc_now().isoformat()
     outcome.artifacts.append(record)
     if result.limitation:
         outcome.add_limitation(result.limitation)

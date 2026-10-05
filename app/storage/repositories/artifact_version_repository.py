@@ -25,7 +25,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -38,6 +38,7 @@ from sqlalchemy import (
     select,
 )
 
+from app.core.time import utc_now
 from app.storage.repositories.artifact_repository import as_list
 from app.storage.repositories.table_repository import (
     JSON_TYPE,
@@ -196,7 +197,7 @@ class ArtifactVersionRepository(TableRepository):
             "artifact_id": artifact_id,
             "version": version,
             "metadata": dict(metadata or {}),
-            "created_at": datetime.now(UTC),
+            "created_at": utc_now(),
         }
         statement = insert_statement(artifact_versions_table, engine).values(**row)
         statement = statement.on_conflict_do_nothing(index_elements=["artifact_version_id"])
@@ -343,7 +344,7 @@ class ArtifactDeliveryEventRepository(TableRepository):
         prefix is invented (§0.3, closed table).
         """
         await cls.ensure_table(engine)
-        created_at = datetime.now(UTC)
+        created_at = utc_now()
         moment = delivered_at or created_at
         digest = hashlib.sha256(
             f"{artifact_id}|{target}|{moment.isoformat()}".encode()

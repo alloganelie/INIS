@@ -14,7 +14,6 @@ the router documents them as volatile until a migration stores them.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -30,6 +29,7 @@ from sqlalchemy import (
     update,
 )
 
+from app.core.time import utc_now
 from app.storage.repositories.table_repository import (
     JSON_TYPE,
     TableRepository,
@@ -90,7 +90,7 @@ def as_json_value(value: Any) -> Any:
 def to_request_row(request: Mapping[str, Any]) -> dict[str, Any]:
     """Map a §7 request payload onto its ``requests`` row."""
     item = dict(request)
-    now = datetime.now(UTC)
+    now = utc_now()
     created_at = as_datetime(item.get("created_at"), now) or now
     return {
         "request_id": item.get("request_id"),
@@ -177,7 +177,7 @@ class RequestRepository(TableRepository):
         cls, engine: Any, request_id: str, status: str, *, step: str | None = None
     ) -> None:
         """Set the lifecycle status and, when given, the §41.1 checkpoint."""
-        now = datetime.now(UTC)
+        now = utc_now()
         values: dict[str, Any] = {"status": status, "updated_at": now}
         if step is not None:
             values["last_committed_step"] = step

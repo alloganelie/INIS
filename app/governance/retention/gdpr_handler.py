@@ -16,10 +16,10 @@ storage layer.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime
-from datetime import timezone
+from datetime import datetime, timezone
 from typing import Any
 
+from app.core.time import utc_now
 from app.domain.value_objects.ulid import ULID
 from app.governance.lifecycle.pseudonymizer import Pseudonymizer
 
@@ -219,7 +219,7 @@ class GDPRHandler:
                     owned.append(dict(record))
             return owned
 
-        moment = now or datetime.now(timezone.utc)
+        moment = now or utc_now()
         if moment.tzinfo is None:
             moment = moment.replace(tzinfo=timezone.utc)
 

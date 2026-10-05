@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
+from app.core.time import utc_now
 from app.domain.value_objects.ulid import ULID
 from app.storage.repositories.evidence_repository import evidence_table
 from app.storage.repositories.information_unit_repository import information_units_table
@@ -27,7 +28,7 @@ async def persist_pipeline_delivery(
     db_url = os.getenv("INIS_DATABASE_URL")
     fallback_audit = {
         "audit_event_id": ULID.new("AUD_"),
-        "timestamp": datetime.now(UTC).isoformat(),
+        "timestamp": utc_now().isoformat(),
     }
     if not db_url:
         return (
@@ -60,7 +61,7 @@ async def persist_pipeline_delivery(
     started = time.perf_counter()
     try:
         async for session in get_session():
-            now_dt = datetime.now(UTC)
+            now_dt = utc_now()
             stored_audit = await AuditWriter().write(audit_payload, session=session)
             await _insert_sources(session, sources, now_dt)
             await _insert_units(session, information_units, now_dt)

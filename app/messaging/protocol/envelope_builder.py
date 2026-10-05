@@ -1,13 +1,11 @@
 """Envelope builder for INIS messaging protocol per §5.1."""
 
 import secrets
-from datetime import UTC, datetime
-from typing import Any
-from typing import Optional
+from typing import Any, Optional
 
+from app.core.time import utc_now
 from app.domain.value_objects.ulid import ULID
 from app.messaging.protocol.versioning import DEFAULT_PROTOCOL_VERSION
-
 
 VALID_MESSAGE_TYPES = frozenset(
     {
@@ -95,7 +93,7 @@ class EnvelopeBuilder:
         message_id = ULID.new("MSG_")
         corr_id = correlation_id or ULID.new("CORR_")
 
-        now_utc = datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+        now_utc = utc_now().isoformat(timespec="microseconds").replace("+00:00", "Z")
 
         sender_id = sender_agent_id or self._default_sender_agent_id
         sender_version = sender_agent_version or self._default_sender_agent_version

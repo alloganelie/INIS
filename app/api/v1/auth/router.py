@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -19,6 +19,7 @@ from app.api.v1.auth.schemas import (
     RefreshRequest,
     TokenResponse,
 )
+from app.core.time import utc_now
 from app.storage.database.session import database_configured, session_repository
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -101,7 +102,7 @@ async def login(request: LoginRequest) -> TokenResponse:
                 session_id=f"SES_{PythonUlid()}",
                 account_id=actor_id,
                 token_hash=hash_token(access_token),
-                expires_at=datetime.now(timezone.utc)
+                expires_at=utc_now()
                 + timedelta(seconds=ACCESS_TOKEN_TTL_SECONDS),
                 session_metadata={"username": request.username},
             )

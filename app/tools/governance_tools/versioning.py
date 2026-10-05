@@ -17,11 +17,11 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from typing import Any
 
 from app.core.errors import ValidationError
 from app.core.hashing import canonical_json, sha256_hex
+from app.core.time import utc_now
 from app.domain.value_objects.ulid import ULID
 
 __all__ = [
@@ -34,7 +34,7 @@ __all__ = [
 
 
 def _utc_timestamp() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    return utc_now().isoformat().replace("+00:00", "Z")
 
 
 class VersionStore:

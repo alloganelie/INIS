@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.core.errors import ValidationError
+from app.core.time import utc_now
 from app.domain.entities.information_unit import InformationUnit
 
 __all__ = ["information_unit_from_row"]
@@ -38,9 +39,9 @@ def _as_timestamp(value: Any) -> datetime:
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
-            return datetime.now(UTC)
+            return utc_now()
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-    return datetime.now(UTC)
+    return utc_now()
 
 
 def information_unit_from_row(

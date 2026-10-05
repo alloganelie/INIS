@@ -21,9 +21,11 @@ frozen dataclasses so a report can be compared and hashed safely.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
+
+from app.core.time import utc_now as _utc_now
 
 #: The seven cost units defined by §41.2.
 COST_UNITS: tuple[str, ...] = (
@@ -50,10 +52,6 @@ class BudgetExceeded(RuntimeError):
         super().__init__(
             f"budget exceeded on {dimension}: {consumed} > {limit}"
         )
-
-
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
 
 
 def _iso_z(moment: datetime) -> str:

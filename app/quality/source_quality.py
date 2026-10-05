@@ -17,9 +17,9 @@ answer is stated (never guessed), and every issue becomes a limitation.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
 from typing import Any
 
+from app.core.time import utc_now
 from app.domain.entities.information_unit import InformationUnit
 from app.domain.entities.source import Source
 from app.tools.files.source_comparator import check_freshness, compare_sources
@@ -186,7 +186,7 @@ async def _assess_freshness(
         # The evaluation is stored with the declaration so the column carries an
         # answer a later run can reuse — and so a reader can tell "declared
         # fresh" from "checked and fresh" (§41.5).
-        "checked_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "checked_at": utc_now().isoformat().replace("+00:00", "Z"),
         "score": float(result.score),
         "max_age_days": result.details.get("max_age_days"),
         "issues": list(result.issues),

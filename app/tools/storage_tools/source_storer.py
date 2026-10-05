@@ -11,12 +11,12 @@ pipeline write one consistent row layout.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.errors import InfrastructureError, ValidationError
+from app.core.time import utc_now
 from app.domain.entities.source import Source
 from app.tools.engine_access import resolve_engine
 
@@ -76,7 +76,7 @@ async def store_source(
         raise ValidationError("source.source_id is required to store a source")
 
     active_engine = resolve_engine(engine, connection_string, component="store_source")
-    now = datetime.now(UTC)
+    now = utc_now()
     parameters = {
         "id": source_id,
         "url": source.url,

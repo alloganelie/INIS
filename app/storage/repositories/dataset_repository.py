@@ -11,7 +11,6 @@ read from, which is what a human looks for — never an invented label.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -27,6 +26,7 @@ from sqlalchemy import (
     update,
 )
 
+from app.core.time import utc_now
 from app.storage.repositories.table_repository import (
     JSON_TYPE,
     TableRepository,
@@ -136,7 +136,7 @@ class DatasetRepository(TableRepository):
             "source_id": record.get("source_id"),
             "row_count": int(row_count) if row_count is not None else None,
             "schema": dict(record.get("dataset_schema") or {}),
-            "created_at": as_datetime(record.get("created_at"), datetime.now(UTC)),
+            "created_at": as_datetime(record.get("created_at"), utc_now()),
             "storage_ref": record.get("storage_ref"),
             "request_id": record.get("request_id"),
         }
@@ -167,7 +167,7 @@ class DatasetRepository(TableRepository):
                     datasets_table.c.dataset_id == dataset_id,
                     datasets_table.c.deleted_at.is_(None),
                 )
-                .values(deleted_at=datetime.now(UTC))
+                .values(deleted_at=utc_now())
             )
             if not result.rowcount:
                 return None

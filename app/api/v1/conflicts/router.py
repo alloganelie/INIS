@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.v1.conflicts.schemas import (
@@ -11,6 +9,7 @@ from app.api.v1.conflicts.schemas import (
     ConflictList,
     ConflictResponse,
 )
+from app.core.time import utc_now
 from app.domain.value_objects.ulid import ULID
 from app.storage.repositories.conflict_repository import (
     ConflictRepository,
@@ -55,7 +54,7 @@ async def list_conflicts(status: str | None = None) -> ConflictList:
 async def create_conflict(payload: ConflictCreate) -> ConflictResponse:
     """Record a new conflict and return its generated conflict_id."""
     conflict_id = ULID.new("CONFLICT_")
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now().isoformat()
     status_val = payload.status or payload.resolution_status or "open"
     conflict_dict = {
         "conflict_id": conflict_id,

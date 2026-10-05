@@ -18,11 +18,12 @@ The repository exposes two entry points for two owners:
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Column, DateTime, MetaData, Table, Text, select
 
+from app.core.time import utc_now
 from app.storage.repositories.table_repository import (
     JSON_TYPE,
     TableRepository,
@@ -62,7 +63,7 @@ def to_transformation_row(transformation: Mapping[str, Any]) -> dict[str, Any]:
         "tool": item.get("tool"),
         "tool_version": item.get("tool_version"),
         "parameters": dict(item.get("parameters") or {}),
-        "timestamp": as_datetime(item.get("timestamp"), datetime.now(UTC)),
+        "timestamp": as_datetime(item.get("timestamp"), utc_now()),
         "result": item.get("result") or "success",
         "justification": item.get("justification"),
     }

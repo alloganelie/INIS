@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.v1.information.schemas import (
@@ -11,6 +9,7 @@ from app.api.v1.information.schemas import (
     InformationUnitCreate,
     InformationUnitResponse,
 )
+from app.core.time import utc_now
 from app.domain.value_objects.ulid import ULID
 from app.storage.repositories.information_unit_repository import (
     InformationUnitRepository,
@@ -50,7 +49,7 @@ async def list_information(source_id: str | None = None) -> InformationList:
 async def create_information(payload: InformationUnitCreate) -> InformationUnitResponse:
     """Record a new information unit and return its generated information_id."""
     info_id = ULID.new("INF_")
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now().isoformat()
     unit_dict = {
         "information_id": info_id,
         "type": payload.type,

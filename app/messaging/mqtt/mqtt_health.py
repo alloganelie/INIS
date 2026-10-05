@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from datetime import timezone
-from typing import Any
-from typing import Protocol
+from typing import Any, Protocol
+
+from app.core.time import utc_now
 
 
 class _MqttLike(Protocol):
@@ -25,7 +24,7 @@ async def health_check(
         ``latency_ms`` (always None for the stub: no I/O probing),
         ``broker``, ``host``, ``port`` and ``checked_at``.
     """
-    checked_at = datetime.now(timezone.utc).isoformat()
+    checked_at = utc_now().isoformat()
     if client is None:
         return {
             "status": "unknown",

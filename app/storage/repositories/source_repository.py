@@ -15,11 +15,11 @@ the same signal: ``create`` writes both so a row is readable from either side.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from sqlalchemy import Column, DateTime, Float, MetaData, String, Table, Text, insert, select
 
+from app.core.time import utc_now
 from app.domain.value_objects.ulid import ULID
 from app.storage.database.engine import get_default_engine, set_default_engine
 from app.storage.repositories.table_repository import (
@@ -131,7 +131,7 @@ class SourceRepository(TableRepository):
         await cls.ensure_table(engine)
         item = dict(source_data)
         source_id = str(item.get("source_id") or ULID.new("SRC_"))
-        now = datetime.now(timezone.utc)
+        now = utc_now()
         trust_level = item.get("trust_level")
         row = {
             "id": source_id,

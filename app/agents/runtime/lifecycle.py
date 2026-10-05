@@ -31,8 +31,10 @@ import os
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
+
+from app.core.time import utc_now as _utc_now
 
 #: Status returned when a request expires before full delivery (§41.1).
 GRACEFUL_EXPIRY_STATUS = "PARTIAL_SUCCESS"
@@ -52,11 +54,6 @@ _PROCESS_SECRET = os.environ.get("INIS_RESUME_SECRET", "").encode("utf-8") or se
 
 class InvalidResumeToken(ValueError):
     """Raised when a resume token is malformed, tampered with, or expired."""
-
-
-def _utc_now() -> datetime:
-    """Return the current timezone-aware UTC time."""
-    return datetime.now(UTC)
 
 
 def _iso_z(moment: datetime) -> str:

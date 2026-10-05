@@ -18,12 +18,13 @@ ULID, so it is validated by pattern while the identifiers it points to keep the
 from __future__ import annotations
 
 import re
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.errors import ValidationError
+from app.core.time import utc_now
 
 __all__ = [
     "ARTIFACT_STATUSES",
@@ -157,7 +158,7 @@ class ArtifactVersion(BaseModel):
     artifact_id: str
     version: str
     metadata: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=utc_now)
 
     @field_validator("version")
     @classmethod

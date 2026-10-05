@@ -21,6 +21,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.errors import ValidationError
+from app.core.time import utc_now
 from app.domain.value_objects.ulid import ULID
 
 __all__ = ["TRANSFORMATION_RESULTS", "Transformation"]
@@ -39,7 +40,7 @@ class Transformation(BaseModel):
     tool: str | None = None
     tool_version: str | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    timestamp: datetime = Field(default_factory=utc_now)
     result: Literal["success", "failure"] = "success"
     justification: str | None = None
 

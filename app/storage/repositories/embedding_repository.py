@@ -21,11 +21,11 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import bindparam, text
 
+from app.core.time import utc_now
 from app.storage.repositories.table_repository import as_dict, as_iso
 
 __all__ = [
@@ -205,7 +205,7 @@ class EmbeddingRepository:
         """
         if not rows:
             return 0
-        created_at = datetime.now(UTC)
+        created_at = utc_now()
         prepared: list[dict[str, Any]] = []
         for row in rows:
             owner_id = str(row.get("owner_id") or "").strip()

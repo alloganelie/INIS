@@ -16,11 +16,11 @@ There is no OCR and no captioning in INIS V1: an image carrying no text yields
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 from app.connectors.images.image_connector import read_image_metadata
 from app.core.errors import InfrastructureError, ValidationError
+from app.core.time import utc_now
 from app.domain.entities.information_unit import InformationUnit
 from app.domain.value_objects.ulid import ULID
 
@@ -43,7 +43,7 @@ def _unit(
     location: dict,
 ) -> InformationUnit:
     """Build one provenance-complete derived unit."""
-    now = datetime.now(UTC)
+    now = utc_now()
     return InformationUnit(
         information_id=ULID.new("INF_"),
         type=UNIT_TYPE,

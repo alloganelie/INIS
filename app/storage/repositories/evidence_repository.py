@@ -9,11 +9,11 @@ raw material the evidence rests on, and it is what the API exposes as
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from sqlalchemy import Column, DateTime, Float, MetaData, String, Table, Text, insert, select
 
+from app.core.time import utc_now
 from app.domain.value_objects.ulid import ULID
 from app.storage.database.engine import get_default_engine
 from app.storage.repositories.table_repository import (
@@ -124,7 +124,7 @@ class EvidenceRepository(TableRepository):
         await cls.ensure_table(engine)
         item = dict(data)
         evidence_id = str(item.get("evidence_id") or ULID.new("EVID_"))
-        now = datetime.now(timezone.utc)
+        now = utc_now()
         conf = item.get("confidence")
         conf_score = None
         if isinstance(conf, (int, float)):

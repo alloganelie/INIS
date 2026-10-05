@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.v1.agents.schemas import AgentIdentity
+from app.core.time import utc_now
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -31,7 +30,7 @@ def list_agents() -> list[AgentIdentity]:
 )
 def register_agent(agent: AgentIdentity) -> AgentIdentity:
     """Register or update an agent in the registry."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now().isoformat()
     registered_at = agent.registered_at or now
     last_seen_at = agent.last_seen_at or now
     stored_agent = agent.model_copy(

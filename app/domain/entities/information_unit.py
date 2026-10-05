@@ -1,11 +1,12 @@
 """Domain entity representing a traceable unit of information."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from app.core.errors import ValidationError
+from app.core.time import utc_now
 
 
 class InformationUnit(BaseModel):
@@ -29,8 +30,8 @@ class InformationUnit(BaseModel):
     provenance: dict
     versions: list[str]
     data_stage: Literal["raw", "normalized", "enriched", "derived"]
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
     # -- §41.3 language metadata ---------------------------------------
     source_language: str | None = None

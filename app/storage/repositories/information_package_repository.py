@@ -14,10 +14,10 @@ empty or provenance-less package is refused instead of delivered.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any, Sequence
 
 from app.core.errors import ValidationError
+from app.core.time import utc_now
 from app.domain.entities.information_package import InformationPackage
 from app.domain.value_objects.ulid import ULID
 from app.storage.repositories.evidence_repository import EvidenceRepository
@@ -97,7 +97,7 @@ class InformationPackageRepository:
                 "information_ids": [unit.get("information_id") for unit in units],
                 "pipeline": "InformationPackageRepository",
             },
-            created_at=datetime.now(UTC),
+            created_at=utc_now(),
             data_stage=data_stage,
         )
         # §1 — a package without provenance is refused rather than delivered.

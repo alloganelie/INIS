@@ -1,11 +1,11 @@
 """Repository for Account entity per §19.2 (authentication)."""
 
-from datetime import datetime, timezone
 from typing import Optional, Sequence
 
 from sqlalchemy import Result, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time import utc_now
 from app.storage.models.account import Account
 
 
@@ -122,7 +122,7 @@ class AccountRepository:
         await self._session.execute(
             update(Account)
             .where(Account.account_id == account_id)
-            .values(status=status, updated_at=datetime.now(timezone.utc))
+            .values(status=status, updated_at=utc_now())
         )
         await self._session.flush()
         return await self.get_by_id(account_id)
@@ -143,7 +143,7 @@ class AccountRepository:
         Returns:
             The updated Account if found, None otherwise.
         """
-        values: dict = {"updated_at": datetime.now(timezone.utc)}
+        values: dict = {"updated_at": utc_now()}
         if role is not None:
             values["role"] = role
         if scopes is not None:
@@ -169,7 +169,7 @@ class AccountRepository:
         await self._session.execute(
             update(Account)
             .where(Account.account_id == account_id)
-            .values(password_hash=password_hash, updated_at=datetime.now(timezone.utc))
+            .values(password_hash=password_hash, updated_at=utc_now())
         )
         await self._session.flush()
         return await self.get_by_id(account_id)
@@ -187,9 +187,9 @@ class AccountRepository:
             update(Account)
             .where(Account.account_id == account_id)
             .values(
-                deleted_at=datetime.now(timezone.utc),
+                deleted_at=utc_now(),
                 status="deleted",
-                updated_at=datetime.now(timezone.utc),
+                updated_at=utc_now(),
             )
         )
         await self._session.flush()

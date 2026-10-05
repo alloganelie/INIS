@@ -1,10 +1,10 @@
 """Heartbeat worker logic per §6.3."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
+from app.core.time import utc_now
 from app.registry.agent_registry import AgentRegistry
-
 
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30
 DEFAULT_TTL_SECONDS = 90
@@ -35,13 +35,13 @@ class HeartbeatWorker:
         Check for stale agents that haven't sent heartbeat within TTL.
 
         Args:
-            now: Current time (for testing). Defaults to ``datetime.now(UTC)``.
+            now: Current time (for testing). Defaults to ``utc_now()``.
 
         Returns:
             List of agent_ids that are stale.
         """
         if now is None:
-            now = datetime.now(UTC)
+            now = utc_now()
 
         stale_agent_ids = self._registry.get_stale_agents(self._ttl_seconds, now)
         return stale_agent_ids
@@ -51,7 +51,7 @@ class HeartbeatWorker:
         Mark stale agents as unavailable.
 
         Args:
-            now: Current time (for testing). Defaults to ``datetime.now(UTC)``.
+            now: Current time (for testing). Defaults to ``utc_now()``.
 
         Returns:
             List of agent_ids that were marked unavailable.
@@ -95,5 +95,5 @@ class HeartbeatWorker:
             Next check time.
         """
         if last_check is None:
-            last_check = datetime.now(UTC)
+            last_check = utc_now()
         return last_check + timedelta(seconds=self._ttl_seconds // 3)

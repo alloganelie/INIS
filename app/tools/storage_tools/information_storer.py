@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.errors import InfrastructureError, ValidationError
+from app.core.time import utc_now
 from app.domain.entities.information_unit import InformationUnit
 from app.tools.engine_access import resolve_engine
 
@@ -98,7 +98,7 @@ async def store_information(
         "source_id": source_id,
         "document_id": payload.get("document_id") or None,
         "data_stage": str(payload.get("data_stage") or "raw"),
-        "created_at": datetime.now(UTC),
+        "created_at": utc_now(),
     }
     try:
         async with active_engine.begin() as connection:

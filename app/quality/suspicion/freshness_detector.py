@@ -10,9 +10,9 @@ Two signals (``stated_published_at`` is what the source claims):
 
 from __future__ import annotations
 
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
+
+from app.core.time import utc_now
 
 #: Allowed slack between the stated and actual content dates, in days.
 DEFAULT_TOLERANCE_DAYS = 30
@@ -49,7 +49,7 @@ def detect_freshness_manipulation(
         return False, None
 
     stated = _as_utc(stated_published_at)
-    reference = _as_utc(now) if now is not None else datetime.now(timezone.utc)
+    reference = _as_utc(now) if now is not None else utc_now()
 
     if stated > reference + _FUTURE_SLACK:
         return True, f"stated publish date {stated.date().isoformat()} is in the future"
